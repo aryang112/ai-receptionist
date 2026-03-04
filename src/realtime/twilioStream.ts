@@ -1,0 +1,478 @@
+import type http from 'http';
+import WebSocket, { WebSocketServer } from 'ws';
+import { OpenAIRealtimeSession, type ToolDefinition } from './openaiSession.js';
+import { logger } from '../core/logger.js';
+import { env } from '../config/env.js';
+import { suggestSlots, bookAppointment } from '../services/booking.js';
+import { phorest } from '../services/phorest.js';
+import { decodeMuLaw } from './audio.js';
+import businessHours from '../config/business.json';
+
+const CORE_SERVICES = env.PHOREST_PREFERRED_SERVICE_IDS.length
+  ? env.PHOREST_PREFERRED_SERVICE_IDS.join(', ')
+  : 'Brow Threading, Eyebrow Tinting';
+
+const INSTRUCTIONS = `You are Erica, the warm and friendly AI receptionist for Richa's Threading Salon in Parkville, Maryland. You answer calls, book appointments, reschedule, cancel, and help with any questions about the salon.
+
+PERSONALITY: Conversational, warm, efficient. Speak like a real person — not a robot. Keep responses to 1–2 short sentences. Use natural phrasing like "Of course!", "No problem!", "Let me check that for you."
+
+BUSINESS HOURS: Always use the get_business_hours tool when asked about hours. Never guess.
+
+PRICING (memorised — do not call API):
+- Eyebrow Threading: $12, ~15 min
+- Eyebrow Waxing: $15, ~15 min
+- Eyebrow Tinting: $20, ~20 min
+- Facials: $60–90, ~60 min
+- Brazilian Waxing: $50, ~30 min
+- Eyelash Extensions: $80–120, ~90 min
+- Microblading: $400, ~2 hours
+
+═══ CUSTOMER IDENTIFICATION (always do this first) ═══
+1. Ask: "What's your phone number?"
+2. Call lookup_customer with the phone number
+3. If found: "Got it! Hi [First Name], how can I help you today?"
+4. If not found by phone: "I don't have that number on file — what's your first and last name?"
+5. Call lookup_customer with firstName and lastName
+6. If 1 match: "Found you! How can I help?"
+7. If multiple matches: "I found a few people with that name — when is your appointment?"
+   → Match on the appointment date/time they give you
+8. If no match at all: "No worries, I'll get you set up! What's your first and last name?"
+   → Proceed to booking and the system will create their profile
+
+═══ BOOKING ═══
+1. Identify customer (see above)
+2. "What service were you thinking today?"
+3. "And what day works for you?"
+4. Call suggest_availability with serviceName and date
+5. Offer the first 3 slots: "I have [time], [time], and [time] — which works best?"
+6. Confirm: "Perfect — so [service] on [day] at [time] for [First Name]. Shall I go ahead and book that?"
+7. Call book_appointment ONLY after they say yes
+8. "You're all set! See you [day] at [time]. Anything else I can help with?"
+
+Same-day bookings: No minimum notice. If there's availability, book it.
+
+After-hours bookings: Always take the booking for a future date. Only say "we're currently closed" if they're asking to come in RIGHT NOW. Otherwise proceed normally and book the future slot.
+
+═══ RESCHEDULING ═══
+1. Identify customer (phone first, name fallback)
+2. Call list_appointments to get their upcoming appointments
+3. "I see you have [service] on [day] at [time] — is that the one you'd like to move?"
+4. "What day and time works better for you?"
+5. Call suggest_availability for the new slot
+6. "I have [time] open — does that work?"
+7. Call reschedule_appointment once confirmed
+8. "Done! You're all set for [new day] at [new time]."
+
+═══ CANCELLATION ═══
+1. Identify customer
+2. Call list_appointments
+3. "I see [service] on [day] at [time] — would you like to cancel that one?"
+4. "Just to confirm — cancelling [service] on [day] at [time]?"
+5. Call cancel_appointment
+6. "Done! Your appointment's cancelled. Hope to see you again soon!"
+
+═══ RUNNING LATE ═══
+1. "No problem! What's your phone number?"
+2. Call lookup_customer → then list_appointments (filter to today)
+3. Identify which appointment they mean
+4. Call log_running_late with clientId and appointmentId
+5. If response has squeezed: false → "No worries at all — take your time, we'll see you soon!"
+6. If response has squeezed: true → "Thanks for letting us know! We've made a note and we'll do our best to squeeze you in. See you soon!"
+
+═══ TRANSFER TO RICHA ═══
+ALWAYS call transfer_to_owner when:
+- Caller asks to speak to Richa or asks for a human
+- Request involves multiple services or a group booking
+- You cannot help after one clarifying attempt
+- Caller sounds frustrated or confused
+- Any booking system error occurs
+
+Say first: "Of course, let me get Richa for you — one moment!" then call transfer_to_owner.
+
+═══ GENERAL RULES ═══
+- Never read appointment IDs aloud — use human-readable descriptions
+- Never guess at hours — use get_business_hours
+- If you mishear something, just say "Sorry, could you say that again?"
+- Always confirm name spelling if you're uncertain
+- Respond in English only, regardless of what language the caller uses
+`;
+
+const TOOL_DEFINITIONS: ToolDefinition[] = [
+  {
+    type: 'function',
+    name: 'suggest_availability',
+    description: 'Find available appointments for a given service on a specific date.',
+    parameters: {
+      type: 'object',
+      properties: {
+        serviceName: { type: 'string' },
+        date: { type: 'string', description: 'ISO date YYYY-MM-DD' }
+      },
+      required: ['serviceName', 'date']
+    }
+  },
+  {
+    type: 'function',
+    name: 'book_appointment',
+    description: 'Book an appointment once all details are confirmed with the caller.',
+    parameters: {
+      type: 'object',
+      properties: {
+        serviceName: { type: 'string' },
+        date: { type: 'string', description: 'ISO date YYYY-MM-DD' },
+        time: { type: 'string', description: '24h time HH:MM' },
+        customer: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            phone: { type: 'string' },
+            email: { type: 'string' }
+          },
+          required: ['name', 'phone']
+        }
+      },
+      required: ['serviceName', 'date', 'time', 'customer']
+    }
+  },
+  {
+    type: 'function',
+    name: 'reschedule_appointment',
+    description: 'Reschedule an existing appointment to a new date and time.',
+    parameters: {
+      type: 'object',
+      properties: {
+        appointmentId: { type: 'string' },
+        date: { type: 'string' },
+        time: { type: 'string' }
+      },
+      required: ['appointmentId', 'date', 'time']
+    }
+  },
+  {
+    type: 'function',
+    name: 'cancel_appointment',
+    description: 'Cancel an existing appointment.',
+    parameters: {
+      type: 'object',
+      properties: {
+        appointmentId: { type: 'string' }
+      },
+      required: ['appointmentId']
+    }
+  },
+  {
+    type: 'function',
+    name: 'get_business_hours',
+    description: 'Get the salon operating hours for each day of the week and any special closed dates. Use this when the caller asks about hours, what time you open/close, or when the salon is available.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
+  }
+];
+
+interface TwilioEventBase {
+  event: string;
+  streamSid?: string;
+}
+
+interface TwilioMediaEvent extends TwilioEventBase {
+  event: 'media';
+  media: { payload: string };
+}
+
+interface TwilioStartEvent extends TwilioEventBase {
+  event: 'start';
+  start: { streamSid: string; callSid: string };
+}
+
+interface TwilioStopEvent extends TwilioEventBase {
+  event: 'stop';
+}
+
+type TwilioEvent = TwilioMediaEvent | TwilioStartEvent | TwilioStopEvent | TwilioEventBase;
+
+class TwilioRealtimeCall {
+  private readonly socket: WebSocket;
+  private readonly session: OpenAIRealtimeSession;
+  private streamSid = '';
+  private closed = false;
+  private pendingAudioMs = 0;
+  private hasReceivedFirstAudioChunk = false;
+  private silenceTimer: NodeJS.Timeout | null = null;
+  private hasPendingAudio = false;
+
+  constructor(socket: WebSocket) {
+    this.socket = socket;
+    logger.info('New Twilio WebSocket connection');
+
+    this.session = new OpenAIRealtimeSession({
+      onAudioChunk: chunk => this.sendAudioToTwilio(chunk),
+      onTextDelta: delta => this.handleAssistantText(delta),
+      onError: error => this.handleError(error)
+    });
+
+    this.session.registerTool('suggest_availability', args => this.handleSuggestAvailability(args));
+    this.session.registerTool('book_appointment', args => this.handleBookAppointment(args));
+    this.session.registerTool('reschedule_appointment', args => this.handleReschedule(args));
+    this.session.registerTool('cancel_appointment', args => this.handleCancel(args));
+    this.session.registerTool('get_business_hours', args => this.handleGetBusinessHours(args));
+    logger.debug('OpenAI tools registered: suggest_availability, book_appointment, reschedule_appointment, cancel_appointment, get_business_hours');
+
+    socket.on('message', (data: WebSocket.RawData) => this.handleMessage(data));
+    socket.on('close', () => this.cleanup());
+    socket.on('error', err => this.handleError(err instanceof Error ? err : new Error('Twilio socket error')));
+  }
+
+  private async handleMessage(data: WebSocket.RawData) {
+    try {
+      const event = JSON.parse(data.toString()) as TwilioEvent;
+      switch (event.event) {
+        case 'start':
+          this.streamSid = (event as TwilioStartEvent).start.streamSid;
+          logger.info({ streamSid: this.streamSid }, '📞 ========== NEW CALL STARTED ==========');
+          logger.info({ streamSid: this.streamSid }, '📞 Twilio stream started');
+          await this.session.connect();
+          await this.session.configureSession({ instructions: INSTRUCTIONS, tools: TOOL_DEFINITIONS });
+          logger.info({ streamSid: this.streamSid }, '🎙️ Waiting for caller audio...');
+          break;
+        case 'media':
+          await this.handleMedia(event as TwilioMediaEvent);
+          break;
+        case 'stop':
+          logger.info({ streamSid: this.streamSid }, '☎️ ========== CALL ENDED ==========');
+          this.cleanup();
+          break;
+        default:
+          break;
+      }
+    } catch (error) {
+      this.handleError(error instanceof Error ? error : new Error('Failed to parse Twilio message'));
+    }
+  }
+
+  private async handleMedia(event: TwilioMediaEvent) {
+    if (!event.media?.payload) return;
+
+    const samples = decodeMuLaw(event.media.payload);
+    let sumSquares = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const value = samples[i] ?? 0;
+      sumSquares += value * value;
+    }
+    const rms = Math.sqrt(sumSquares / Math.max(samples.length, 1));
+    const isSilent = rms < 80;
+
+    // Append audio to OpenAI buffer
+    await this.session.appendTwilioAudio(event.media.payload);
+    this.pendingAudioMs += samples.length / 8;
+
+    if (!isSilent) {
+      // Speech detected - cancel any pending silence timer and mark that we have audio
+      if (this.silenceTimer) {
+        clearTimeout(this.silenceTimer);
+        this.silenceTimer = null;
+      }
+      if (!this.hasPendingAudio) {
+        logger.info({ streamSid: this.streamSid, rms }, 'Speech detected, buffering audio');
+        this.hasPendingAudio = true;
+      }
+    } else if (this.hasPendingAudio && !this.silenceTimer) {
+      // Silence detected after speech - start timer to commit
+      this.silenceTimer = setTimeout(() => {
+        void this.commitAudio();
+      }, 700); // 700ms of silence triggers commit
+    }
+  }
+
+  private async commitAudio() {
+    if (!this.hasPendingAudio) return;
+
+    this.silenceTimer = null;
+    this.hasPendingAudio = false;
+
+    const bufferedMs = this.pendingAudioMs;
+    if (bufferedMs < 200) {
+      logger.debug({ pendingAudioMs: bufferedMs }, 'Skipping commit - buffer too small');
+      this.pendingAudioMs = 0;
+      return;
+    }
+
+    logger.info({ streamSid: this.streamSid, pendingAudioMs: bufferedMs }, 'Committing audio buffer to OpenAI');
+    try {
+      await this.session.commitAndRespond();
+    } catch (error) {
+      logger.error({ err: error, streamSid: this.streamSid }, 'Failed to commit audio buffer');
+      throw error;
+    } finally {
+      this.pendingAudioMs = 0;
+    }
+  }
+
+
+  private sendAudioToTwilio(base64Mulaw: string) {
+    if (!this.streamSid || this.closed) {
+      logger.error({ streamSid: this.streamSid, closed: this.closed }, '❌ Cannot send audio - stream not ready');
+      return;
+    }
+
+    this.pendingAudioMs = 0;
+
+    // Log only the first audio chunk
+    if (!this.hasReceivedFirstAudioChunk) {
+      logger.info({ streamSid: this.streamSid, audioLength: base64Mulaw.length }, '🔊 AI speaking - first audio chunk sent to Twilio');
+      this.hasReceivedFirstAudioChunk = true;
+    }
+
+    const payload = {
+      event: 'media',
+      streamSid: this.streamSid,
+      media: { payload: base64Mulaw, track: 'outbound' }
+    };
+
+    try {
+      this.socket.send(JSON.stringify(payload));
+      logger.debug({ audioLength: base64Mulaw.length }, '📤 Audio chunk sent to Twilio');
+    } catch (error) {
+      this.handleError(error instanceof Error ? error : new Error('Failed to send media to Twilio'));
+    }
+  }
+
+  private handleAssistantText(_delta: string) {
+    // Placeholder for future analytics or action parsing.
+  }
+
+  private async handleSuggestAvailability(args: unknown) {
+    try {
+      const payload = args as { serviceName: string; date: string };
+      logger.info({ tool: 'suggest_availability', args: payload }, 'Tool called: suggest_availability');
+      const result = await suggestSlots(payload);
+      logger.info({ tool: 'suggest_availability', slotsCount: result.slots.length }, 'Availability slots found');
+      return {
+        service: result.service.name,
+        date: result.date,
+        slots: result.slots.slice(0, 6)
+      };
+    } catch (error) {
+      logger.error({ tool: 'suggest_availability', error: this.formatError(error) }, 'Tool error: suggest_availability');
+      return { error: this.formatError(error) };
+    }
+  }
+
+  private async handleBookAppointment(args: unknown) {
+    try {
+      const payload = args as {
+        serviceName: string;
+        date: string;
+        time: string;
+        customer: { name: string; phone: string; email?: string };
+      };
+      logger.info({ tool: 'book_appointment', args: payload }, 'Tool called: book_appointment');
+      const result = await bookAppointment(payload as any);
+      logger.info({ tool: 'book_appointment', appointmentId: result.appointment.appointmentId }, 'Appointment booked successfully');
+      return {
+        appointmentId: result.appointment.appointmentId,
+        service: result.service.name,
+        price: result.service.price,
+        date: payload.date,
+        time: payload.time
+      };
+    } catch (error) {
+      logger.error({ tool: 'book_appointment', error: this.formatError(error) }, 'Tool error: book_appointment');
+      return { error: this.formatError(error) };
+    }
+  }
+
+  private async handleReschedule(args: unknown) {
+    try {
+      const payload = args as { appointmentId: string; date: string; time: string };
+      logger.info({ tool: 'reschedule_appointment', args: payload }, 'Tool called: reschedule_appointment');
+      const iso = `${payload.date}T${payload.time}`;
+      await phorest.updateAppointment(payload.appointmentId, iso);
+      logger.info({ tool: 'reschedule_appointment', appointmentId: payload.appointmentId }, 'Appointment rescheduled successfully');
+      return {
+        appointmentId: payload.appointmentId,
+        date: payload.date,
+        time: payload.time
+      };
+    } catch (error) {
+      logger.error({ tool: 'reschedule_appointment', error: this.formatError(error) }, 'Tool error: reschedule_appointment');
+      return { error: this.formatError(error) };
+    }
+  }
+
+  private async handleCancel(args: unknown) {
+    try {
+      const payload = args as { appointmentId: string };
+      logger.info({ tool: 'cancel_appointment', args: payload }, 'Tool called: cancel_appointment');
+      await phorest.cancelAppointment(payload.appointmentId);
+      logger.info({ tool: 'cancel_appointment', appointmentId: payload.appointmentId }, 'Appointment cancelled successfully');
+      return { appointmentId: payload.appointmentId, cancelled: true };
+    } catch (error) {
+      logger.error({ tool: 'cancel_appointment', error: this.formatError(error) }, 'Tool error: cancel_appointment');
+      return { error: this.formatError(error) };
+    }
+  }
+
+  private async handleGetBusinessHours(_args: unknown) {
+    try {
+      logger.info({ tool: 'get_business_hours' }, 'Tool called: get_business_hours');
+
+      const formattedHours = {
+        monday: businessHours.hours.mon.join(', ') || 'Closed',
+        tuesday: businessHours.hours.tue.join(', ') || 'Closed',
+        wednesday: businessHours.hours.wed.join(', ') || 'Closed',
+        thursday: businessHours.hours.thu.join(', ') || 'Closed',
+        friday: businessHours.hours.fri.join(', ') || 'Closed',
+        saturday: businessHours.hours.sat.join(', ') || 'Closed',
+        sunday: businessHours.hours.sun.join(', ') || 'Closed',
+        closedDates: businessHours.closedDates
+      };
+
+      logger.info({ tool: 'get_business_hours', hours: formattedHours }, 'Business hours retrieved');
+      return formattedHours;
+    } catch (error) {
+      logger.error({ tool: 'get_business_hours', error: this.formatError(error) }, 'Tool error: get_business_hours');
+      return { error: this.formatError(error) };
+    }
+  }
+
+  private formatError(error: unknown) {
+    if (error instanceof Error) return error.message;
+    return 'Unexpected error occurred';
+  }
+
+  private handleError(error: Error) {
+    logger.error({ err: error, streamSid: this.streamSid }, 'Twilio realtime call error');
+    this.cleanup();
+  }
+
+  private cleanup() {
+    if (this.closed) return;
+    this.closed = true;
+    this.pendingAudioMs = 0;
+    if (this.silenceTimer) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+    this.session.close();
+    try {
+      if (this.socket.readyState === WebSocket.OPEN) {
+        this.socket.close();
+      }
+    } catch (error) {
+      logger.error({ err: error }, 'Error closing Twilio socket');
+    }
+  }
+}
+
+export function setupTwilioRealtimeStream(server: http.Server) {
+  const wss = new WebSocketServer({ server, path: '/twilio/stream' });
+  wss.on('connection', (socket: WebSocket) => {
+    new TwilioRealtimeCall(socket);
+  });
+  wss.on('error', (error: Error) => {
+    logger.error({ err: error }, 'Twilio stream server error');
+  });
+}
