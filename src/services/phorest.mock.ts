@@ -1,4 +1,10 @@
-import type { PhorestPort, Service } from './phorest.types.js';
+import { DateTime } from 'luxon';
+import type { PhorestPort, Service, CustomerResult, AppointmentSummary } from './phorest.types.js';
+
+function normalizePhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  return digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
+}
 
 // pretend salon services
 const services: Service[] = [
@@ -33,5 +39,59 @@ export const mockPhorest: PhorestPort = {
 
   async cancelAppointment(appointmentId) {
     return { appointmentId, cancelled: true };
+  },
+
+  async lookupCustomerByPhone(phone: string): Promise<CustomerResult | null> {
+    if (normalizePhone(phone) === '4432535169') {
+      return { clientId: 'client_test', firstName: 'Jane', lastName: 'Smith', phone: '4432535169' };
+    }
+    return null;
+  },
+
+  async lookupCustomerByName(firstName: string, lastName: string): Promise<CustomerResult[]> {
+    if (firstName.toLowerCase() === 'jane') {
+      return [{ clientId: 'client_test', firstName: 'Jane', lastName: 'Smith' }];
+    }
+    return [];
+  },
+
+  async listAppointments(_clientId: string): Promise<AppointmentSummary[]> {
+    const today = DateTime.now().setZone('America/New_York').toISODate()!;
+    return [
+      {
+        appointmentId: 'appt_mock_001',
+        serviceName: 'Eyebrow Threading',
+        date: today,
+        timeDisplay: '2:00 PM',
+        startTimeRaw: '19:00:00',
+        endTimeRaw: '19:15:00',
+      }
+    ];
+  },
+
+  async addAppointmentNote(_appointmentId: string, _note: string): Promise<void> {
+    // no-op in mock
+  },
+
+  async getTodayAppointments(): Promise<AppointmentSummary[]> {
+    const today = DateTime.now().setZone('America/New_York').toISODate()!;
+    return [
+      {
+        appointmentId: 'appt_mock_001',
+        serviceName: 'Eyebrow Threading',
+        date: today,
+        timeDisplay: '2:00 PM',
+        startTimeRaw: '19:00:00',
+        endTimeRaw: '19:15:00',
+      },
+      {
+        appointmentId: 'appt_mock_002',
+        serviceName: 'Eyebrow Tinting',
+        date: today,
+        timeDisplay: '2:15 PM',
+        startTimeRaw: '19:15:00',
+        endTimeRaw: '19:35:00',
+      }
+    ];
   }
 };

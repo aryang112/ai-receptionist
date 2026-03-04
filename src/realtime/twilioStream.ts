@@ -1,5 +1,6 @@
 import type http from 'http';
 import WebSocket, { WebSocketServer } from 'ws';
+import twilio from 'twilio';
 import { OpenAIRealtimeSession, type ToolDefinition } from './openaiSession.js';
 import { logger } from '../core/logger.js';
 import { env } from '../config/env.js';
@@ -7,6 +8,15 @@ import { suggestSlots, bookAppointment } from '../services/booking.js';
 import { phorest } from '../services/phorest.js';
 import { decodeMuLaw } from './audio.js';
 import businessHours from '../config/business.json';
+
+// Lazy-initialised so tests don't fail without creds
+let _twilioClient: ReturnType<typeof twilio> | null = null;
+function getTwilioClient() {
+  if (!_twilioClient && env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN) {
+    _twilioClient = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
+  }
+  return _twilioClient;
+}
 
 const CORE_SERVICES = env.PHOREST_PREFERRED_SERVICE_IDS.length
   ? env.PHOREST_PREFERRED_SERVICE_IDS.join(', ')
@@ -169,6 +179,57 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {},
       required: []
     }
+  },
+  {
+    type: 'function',
+    name: 'lookup_customer',
+    description: 'Look up a caller in the salon system. Always try phone first. If not found or no phone given, try by name. Use this before booking, rescheduling, cancelling, or logging running late.',
+    parameters: {
+      type: 'object',
+      properties: {
+        phone: { type: 'string', description: 'Caller phone number (try this first)' },
+        firstName: { type: 'string', description: 'First name (fallback if no phone match)' },
+        lastName: { type: 'string', description: 'Last name (fallback if no phone match)' }
+      },
+      required: []
+    }
+  },
+  {
+    type: 'function',
+    name: 'list_appointments',
+    description: 'List a customer\'s upcoming appointments. Use before rescheduling, cancelling, or when caller says they\'re running late. Requires clientId from lookup_customer.',
+    parameters: {
+      type: 'object',
+      properties: {
+        clientId: { type: 'string' }
+      },
+      required: ['clientId']
+    }
+  },
+  {
+    type: 'function',
+    name: 'log_running_late',
+    description: 'Call this when a caller says they are running late for their appointment. Logs a note on their appointment and checks if there is a tight back-to-back booking.',
+    parameters: {
+      type: 'object',
+      properties: {
+        clientId: { type: 'string' },
+        appointmentId: { type: 'string', description: 'The appointment they are running late for' }
+      },
+      required: ['clientId', 'appointmentId']
+    }
+  },
+  {
+    type: 'function',
+    name: 'transfer_to_owner',
+    description: 'Transfer the call to Richa (the salon owner). Use when: caller asks to speak to Richa or a person, request involves multiple services or group booking, you are unable to help after one clarifying attempt, caller sounds frustrated.',
+    parameters: {
+      type: 'object',
+      properties: {
+        reason: { type: 'string', description: 'Brief reason for the transfer' }
+      },
+      required: ['reason']
+    }
   }
 ];
 
@@ -197,6 +258,7 @@ class TwilioRealtimeCall {
   private readonly socket: WebSocket;
   private readonly session: OpenAIRealtimeSession;
   private streamSid = '';
+  private callSid = '';
   private closed = false;
   private pendingAudioMs = 0;
   private hasReceivedFirstAudioChunk = false;
@@ -218,7 +280,11 @@ class TwilioRealtimeCall {
     this.session.registerTool('reschedule_appointment', args => this.handleReschedule(args));
     this.session.registerTool('cancel_appointment', args => this.handleCancel(args));
     this.session.registerTool('get_business_hours', args => this.handleGetBusinessHours(args));
-    logger.debug('OpenAI tools registered: suggest_availability, book_appointment, reschedule_appointment, cancel_appointment, get_business_hours');
+    this.session.registerTool('lookup_customer', args => this.handleLookupCustomer(args));
+    this.session.registerTool('list_appointments', args => this.handleListAppointments(args));
+    this.session.registerTool('log_running_late', args => this.handleLogRunningLate(args));
+    this.session.registerTool('transfer_to_owner', args => this.handleTransferToOwner(args));
+    logger.debug('OpenAI tools registered: suggest_availability, book_appointment, reschedule_appointment, cancel_appointment, get_business_hours, lookup_customer, list_appointments, log_running_late, transfer_to_owner');
 
     socket.on('message', (data: WebSocket.RawData) => this.handleMessage(data));
     socket.on('close', () => this.cleanup());
@@ -231,6 +297,7 @@ class TwilioRealtimeCall {
       switch (event.event) {
         case 'start':
           this.streamSid = (event as TwilioStartEvent).start.streamSid;
+          this.callSid = (event as TwilioStartEvent).start.callSid;
           logger.info({ streamSid: this.streamSid }, '📞 ========== NEW CALL STARTED ==========');
           logger.info({ streamSid: this.streamSid }, '📞 Twilio stream started');
           await this.session.connect();
@@ -434,6 +501,106 @@ class TwilioRealtimeCall {
       return formattedHours;
     } catch (error) {
       logger.error({ tool: 'get_business_hours', error: this.formatError(error) }, 'Tool error: get_business_hours');
+      return { error: this.formatError(error) };
+    }
+  }
+
+  private async handleLookupCustomer(args: unknown) {
+    try {
+      const payload = args as { phone?: string; firstName?: string; lastName?: string };
+      logger.info({ tool: 'lookup_customer' }, 'Tool called: lookup_customer');
+
+      if (payload.phone) {
+        const result = await phorest.lookupCustomerByPhone(payload.phone);
+        if (result) {
+          logger.info({ tool: 'lookup_customer', clientId: result.clientId }, 'Customer found by phone');
+          return { found: true, clientId: result.clientId, name: `${result.firstName} ${result.lastName}`.trim(), matchedBy: 'phone' };
+        }
+      }
+
+      if (payload.firstName && payload.lastName) {
+        const results = await phorest.lookupCustomerByName(payload.firstName, payload.lastName);
+        if (results.length === 1) {
+          logger.info({ tool: 'lookup_customer', clientId: results[0]!.clientId }, 'Customer found by name');
+          return { found: true, clientId: results[0]!.clientId, name: `${results[0]!.firstName} ${results[0]!.lastName}`.trim(), matchedBy: 'name' };
+        }
+        if (results.length > 1) {
+          return { found: true, multiple: true, count: results.length, message: 'Multiple matches — ask for appointment date/time to disambiguate' };
+        }
+      }
+
+      logger.info({ tool: 'lookup_customer' }, 'Customer not found');
+      return { found: false };
+    } catch (error) {
+      logger.error({ tool: 'lookup_customer', error: this.formatError(error) }, 'Tool error: lookup_customer');
+      return { error: this.formatError(error) };
+    }
+  }
+
+  private async handleListAppointments(args: unknown) {
+    try {
+      const payload = args as { clientId: string };
+      logger.info({ tool: 'list_appointments', clientId: payload.clientId }, 'Tool called: list_appointments');
+      const appointments = await phorest.listAppointments(payload.clientId);
+      logger.info({ tool: 'list_appointments', count: appointments.length }, 'Appointments retrieved');
+      return { appointments };
+    } catch (error) {
+      logger.error({ tool: 'list_appointments', error: this.formatError(error) }, 'Tool error: list_appointments');
+      return { error: this.formatError(error) };
+    }
+  }
+
+  private async handleLogRunningLate(args: unknown) {
+    try {
+      const payload = args as { clientId: string; appointmentId: string };
+      logger.info({ tool: 'log_running_late', ...payload }, 'Tool called: log_running_late');
+
+      await phorest.addAppointmentNote(payload.appointmentId, 'Customer called ahead — running late');
+
+      const todayAppts = await phorest.getTodayAppointments();
+      const callerAppt = todayAppts.find(a => a.appointmentId === payload.appointmentId);
+
+      let squeezed = false;
+      if (callerAppt) {
+        const [endH, endM] = callerAppt.endTimeRaw.split(':').map(Number);
+        const endMinutes = (endH ?? 0) * 60 + (endM ?? 0);
+
+        squeezed = todayAppts.some(a => {
+          if (a.appointmentId === payload.appointmentId) return false;
+          const [startH, startM] = a.startTimeRaw.split(':').map(Number);
+          const startMinutes = (startH ?? 0) * 60 + (startM ?? 0);
+          return startMinutes >= endMinutes && startMinutes - endMinutes <= 15;
+        });
+      }
+
+      logger.info({ tool: 'log_running_late', squeezed }, 'Running late logged');
+      return { noted: true, squeezed };
+    } catch (error) {
+      logger.error({ tool: 'log_running_late', error: this.formatError(error) }, 'Tool error: log_running_late');
+      return { error: this.formatError(error) };
+    }
+  }
+
+  private async handleTransferToOwner(args: unknown) {
+    try {
+      const payload = args as { reason: string };
+      logger.info({ tool: 'transfer_to_owner', reason: payload.reason, callSid: this.callSid }, 'Transferring call to owner');
+
+      const client = getTwilioClient();
+      if (!client || !this.callSid) {
+        logger.error({ tool: 'transfer_to_owner' }, 'Cannot transfer — missing Twilio client or callSid');
+        return { error: 'Transfer unavailable' };
+      }
+
+      await client.calls(this.callSid).update({
+        twiml: `<Response><Say voice="Polly.Joanna-Neural">One moment while I transfer you to Richa.</Say><Dial>${env.OWNER_PHONE}</Dial></Response>`
+      });
+
+      logger.info({ tool: 'transfer_to_owner', callSid: this.callSid }, 'Call transferred successfully');
+      this.cleanup();
+      return { transferred: true };
+    } catch (error) {
+      logger.error({ tool: 'transfer_to_owner', error: this.formatError(error) }, 'Transfer failed');
       return { error: this.formatError(error) };
     }
   }
