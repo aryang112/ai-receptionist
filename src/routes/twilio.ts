@@ -7,7 +7,11 @@ export const twilioVoice = express.Router();
 
 function deriveStreamUrl(req: express.Request) {
   const host = req.headers['x-forwarded-host'] || req.headers.host;
-  const protoHeader = (req.headers['x-forwarded-proto'] || req.protocol || 'https').toString();
+  const protoHeader = (
+    req.headers['x-forwarded-proto'] ||
+    req.protocol ||
+    'https'
+  ).toString();
   const protocol = protoHeader.includes('https') ? 'wss' : 'ws';
   return `${protocol}://${host}/twilio/stream`;
 }
@@ -23,8 +27,10 @@ twilioVoice.post('/voice', (req, res) => {
   console.log('   X-Forwarded-Proto header:', req.headers['x-forwarded-proto']);
   console.log('   Generated Stream URL:', streamUrl);
 
+  // No Polly <Say> greeting here: Erica greets the caller herself over the
+  // media stream (one consistent voice). The stream connects immediately;
+  // openaiSession.requestGreeting() makes her speak first.
   const twiml = new VoiceResponse();
-  twiml.say({ voice: 'Polly.Joanna-Neural' }, "Hi, this is Erica from Richa's Threading Salon. How can I help you today?");
   const connect = twiml.connect();
   connect.stream({ url: streamUrl });
 

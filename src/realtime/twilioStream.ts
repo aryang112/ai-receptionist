@@ -26,6 +26,10 @@ const INSTRUCTIONS = `You are Erica, the warm and friendly AI receptionist for R
 
 PERSONALITY: Conversational, warm, efficient. Speak like a real person — not a robot. Keep responses to 1–2 short sentences. Use natural phrasing like "Of course!", "No problem!", "Let me check that for you."
 
+GREETING: Open the call yourself, immediately and warmly: "Hi, this is Erica from Richa's Threading Salon — how can I help you today?" Then wait for the caller.
+
+NEVER LEAVE SILENCE: Before you call ANY tool (looking something up, booking, checking availability, etc.), FIRST say a short, natural filler out loud — like "Let me check that for you…", "One sec…", or "Let me pull that up…" — and THEN call the tool. The caller must never hear dead air while you work.
+
 BUSINESS HOURS: Always use the get_business_hours tool when asked about hours. Never guess.
 
 PRICING (memorised — do not call API):
@@ -112,20 +116,22 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     type: 'function',
     name: 'suggest_availability',
-    description: 'Find available appointments for a given service on a specific date.',
+    description:
+      'Find available appointments for a given service on a specific date.',
     parameters: {
       type: 'object',
       properties: {
         serviceName: { type: 'string' },
-        date: { type: 'string', description: 'ISO date YYYY-MM-DD' }
+        date: { type: 'string', description: 'ISO date YYYY-MM-DD' },
       },
-      required: ['serviceName', 'date']
-    }
+      required: ['serviceName', 'date'],
+    },
   },
   {
     type: 'function',
     name: 'book_appointment',
-    description: 'Book an appointment once all details are confirmed with the caller.',
+    description:
+      'Book an appointment once all details are confirmed with the caller.',
     parameters: {
       type: 'object',
       properties: {
@@ -137,13 +143,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
           properties: {
             name: { type: 'string' },
             phone: { type: 'string' },
-            email: { type: 'string' }
+            email: { type: 'string' },
           },
-          required: ['name', 'phone']
-        }
+          required: ['name', 'phone'],
+        },
       },
-      required: ['serviceName', 'date', 'time', 'customer']
-    }
+      required: ['serviceName', 'date', 'time', 'customer'],
+    },
   },
   {
     type: 'function',
@@ -154,10 +160,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         appointmentId: { type: 'string' },
         date: { type: 'string' },
-        time: { type: 'string' }
+        time: { type: 'string' },
       },
-      required: ['appointmentId', 'date', 'time']
-    }
+      required: ['appointmentId', 'date', 'time'],
+    },
   },
   {
     type: 'function',
@@ -166,72 +172,92 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        appointmentId: { type: 'string' }
+        appointmentId: { type: 'string' },
       },
-      required: ['appointmentId']
-    }
+      required: ['appointmentId'],
+    },
   },
   {
     type: 'function',
     name: 'get_business_hours',
-    description: 'Get the salon operating hours for each day of the week and any special closed dates. Use this when the caller asks about hours, what time you open/close, or when the salon is available.',
+    description:
+      'Get the salon operating hours for each day of the week and any special closed dates. Use this when the caller asks about hours, what time you open/close, or when the salon is available.',
     parameters: {
       type: 'object',
       properties: {},
-      required: []
-    }
+      required: [],
+    },
   },
   {
     type: 'function',
     name: 'lookup_customer',
-    description: 'Look up a caller in the salon system. Always try phone first. If not found or no phone given, try by name. Use this before booking, rescheduling, cancelling, or logging running late.',
+    description:
+      'Look up a caller in the salon system. Always try phone first. If not found or no phone given, try by name. Use this before booking, rescheduling, cancelling, or logging running late.',
     parameters: {
       type: 'object',
       properties: {
-        phone: { type: 'string', description: 'Caller phone number (try this first)' },
-        firstName: { type: 'string', description: 'First name (fallback if no phone match)' },
-        lastName: { type: 'string', description: 'Last name (fallback if no phone match)' }
+        phone: {
+          type: 'string',
+          description: 'Caller phone number (try this first)',
+        },
+        firstName: {
+          type: 'string',
+          description: 'First name (fallback if no phone match)',
+        },
+        lastName: {
+          type: 'string',
+          description: 'Last name (fallback if no phone match)',
+        },
       },
-      required: []
-    }
+      required: [],
+    },
   },
   {
     type: 'function',
     name: 'list_appointments',
-    description: 'List a customer\'s upcoming appointments. Use before rescheduling, cancelling, or when caller says they\'re running late. Requires clientId from lookup_customer.',
-    parameters: {
-      type: 'object',
-      properties: {
-        clientId: { type: 'string' }
-      },
-      required: ['clientId']
-    }
-  },
-  {
-    type: 'function',
-    name: 'log_running_late',
-    description: 'Call this when a caller says they are running late for their appointment. Logs a note on their appointment and checks if there is a tight back-to-back booking.',
+    description:
+      "List a customer's upcoming appointments. Use before rescheduling, cancelling, or when caller says they're running late. Requires clientId from lookup_customer.",
     parameters: {
       type: 'object',
       properties: {
         clientId: { type: 'string' },
-        appointmentId: { type: 'string', description: 'The appointment they are running late for' }
       },
-      required: ['clientId', 'appointmentId']
-    }
+      required: ['clientId'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'log_running_late',
+    description:
+      'Call this when a caller says they are running late for their appointment. Logs a note on their appointment and checks if there is a tight back-to-back booking.',
+    parameters: {
+      type: 'object',
+      properties: {
+        clientId: { type: 'string' },
+        appointmentId: {
+          type: 'string',
+          description: 'The appointment they are running late for',
+        },
+      },
+      required: ['clientId', 'appointmentId'],
+    },
   },
   {
     type: 'function',
     name: 'transfer_to_owner',
-    description: 'Transfer the call to Richa (the salon owner). Use when: caller asks to speak to Richa or a person, request involves multiple services or group booking, you are unable to help after one clarifying attempt, caller sounds frustrated.',
+    description:
+      'Transfer the call to Richa (the salon owner). Use when: caller asks to speak to Richa or a person, request involves multiple services or group booking, you are unable to help after one clarifying attempt, caller sounds frustrated.',
     parameters: {
       type: 'object',
       properties: {
-        reason: { type: 'string', description: 'Brief reason for the transfer' }
+        reason: {
+          type: 'string',
+          description: 'Brief reason for the transfer',
+        },
       },
-      required: ['reason']
-    }
-  }
+      required: ['reason'],
+    },
+  },
 ];
 
 interface TwilioEventBase {
@@ -241,7 +267,7 @@ interface TwilioEventBase {
 
 interface TwilioMediaEvent extends TwilioEventBase {
   event: 'media';
-  media: { payload: string };
+  media: { payload: string; timestamp?: string };
 }
 
 interface TwilioStartEvent extends TwilioEventBase {
@@ -253,7 +279,17 @@ interface TwilioStopEvent extends TwilioEventBase {
   event: 'stop';
 }
 
-type TwilioEvent = TwilioMediaEvent | TwilioStartEvent | TwilioStopEvent | TwilioEventBase;
+interface TwilioMarkEvent extends TwilioEventBase {
+  event: 'mark';
+  mark?: { name: string };
+}
+
+type TwilioEvent =
+  | TwilioMediaEvent
+  | TwilioStartEvent
+  | TwilioStopEvent
+  | TwilioMarkEvent
+  | TwilioEventBase;
 
 class TwilioRealtimeCall {
   private readonly socket: WebSocket;
@@ -263,31 +299,63 @@ class TwilioRealtimeCall {
   private closed = false;
   private hasReceivedFirstAudioChunk = false;
   private sessionReady = false;
+  // Barge-in bookkeeping (mirrors OpenAI's Twilio sample): track the caller's
+  // media clock and when the current Erica response began playing, so we can
+  // truncate to exactly what was heard when the caller interrupts.
+  private latestMediaTimestamp = 0;
+  private responseStartTimestamp: number | null = null;
+  private markQueue: string[] = [];
 
   constructor(socket: WebSocket) {
     this.socket = socket;
     logger.info('New Twilio WebSocket connection');
 
     this.session = new OpenAIRealtimeSession({
-      onAudioChunk: chunk => this.sendAudioToTwilio(chunk),
-      onTextDelta: delta => this.handleAssistantText(delta),
-      onError: error => this.handleError(error)
+      onAudioChunk: (chunk) => this.sendAudioToTwilio(chunk),
+      onTextDelta: (delta) => this.handleAssistantText(delta),
+      onSpeechStarted: () => this.handleBargeIn(),
+      onResponseComplete: () => this.handleResponseComplete(),
+      onError: (error) => this.handleError(error),
     });
 
-    this.session.registerTool('suggest_availability', args => this.handleSuggestAvailability(args));
-    this.session.registerTool('book_appointment', args => this.handleBookAppointment(args));
-    this.session.registerTool('reschedule_appointment', args => this.handleReschedule(args));
-    this.session.registerTool('cancel_appointment', args => this.handleCancel(args));
-    this.session.registerTool('get_business_hours', args => this.handleGetBusinessHours(args));
-    this.session.registerTool('lookup_customer', args => this.handleLookupCustomer(args));
-    this.session.registerTool('list_appointments', args => this.handleListAppointments(args));
-    this.session.registerTool('log_running_late', args => this.handleLogRunningLate(args));
-    this.session.registerTool('transfer_to_owner', args => this.handleTransferToOwner(args));
-    logger.debug('OpenAI tools registered: suggest_availability, book_appointment, reschedule_appointment, cancel_appointment, get_business_hours, lookup_customer, list_appointments, log_running_late, transfer_to_owner');
+    this.session.registerTool('suggest_availability', (args) =>
+      this.handleSuggestAvailability(args)
+    );
+    this.session.registerTool('book_appointment', (args) =>
+      this.handleBookAppointment(args)
+    );
+    this.session.registerTool('reschedule_appointment', (args) =>
+      this.handleReschedule(args)
+    );
+    this.session.registerTool('cancel_appointment', (args) =>
+      this.handleCancel(args)
+    );
+    this.session.registerTool('get_business_hours', (args) =>
+      this.handleGetBusinessHours(args)
+    );
+    this.session.registerTool('lookup_customer', (args) =>
+      this.handleLookupCustomer(args)
+    );
+    this.session.registerTool('list_appointments', (args) =>
+      this.handleListAppointments(args)
+    );
+    this.session.registerTool('log_running_late', (args) =>
+      this.handleLogRunningLate(args)
+    );
+    this.session.registerTool('transfer_to_owner', (args) =>
+      this.handleTransferToOwner(args)
+    );
+    logger.debug(
+      'OpenAI tools registered: suggest_availability, book_appointment, reschedule_appointment, cancel_appointment, get_business_hours, lookup_customer, list_appointments, log_running_late, transfer_to_owner'
+    );
 
     socket.on('message', (data: WebSocket.RawData) => this.handleMessage(data));
     socket.on('close', () => this.cleanup());
-    socket.on('error', err => this.handleError(err instanceof Error ? err : new Error('Twilio socket error')));
+    socket.on('error', (err) =>
+      this.handleError(
+        err instanceof Error ? err : new Error('Twilio socket error')
+      )
+    );
   }
 
   private async handleMessage(data: WebSocket.RawData) {
@@ -297,67 +365,138 @@ class TwilioRealtimeCall {
         case 'start':
           this.streamSid = (event as TwilioStartEvent).start.streamSid;
           this.callSid = (event as TwilioStartEvent).start.callSid;
-          logger.info({ streamSid: this.streamSid }, '📞 ========== NEW CALL STARTED ==========');
-          logger.info({ streamSid: this.streamSid }, '📞 Twilio stream started');
+          logger.info(
+            { streamSid: this.streamSid },
+            '📞 ========== NEW CALL STARTED =========='
+          );
+          logger.info(
+            { streamSid: this.streamSid },
+            '📞 Twilio stream started'
+          );
           await this.session.connect();
-          await this.session.configureSession({ instructions: INSTRUCTIONS, tools: TOOL_DEFINITIONS });
+          await this.session.configureSession({
+            instructions: INSTRUCTIONS,
+            tools: TOOL_DEFINITIONS,
+          });
           this.sessionReady = true;
+          // Erica greets first, in her own voice (no separate Polly handoff).
+          this.session.requestGreeting();
           // Preload client phone index in background so lookup_customer is instant
           phorest.preloadClients?.().catch(() => {});
-          logger.info({ streamSid: this.streamSid }, '🎙️ Waiting for caller audio...');
+          logger.info(
+            { streamSid: this.streamSid },
+            '🎙️ Waiting for caller audio...'
+          );
           break;
-        case 'media':
-          await this.handleMedia(event as TwilioMediaEvent);
+        case 'media': {
+          const media = (event as TwilioMediaEvent).media;
+          if (media?.timestamp)
+            this.latestMediaTimestamp =
+              Number(media.timestamp) || this.latestMediaTimestamp;
+          this.handleMedia(event as TwilioMediaEvent);
+          break;
+        }
+        case 'mark':
+          if (this.markQueue.length > 0) this.markQueue.shift();
           break;
         case 'stop':
-          logger.info({ streamSid: this.streamSid }, '☎️ ========== CALL ENDED ==========');
+          logger.info(
+            { streamSid: this.streamSid },
+            '☎️ ========== CALL ENDED =========='
+          );
           this.cleanup();
           break;
         default:
           break;
       }
     } catch (error) {
-      this.handleError(error instanceof Error ? error : new Error('Failed to parse Twilio message'));
+      this.handleError(
+        error instanceof Error
+          ? error
+          : new Error('Failed to parse Twilio message')
+      );
     }
   }
 
-  private async handleMedia(event: TwilioMediaEvent) {
+  private handleMedia(event: TwilioMediaEvent) {
     if (!event.media?.payload || this.closed || !this.sessionReady) return;
-
-    // With server_vad enabled, just forward audio — OpenAI handles turn detection
-    try {
-      await this.session.appendTwilioAudio(event.media.payload);
-    } catch {
-      // Connection lost — stop processing, cleanup will handle the rest
-      if (!this.closed) this.cleanup();
-    }
+    // g711 mu-law passthrough — forward Twilio's frame verbatim, no transcoding.
+    // appendTwilioAudio is a safe no-op if the session has closed (never throws).
+    this.session.appendTwilioAudio(event.media.payload);
   }
-
 
   private sendAudioToTwilio(base64Mulaw: string) {
-    if (!this.streamSid || this.closed) {
-      logger.error({ streamSid: this.streamSid, closed: this.closed }, '❌ Cannot send audio - stream not ready');
-      return;
+    if (!this.streamSid || this.closed) return;
+
+    // Mark the start of this response on the caller's media clock — barge-in
+    // uses (latestMediaTimestamp - responseStartTimestamp) as the truncation point.
+    if (this.responseStartTimestamp === null) {
+      this.responseStartTimestamp = this.latestMediaTimestamp;
     }
 
-    // Log only the first audio chunk
     if (!this.hasReceivedFirstAudioChunk) {
-      logger.info({ streamSid: this.streamSid, audioLength: base64Mulaw.length }, '🔊 AI speaking - first audio chunk sent to Twilio');
+      logger.info(
+        { streamSid: this.streamSid },
+        '🔊 AI speaking - first audio chunk sent to Twilio'
+      );
       this.hasReceivedFirstAudioChunk = true;
     }
 
-    const payload = {
-      event: 'media',
-      streamSid: this.streamSid,
-      media: { payload: base64Mulaw, track: 'outbound' }
-    };
-
     try {
-      this.socket.send(JSON.stringify(payload));
-      logger.debug({ audioLength: base64Mulaw.length }, '📤 Audio chunk sent to Twilio');
+      this.socket.send(
+        JSON.stringify({
+          event: 'media',
+          streamSid: this.streamSid,
+          media: { payload: base64Mulaw },
+        })
+      );
+      this.sendMark();
     } catch (error) {
-      this.handleError(error instanceof Error ? error : new Error('Failed to send media to Twilio'));
+      this.handleError(
+        error instanceof Error
+          ? error
+          : new Error('Failed to send media to Twilio')
+      );
     }
+  }
+
+  /** Mark each outbound chunk so we can tell when Erica is still mid-utterance. */
+  private sendMark() {
+    if (!this.streamSid || this.closed) return;
+    this.socket.send(
+      JSON.stringify({
+        event: 'mark',
+        streamSid: this.streamSid,
+        mark: { name: 'responsePart' },
+      })
+    );
+    this.markQueue.push('responsePart');
+  }
+
+  /**
+   * Caller started talking while Erica was speaking: truncate her message to
+   * what was actually heard and flush Twilio's outbound buffer so she stops now.
+   */
+  private handleBargeIn() {
+    if (this.markQueue.length === 0 || this.responseStartTimestamp === null)
+      return;
+    const elapsed = Math.max(
+      0,
+      this.latestMediaTimestamp - this.responseStartTimestamp
+    );
+    this.session.truncateActiveResponse(elapsed);
+    if (this.streamSid && !this.closed) {
+      this.socket.send(
+        JSON.stringify({ event: 'clear', streamSid: this.streamSid })
+      );
+    }
+    this.markQueue = [];
+    this.responseStartTimestamp = null;
+  }
+
+  private handleResponseComplete() {
+    this.responseStartTimestamp = null;
+    this.markQueue = [];
   }
 
   private handleAssistantText(_delta: string) {
@@ -367,16 +506,25 @@ class TwilioRealtimeCall {
   private async handleSuggestAvailability(args: unknown) {
     try {
       const payload = args as { serviceName: string; date: string };
-      logger.info({ tool: 'suggest_availability', args: payload }, 'Tool called: suggest_availability');
+      logger.info(
+        { tool: 'suggest_availability', args: payload },
+        'Tool called: suggest_availability'
+      );
       const result = await suggestSlots(payload);
-      logger.info({ tool: 'suggest_availability', slotsCount: result.slots.length }, 'Availability slots found');
+      logger.info(
+        { tool: 'suggest_availability', slotsCount: result.slots.length },
+        'Availability slots found'
+      );
       return {
         service: result.service.name,
         date: result.date,
-        slots: result.slots.slice(0, 6)
+        slots: result.slots.slice(0, 6),
       };
     } catch (error) {
-      logger.error({ tool: 'suggest_availability', error: this.formatError(error) }, 'Tool error: suggest_availability');
+      logger.error(
+        { tool: 'suggest_availability', error: this.formatError(error) },
+        'Tool error: suggest_availability'
+      );
       return { error: this.formatError(error) };
     }
   }
@@ -389,36 +537,64 @@ class TwilioRealtimeCall {
         time: string;
         customer: { name: string; phone: string; email?: string };
       };
-      logger.info({ tool: 'book_appointment', args: payload }, 'Tool called: book_appointment');
+      logger.info(
+        { tool: 'book_appointment', args: payload },
+        'Tool called: book_appointment'
+      );
       const result = await bookAppointment(payload as any);
-      logger.info({ tool: 'book_appointment', appointmentId: result.appointment.appointmentId }, 'Appointment booked successfully');
+      logger.info(
+        {
+          tool: 'book_appointment',
+          appointmentId: result.appointment.appointmentId,
+        },
+        'Appointment booked successfully'
+      );
       return {
         appointmentId: result.appointment.appointmentId,
         service: result.service.name,
         price: result.service.price,
         date: payload.date,
-        time: payload.time
+        time: payload.time,
       };
     } catch (error) {
-      logger.error({ tool: 'book_appointment', error: this.formatError(error) }, 'Tool error: book_appointment');
+      logger.error(
+        { tool: 'book_appointment', error: this.formatError(error) },
+        'Tool error: book_appointment'
+      );
       return { error: this.formatError(error) };
     }
   }
 
   private async handleReschedule(args: unknown) {
     try {
-      const payload = args as { appointmentId: string; date: string; time: string };
-      logger.info({ tool: 'reschedule_appointment', args: payload }, 'Tool called: reschedule_appointment');
+      const payload = args as {
+        appointmentId: string;
+        date: string;
+        time: string;
+      };
+      logger.info(
+        { tool: 'reschedule_appointment', args: payload },
+        'Tool called: reschedule_appointment'
+      );
       const iso = `${payload.date}T${payload.time}`;
       await phorest.updateAppointment(payload.appointmentId, iso);
-      logger.info({ tool: 'reschedule_appointment', appointmentId: payload.appointmentId }, 'Appointment rescheduled successfully');
+      logger.info(
+        {
+          tool: 'reschedule_appointment',
+          appointmentId: payload.appointmentId,
+        },
+        'Appointment rescheduled successfully'
+      );
       return {
         appointmentId: payload.appointmentId,
         date: payload.date,
-        time: payload.time
+        time: payload.time,
       };
     } catch (error) {
-      logger.error({ tool: 'reschedule_appointment', error: this.formatError(error) }, 'Tool error: reschedule_appointment');
+      logger.error(
+        { tool: 'reschedule_appointment', error: this.formatError(error) },
+        'Tool error: reschedule_appointment'
+      );
       return { error: this.formatError(error) };
     }
   }
@@ -426,19 +602,31 @@ class TwilioRealtimeCall {
   private async handleCancel(args: unknown) {
     try {
       const payload = args as { appointmentId: string };
-      logger.info({ tool: 'cancel_appointment', args: payload }, 'Tool called: cancel_appointment');
+      logger.info(
+        { tool: 'cancel_appointment', args: payload },
+        'Tool called: cancel_appointment'
+      );
       await phorest.cancelAppointment(payload.appointmentId);
-      logger.info({ tool: 'cancel_appointment', appointmentId: payload.appointmentId }, 'Appointment cancelled successfully');
+      logger.info(
+        { tool: 'cancel_appointment', appointmentId: payload.appointmentId },
+        'Appointment cancelled successfully'
+      );
       return { appointmentId: payload.appointmentId, cancelled: true };
     } catch (error) {
-      logger.error({ tool: 'cancel_appointment', error: this.formatError(error) }, 'Tool error: cancel_appointment');
+      logger.error(
+        { tool: 'cancel_appointment', error: this.formatError(error) },
+        'Tool error: cancel_appointment'
+      );
       return { error: this.formatError(error) };
     }
   }
 
   private async handleGetBusinessHours(_args: unknown) {
     try {
-      logger.info({ tool: 'get_business_hours' }, 'Tool called: get_business_hours');
+      logger.info(
+        { tool: 'get_business_hours' },
+        'Tool called: get_business_hours'
+      );
 
       const formattedHours = {
         monday: businessHours.hours.mon.join(', ') || 'Closed',
@@ -448,45 +636,83 @@ class TwilioRealtimeCall {
         friday: businessHours.hours.fri.join(', ') || 'Closed',
         saturday: businessHours.hours.sat.join(', ') || 'Closed',
         sunday: businessHours.hours.sun.join(', ') || 'Closed',
-        closedDates: businessHours.closedDates
+        closedDates: businessHours.closedDates,
       };
 
-      logger.info({ tool: 'get_business_hours', hours: formattedHours }, 'Business hours retrieved');
+      logger.info(
+        { tool: 'get_business_hours', hours: formattedHours },
+        'Business hours retrieved'
+      );
       return formattedHours;
     } catch (error) {
-      logger.error({ tool: 'get_business_hours', error: this.formatError(error) }, 'Tool error: get_business_hours');
+      logger.error(
+        { tool: 'get_business_hours', error: this.formatError(error) },
+        'Tool error: get_business_hours'
+      );
       return { error: this.formatError(error) };
     }
   }
 
   private async handleLookupCustomer(args: unknown) {
     try {
-      const payload = args as { phone?: string; firstName?: string; lastName?: string };
+      const payload = args as {
+        phone?: string;
+        firstName?: string;
+        lastName?: string;
+      };
       logger.info({ tool: 'lookup_customer' }, 'Tool called: lookup_customer');
 
       if (payload.phone) {
         const result = await phorest.lookupCustomerByPhone(payload.phone);
         if (result) {
-          logger.info({ tool: 'lookup_customer', clientId: result.clientId }, 'Customer found by phone');
-          return { found: true, clientId: result.clientId, name: `${result.firstName} ${result.lastName}`.trim(), matchedBy: 'phone' };
+          logger.info(
+            { tool: 'lookup_customer', clientId: result.clientId },
+            'Customer found by phone'
+          );
+          return {
+            found: true,
+            clientId: result.clientId,
+            name: `${result.firstName} ${result.lastName}`.trim(),
+            matchedBy: 'phone',
+          };
         }
       }
 
       if (payload.firstName && payload.lastName) {
-        const results = await phorest.lookupCustomerByName(payload.firstName, payload.lastName);
+        const results = await phorest.lookupCustomerByName(
+          payload.firstName,
+          payload.lastName
+        );
         if (results.length === 1) {
-          logger.info({ tool: 'lookup_customer', clientId: results[0]!.clientId }, 'Customer found by name');
-          return { found: true, clientId: results[0]!.clientId, name: `${results[0]!.firstName} ${results[0]!.lastName}`.trim(), matchedBy: 'name' };
+          logger.info(
+            { tool: 'lookup_customer', clientId: results[0]!.clientId },
+            'Customer found by name'
+          );
+          return {
+            found: true,
+            clientId: results[0]!.clientId,
+            name: `${results[0]!.firstName} ${results[0]!.lastName}`.trim(),
+            matchedBy: 'name',
+          };
         }
         if (results.length > 1) {
-          return { found: true, multiple: true, count: results.length, message: 'Multiple matches — ask for appointment date/time to disambiguate' };
+          return {
+            found: true,
+            multiple: true,
+            count: results.length,
+            message:
+              'Multiple matches — ask for appointment date/time to disambiguate',
+          };
         }
       }
 
       logger.info({ tool: 'lookup_customer' }, 'Customer not found');
       return { found: false };
     } catch (error) {
-      logger.error({ tool: 'lookup_customer', error: this.formatError(error) }, 'Tool error: lookup_customer');
+      logger.error(
+        { tool: 'lookup_customer', error: this.formatError(error) },
+        'Tool error: lookup_customer'
+      );
       return { error: this.formatError(error) };
     }
   }
@@ -494,12 +720,21 @@ class TwilioRealtimeCall {
   private async handleListAppointments(args: unknown) {
     try {
       const payload = args as { clientId: string };
-      logger.info({ tool: 'list_appointments', clientId: payload.clientId }, 'Tool called: list_appointments');
+      logger.info(
+        { tool: 'list_appointments', clientId: payload.clientId },
+        'Tool called: list_appointments'
+      );
       const appointments = await phorest.listAppointments(payload.clientId);
-      logger.info({ tool: 'list_appointments', count: appointments.length }, 'Appointments retrieved');
+      logger.info(
+        { tool: 'list_appointments', count: appointments.length },
+        'Appointments retrieved'
+      );
       return { appointments };
     } catch (error) {
-      logger.error({ tool: 'list_appointments', error: this.formatError(error) }, 'Tool error: list_appointments');
+      logger.error(
+        { tool: 'list_appointments', error: this.formatError(error) },
+        'Tool error: list_appointments'
+      );
       return { error: this.formatError(error) };
     }
   }
@@ -507,19 +742,27 @@ class TwilioRealtimeCall {
   private async handleLogRunningLate(args: unknown) {
     try {
       const payload = args as { clientId: string; appointmentId: string };
-      logger.info({ tool: 'log_running_late', ...payload }, 'Tool called: log_running_late');
+      logger.info(
+        { tool: 'log_running_late', ...payload },
+        'Tool called: log_running_late'
+      );
 
-      await phorest.addAppointmentNote(payload.appointmentId, 'Customer called ahead — running late');
+      await phorest.addAppointmentNote(
+        payload.appointmentId,
+        'Customer called ahead — running late'
+      );
 
       const todayAppts = await phorest.getTodayAppointments();
-      const callerAppt = todayAppts.find(a => a.appointmentId === payload.appointmentId);
+      const callerAppt = todayAppts.find(
+        (a) => a.appointmentId === payload.appointmentId
+      );
 
       let squeezed = false;
       if (callerAppt) {
         const [endH, endM] = callerAppt.endTimeRaw.split(':').map(Number);
         const endMinutes = (endH ?? 0) * 60 + (endM ?? 0);
 
-        squeezed = todayAppts.some(a => {
+        squeezed = todayAppts.some((a) => {
           if (a.appointmentId === payload.appointmentId) return false;
           const [startH, startM] = a.startTimeRaw.split(':').map(Number);
           const startMinutes = (startH ?? 0) * 60 + (startM ?? 0);
@@ -527,10 +770,16 @@ class TwilioRealtimeCall {
         });
       }
 
-      logger.info({ tool: 'log_running_late', squeezed }, 'Running late logged');
+      logger.info(
+        { tool: 'log_running_late', squeezed },
+        'Running late logged'
+      );
       return { noted: true, squeezed };
     } catch (error) {
-      logger.error({ tool: 'log_running_late', error: this.formatError(error) }, 'Tool error: log_running_late');
+      logger.error(
+        { tool: 'log_running_late', error: this.formatError(error) },
+        'Tool error: log_running_late'
+      );
       return { error: this.formatError(error) };
     }
   }
@@ -538,23 +787,39 @@ class TwilioRealtimeCall {
   private async handleTransferToOwner(args: unknown) {
     try {
       const payload = args as { reason: string };
-      logger.info({ tool: 'transfer_to_owner', reason: payload.reason, callSid: this.callSid }, 'Transferring call to owner');
+      logger.info(
+        {
+          tool: 'transfer_to_owner',
+          reason: payload.reason,
+          callSid: this.callSid,
+        },
+        'Transferring call to owner'
+      );
 
       const client = getTwilioClient();
       if (!client || !this.callSid) {
-        logger.error({ tool: 'transfer_to_owner' }, 'Cannot transfer — missing Twilio client or callSid');
+        logger.error(
+          { tool: 'transfer_to_owner' },
+          'Cannot transfer — missing Twilio client or callSid'
+        );
         return { error: 'Transfer unavailable' };
       }
 
       await client.calls(this.callSid).update({
-        twiml: `<Response><Say voice="Polly.Joanna-Neural">One moment while I transfer you to Richa.</Say><Dial>${env.OWNER_PHONE}</Dial></Response>`
+        twiml: `<Response><Say voice="Polly.Joanna-Neural">One moment while I transfer you to Richa.</Say><Dial>${env.OWNER_PHONE}</Dial></Response>`,
       });
 
-      logger.info({ tool: 'transfer_to_owner', callSid: this.callSid }, 'Call transferred successfully');
+      logger.info(
+        { tool: 'transfer_to_owner', callSid: this.callSid },
+        'Call transferred successfully'
+      );
       this.cleanup();
       return { transferred: true };
     } catch (error) {
-      logger.error({ tool: 'transfer_to_owner', error: this.formatError(error) }, 'Transfer failed');
+      logger.error(
+        { tool: 'transfer_to_owner', error: this.formatError(error) },
+        'Transfer failed'
+      );
       return { error: this.formatError(error) };
     }
   }
@@ -565,7 +830,10 @@ class TwilioRealtimeCall {
   }
 
   private handleError(error: Error) {
-    logger.error({ err: error, streamSid: this.streamSid }, 'Twilio realtime call error');
+    logger.error(
+      { err: error, streamSid: this.streamSid },
+      'Twilio realtime call error'
+    );
     this.cleanup();
   }
 
