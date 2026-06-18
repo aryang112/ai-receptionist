@@ -1,0 +1,84 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Regression tests for the REAL Phorest client URL construction + the
+// timeout/retry behaviour added to harden the conversational hot path.
+// We drive realPhorest directly with a mocked global fetch.
+
+const TEST_ENV: Record<string, string> = {
+  PHOREST_BASE_URL: 'https://example.test/third-party-api-server',
+  PHOREST_API_USERNAME: 'user',
+  PHOREST_API_SECRET: 'secret',
+  PHOREST_BUSINESS_ID: 'BIZ',
+  PHOREST_BRANCH_ID: 'BRANCH',
+};
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+const EMPTY_APPTS = { _embedded: { appointments: [] }, page: { number: 0, totalPages: 1 } };
+
+async function loadRealPhorest() {
+  for (const [k, v] of Object.entries(TEST_ENV)) process.env[k] = v;
+  vi.resetModules();
+  const mod = await import('../services/phorest.client.js');
+  return mod.realPhorest;
+}
+
+describe('realPhorest hot-path hardening', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('listAppointments always sends BOTH from_date and to_date (the 400 that crashed a real call)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(EMPTY_APPTS));
+    const phorest = await loadRealPhorest();
+
+    await phorest.listAppointments('CLIENT1');
+
+    const url = String(fetchMock.mock.calls[0]![0]);
+    expect(url).toContain('from_date=');
+    expect(url).toContain('to_date=');
+  });
+
+  it('retries once on a network error, then succeeds', async () => {
+    fetchMock
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce(jsonResponse(EMPTY_APPTS));
+    const phorest = await loadRealPhorest();
+
+    const result = await phorest.listAppointments('CLIENT1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result).toEqual([]);
+  });
+
+  it('does NOT retry a 4xx — surfaces the error after a single call', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ detail: 'bad request' }, 400));
+    const phorest = await loadRealPhorest();
+
+    await expect(phorest.listAppointments('CLIENT1')).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes an abort signal so a hung request cannot hang forever', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(EMPTY_APPTS));
+    const phorest = await loadRealPhorest();
+
+    await phorest.listAppointments('CLIENT1');
+
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+});
