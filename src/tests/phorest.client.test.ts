@@ -19,7 +19,10 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-const EMPTY_APPTS = { _embedded: { appointments: [] }, page: { number: 0, totalPages: 1 } };
+const EMPTY_APPTS = {
+  _embedded: { appointments: [] },
+  page: { number: 0, totalPages: 1 },
+};
 
 async function loadRealPhorest() {
   for (const [k, v] of Object.entries(TEST_ENV)) process.env[k] = v;
@@ -80,5 +83,38 @@ describe('realPhorest hot-path hardening', () => {
 
     const init = fetchMock.mock.calls[0]![1] as RequestInit;
     expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('paginates the ENTIRE client list (finds a client on a later page)', async () => {
+    const pageOf = (url: string) => {
+      const m = url.match(/[?&]page=(\d+)/);
+      return m ? Number(m[1]) : 0;
+    };
+    // 3 pages; the target client only appears on the last page.
+    fetchMock.mockImplementation(async (url: unknown) => {
+      const page = pageOf(String(url));
+      const clients =
+        page === 2
+          ? [
+              {
+                clientId: 'C-LATE',
+                firstName: 'Late',
+                lastName: 'Client',
+                mobile: '4105551234',
+              },
+            ]
+          : [];
+      return jsonResponse({
+        _embedded: { clients },
+        page: { number: page, totalPages: 3 },
+      });
+    });
+    const phorest = await loadRealPhorest();
+
+    const result = await phorest.lookupCustomerByPhone('410-555-1234');
+
+    expect(result?.clientId).toBe('C-LATE');
+    const pages = fetchMock.mock.calls.map((c) => pageOf(String(c[0]))).sort();
+    expect(pages).toEqual([0, 1, 2]);
   });
 });

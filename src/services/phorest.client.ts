@@ -290,30 +290,39 @@ async function loadClientPhoneIndex(): Promise<Map<string, ClientRecord>> {
     const clientPath = (page: number) =>
       `api/business/${env.PHOREST_BUSINESS_ID}/client?size=200&page=${page}`;
 
-    // Fetch page 0 to learn the page count, then fan out the rest in parallel.
-    // This turns N serial round-trips (5-10s for a large salon) into ~2.
+    const fetchPage = (page: number) =>
+      phorestFetch<ClientResponse>(clientPath(page)).catch((err) => {
+        logger.warn(
+          { page, err: String(err) },
+          'Client index page failed — skipping'
+        );
+        return null;
+      });
+
+    // Fetch page 0 to learn the page count, then fetch the rest with BOUNDED
+    // concurrency. Firing every page at once blows past undici's 6-connections-
+    // per-origin limit, and because each request's abort timer starts when
+    // fetch() is called, the queued requests time out while still waiting. A
+    // small batch keeps every in-flight request actually on the wire.
     const first = await phorestFetch<ClientResponse>(clientPath(0));
     addPage(first._embedded?.clients ?? []);
     const totalPages = first.page?.totalPages ?? 1;
 
-    if (totalPages > 1) {
-      const rest = await Promise.all(
-        Array.from({ length: totalPages - 1 }, (_, i) =>
-          phorestFetch<ClientResponse>(clientPath(i + 1)).catch((err) => {
-            logger.warn(
-              { page: i + 1, err: String(err) },
-              'Client index page failed — skipping'
-            );
-            return null;
-          })
-        )
+    const CONCURRENCY = 5;
+    for (let start = 1; start < totalPages; start += CONCURRENCY) {
+      const end = Math.min(start + CONCURRENCY, totalPages);
+      const batch = await Promise.all(
+        Array.from({ length: end - start }, (_, i) => fetchPage(start + i))
       );
-      for (const resp of rest) {
+      for (const resp of batch) {
         if (resp) addPage(resp._embedded?.clients ?? []);
       }
     }
 
-    logger.info({ clientCount: index.size }, 'Client phone index loaded');
+    logger.info(
+      { clientCount: index.size, pages: totalPages },
+      'Client phone index loaded'
+    );
     clientPhoneIndex = index;
     clientPhoneIndexLoading = null;
     return index;
