@@ -34,11 +34,21 @@ export class OpenAIRealtimeSession {
   private readonly model: string;
   private readonly voice: string;
   private readonly toolHandlers = new Map<string, ToolHandler>();
-  private readonly toolBuffers = new Map<string, { name: string; args: string }>();
+  private readonly toolBuffers = new Map<
+    string,
+    { name: string; args: string }
+  >();
   private configuredTools: ToolDefinition[] = [];
   private keepaliveInterval: NodeJS.Timeout | undefined = undefined;
   /** item_id of the assistant message currently being spoken — used for barge-in truncation. */
   private activeItemId: string | null = null;
+  // Per-turn latency instrumentation. Timestamps (ms) of the events that start
+  // a "turn"; first audio out is measured against the most recent one.
+  private tSpeechStopped = 0;
+  private tResponseCreated = 0;
+  private tToolResultSent = 0;
+  private tGreetingRequested = 0;
+  private firstAudioLogged = false;
 
   constructor(handlers: RealtimeHandlers = {}) {
     this.handlers = handlers;
@@ -56,7 +66,9 @@ export class OpenAIRealtimeSession {
     }
 
     if (this.ws) {
-      logger.warn('WebSocket exists but not connected - cleaning up before reconnect');
+      logger.warn(
+        'WebSocket exists but not connected - cleaning up before reconnect'
+      );
       this.ws.removeAllListeners();
       this.ws.close();
     }
@@ -66,8 +78,8 @@ export class OpenAIRealtimeSession {
     const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(this.model)}`;
     const ws = new WebSocket(url, {
       headers: {
-        Authorization: `Bearer ${env.OPENAI_REALTIME_API_KEY}`
-      }
+        Authorization: `Bearer ${env.OPENAI_REALTIME_API_KEY}`,
+      },
     });
 
     this.ws = ws;
@@ -77,7 +89,10 @@ export class OpenAIRealtimeSession {
         this.isConnected = true;
         this.flushQueue();
         this.startKeepalive();
-        logger.info({ model: this.model }, 'OpenAI WebSocket connection established');
+        logger.info(
+          { model: this.model },
+          'OpenAI WebSocket connection established'
+        );
         resolve();
       });
       ws.once('error', (err: Error) => {
@@ -91,7 +106,8 @@ export class OpenAIRealtimeSession {
       try {
         message = JSON.parse(data.toString());
       } catch (error) {
-        if (this.handlers.onError && error instanceof Error) this.handlers.onError(error);
+        if (this.handlers.onError && error instanceof Error)
+          this.handlers.onError(error);
         return;
       }
       // Never let a thrown handler become an unhandled rejection — that would
@@ -99,7 +115,11 @@ export class OpenAIRealtimeSession {
       // mid-call used to. Swallow into onError instead.
       void this.handleEvent(message).catch((error: unknown) => {
         if (this.handlers.onError) {
-          this.handlers.onError(error instanceof Error ? error : new Error('OpenAI event handler failed'));
+          this.handlers.onError(
+            error instanceof Error
+              ? error
+              : new Error('OpenAI event handler failed')
+          );
         }
       });
     });
@@ -108,19 +128,27 @@ export class OpenAIRealtimeSession {
       this.stopKeepalive();
       this.isConnected = false;
       const reasonText = reason.toString();
-      logger.error({
-        code,
-        reason: reasonText,
-        codeDescription: this.getCloseCodeDescription(code)
-      }, `OpenAI WebSocket CLOSED - Code: ${code}, Reason: ${reasonText || 'none'}`);
+      logger.error(
+        {
+          code,
+          reason: reasonText,
+          codeDescription: this.getCloseCodeDescription(code),
+        },
+        `OpenAI WebSocket CLOSED - Code: ${code}, Reason: ${reasonText || 'none'}`
+      );
 
       if (code === 1008 || (code >= 4000 && code < 5000)) {
-        logger.error('This looks like an authentication error! Check your OPENAI_REALTIME_API_KEY');
+        logger.error(
+          'This looks like an authentication error! Check your OPENAI_REALTIME_API_KEY'
+        );
       }
     });
 
     ws.on('error', (error: Error) => {
-      logger.error({ err: error, message: error.message }, 'OpenAI WebSocket error occurred');
+      logger.error(
+        { err: error, message: error.message },
+        'OpenAI WebSocket error occurred'
+      );
       if (this.handlers.onError) this.handlers.onError(error);
     });
   }
@@ -134,7 +162,12 @@ export class OpenAIRealtimeSession {
 
   /** True only when the socket is genuinely open and writable. */
   private isOpen(): boolean {
-    return !this.closing && !!this.ws && this.isConnected && this.ws.readyState === WebSocket.OPEN;
+    return (
+      !this.closing &&
+      !!this.ws &&
+      this.isConnected &&
+      this.ws.readyState === WebSocket.OPEN
+    );
   }
 
   private getCloseCodeDescription(code: number): string {
@@ -145,7 +178,7 @@ export class OpenAIRealtimeSession {
       1006: 'Abnormal closure (connection lost)',
       1008: 'Policy violation (likely auth failure)',
       1011: 'Internal server error',
-      1015: 'TLS handshake failure'
+      1015: 'TLS handshake failure',
     };
     return descriptions[code] || `Unknown code ${code}`;
   }
@@ -154,7 +187,13 @@ export class OpenAIRealtimeSession {
     this.toolHandlers.set(name, handler);
   }
 
-  async configureSession({ instructions, tools }: { instructions?: string; tools?: ToolDefinition[] }) {
+  async configureSession({
+    instructions,
+    tools,
+  }: {
+    instructions?: string;
+    tools?: ToolDefinition[];
+  }) {
     if (tools) {
       this.configuredTools = tools;
     }
@@ -177,18 +216,21 @@ export class OpenAIRealtimeSession {
               type: 'server_vad',
               threshold: 0.5,
               prefix_padding_ms: 300,
-              silence_duration_ms: 400
-            }
+              silence_duration_ms: 400,
+            },
           },
           output: {
             format: { type: 'audio/pcmu' },
-            voice: this.voice
-          }
-        }
-      }
+            voice: this.voice,
+          },
+        },
+      },
     };
 
-    logger.info({ model: this.model, voice: this.voice }, 'Sending GA session.update (g711_ulaw passthrough + server_vad)');
+    logger.info(
+      { model: this.model, voice: this.voice },
+      'Sending GA session.update (g711_ulaw passthrough + server_vad)'
+    );
     this.queueMessage(sessionConfig);
     this.flushQueue();
   }
@@ -196,7 +238,36 @@ export class OpenAIRealtimeSession {
   /** Ask Erica to greet the caller first (one consistent voice, no Polly handoff). */
   requestGreeting() {
     if (!this.isOpen()) return;
+    this.tGreetingRequested = Date.now();
     this.sendRaw({ type: 'response.create' });
+  }
+
+  /**
+   * Log how long it took Erica to start speaking after the last turn trigger
+   * (caller stopped talking, greeting requested, or a tool result returned).
+   * This is the headline "does it feel human" number — target sub-1s.
+   */
+  private logFirstAudioLatency() {
+    if (this.firstAudioLogged) return;
+    this.firstAudioLogged = true;
+    let ref = this.tSpeechStopped;
+    let phase = 'caller-turn';
+    if (this.tToolResultSent > ref) {
+      ref = this.tToolResultSent;
+      phase = 'after-tool';
+    }
+    if (this.tGreetingRequested > ref) {
+      ref = this.tGreetingRequested;
+      phase = 'greeting';
+    }
+    if (!ref) return;
+    const responseMs = Date.now() - ref;
+    const modelCreateMs =
+      this.tResponseCreated > ref ? this.tResponseCreated - ref : undefined;
+    logger.info(
+      { phase, responseMs, modelCreateMs },
+      `⏱  response latency ${responseMs}ms (${phase})`
+    );
   }
 
   async sendUserText(text: string) {
@@ -209,8 +280,8 @@ export class OpenAIRealtimeSession {
       item: {
         type: 'message',
         role: 'user',
-        content: [{ type: 'input_text', text }]
-      }
+        content: [{ type: 'input_text', text }],
+      },
     });
     this.sendRaw({ type: 'response.create' });
   }
@@ -232,7 +303,7 @@ export class OpenAIRealtimeSession {
       type: 'conversation.item.truncate',
       item_id: this.activeItemId,
       content_index: 0,
-      audio_end_ms: Math.max(0, Math.floor(audioEndMs))
+      audio_end_ms: Math.max(0, Math.floor(audioEndMs)),
     });
     this.activeItemId = null;
   }
@@ -261,53 +332,81 @@ export class OpenAIRealtimeSession {
   }
 
   private async handleEvent(event: any): Promise<void> {
-    const routineEvents = ['response.output_audio.delta', 'response.audio.delta', 'response.output_text.delta'];
+    const routineEvents = [
+      'response.output_audio.delta',
+      'response.audio.delta',
+      'response.output_text.delta',
+    ];
     if (!routineEvents.includes(event.type)) {
-      logger.debug({ eventType: event.type, eventId: event.event_id }, 'OpenAI event received');
+      logger.debug(
+        { eventType: event.type, eventId: event.event_id },
+        'OpenAI event received'
+      );
     }
 
     switch (event.type) {
       case 'session.created':
       case 'session.updated': {
-        logger.info({
-          eventType: event.type,
-          voice: event.session?.audio?.output?.voice ?? event.session?.voice,
-          outputModalities: event.session?.output_modalities,
-          inputFormat: event.session?.audio?.input?.format,
-          outputFormat: event.session?.audio?.output?.format
-        }, 'OpenAI session configured');
+        logger.info(
+          {
+            eventType: event.type,
+            voice: event.session?.audio?.output?.voice ?? event.session?.voice,
+            outputModalities: event.session?.output_modalities,
+            inputFormat: event.session?.audio?.input?.format,
+            outputFormat: event.session?.audio?.output?.format,
+          },
+          'OpenAI session configured'
+        );
         break;
       }
       case 'input_audio_buffer.speech_started': {
-        logger.info({ eventType: event.type, itemId: event.item_id }, 'Speech started (VAD) — barge-in');
+        logger.info(
+          { eventType: event.type, itemId: event.item_id },
+          'Speech started (VAD) — barge-in'
+        );
         this.handlers.onSpeechStarted?.();
         break;
       }
       case 'input_audio_buffer.speech_stopped': {
+        this.tSpeechStopped = Date.now();
         logger.info({ eventType: event.type }, 'Speech stopped (VAD)');
         break;
       }
       case 'conversation.item.input_audio_transcription.completed': {
-        logger.info({ transcript: event.transcript }, 'USER SAID: ' + event.transcript);
+        logger.info(
+          { transcript: event.transcript },
+          'USER SAID: ' + event.transcript
+        );
         break;
       }
       case 'response.created': {
         this.activeItemId = null;
-        logger.info({ responseId: event.response?.id }, 'OpenAI response created');
+        this.tResponseCreated = Date.now();
+        this.firstAudioLogged = false;
+        logger.info(
+          { responseId: event.response?.id },
+          'OpenAI response created'
+        );
         break;
       }
       case 'response.output_text.delta': {
-        if (this.handlers.onTextDelta) this.handlers.onTextDelta(event.delta as string);
+        if (this.handlers.onTextDelta)
+          this.handlers.onTextDelta(event.delta as string);
         break;
       }
       case 'response.audio.delta':
       case 'response.output_audio.delta': {
         const delta = event.delta || event.audio;
         if (!delta) break;
+        // First audio of this response = the moment Erica starts speaking.
+        this.logFirstAudioLatency();
         // Track which assistant item is speaking so barge-in can truncate it.
         if (event.item_id) this.activeItemId = event.item_id as string;
         if (this.handlers.onAudioChunk) {
-          this.handlers.onAudioChunk(delta as string, this.activeItemId ?? undefined);
+          this.handlers.onAudioChunk(
+            delta as string,
+            this.activeItemId ?? undefined
+          );
         } else {
           logger.error('No onAudioChunk handler registered!');
         }
@@ -325,12 +424,16 @@ export class OpenAIRealtimeSession {
       case 'response.completed': {
         this.activeItemId = null;
         logger.info({ eventType: event.type }, 'OpenAI response completed');
-        if (this.handlers.onResponseComplete) this.handlers.onResponseComplete();
+        if (this.handlers.onResponseComplete)
+          this.handlers.onResponseComplete();
         break;
       }
       case 'error': {
         logger.error({ error: event.error }, 'OpenAI error event received');
-        if (this.handlers.onError) this.handlers.onError(new Error(event.error?.message || 'OpenAI realtime error'));
+        if (this.handlers.onError)
+          this.handlers.onError(
+            new Error(event.error?.message || 'OpenAI realtime error')
+          );
         break;
       }
       case 'rate_limits.updated': {
@@ -347,7 +450,8 @@ export class OpenAIRealtimeSession {
     const callId = event.call_id as string;
     if (!callId) return;
     const record = this.toolBuffers.get(callId) ?? { name: '', args: '' };
-    if (typeof event.name === 'string' && event.name.length) record.name = event.name;
+    if (typeof event.name === 'string' && event.name.length)
+      record.name = event.name;
     if (typeof event.delta === 'string') record.args += event.delta;
     this.toolBuffers.set(callId, record);
   }
@@ -357,14 +461,16 @@ export class OpenAIRealtimeSession {
     if (!callId) return;
 
     const name = event.name || this.toolBuffers.get(callId)?.name || '';
-    const argsString = event.arguments || this.toolBuffers.get(callId)?.args || '';
+    const argsString =
+      event.arguments || this.toolBuffers.get(callId)?.args || '';
     this.toolBuffers.delete(callId);
 
     logger.info({ tool: name, callId }, 'Tool call received');
 
     const handler = this.toolHandlers.get(name);
     if (!handler) {
-      if (this.handlers.onError) this.handlers.onError(new Error(`Unhandled tool call: ${name}`));
+      if (this.handlers.onError)
+        this.handlers.onError(new Error(`Unhandled tool call: ${name}`));
       this.sendToolResult(callId, { error: `No handler for tool ${name}` });
       return;
     }
@@ -374,19 +480,32 @@ export class OpenAIRealtimeSession {
       try {
         args = JSON.parse(argsString);
       } catch (error) {
-        if (this.handlers.onError && error instanceof Error) this.handlers.onError(error);
-        this.sendToolResult(callId, { error: 'Failed to parse tool arguments' });
+        if (this.handlers.onError && error instanceof Error)
+          this.handlers.onError(error);
+        this.sendToolResult(callId, {
+          error: 'Failed to parse tool arguments',
+        });
         return;
       }
     }
 
+    const startedAt = Date.now();
     try {
       const result = await handler(args);
+      logger.info(
+        { tool: name, ms: Date.now() - startedAt },
+        `⏱  tool ${name} ${Date.now() - startedAt}ms`
+      );
       this.sendToolResult(callId, result ?? { ok: true });
     } catch (error) {
-      if (this.handlers.onError && error instanceof Error) this.handlers.onError(error);
+      logger.warn(
+        { tool: name, ms: Date.now() - startedAt },
+        `⏱  tool ${name} FAILED after ${Date.now() - startedAt}ms`
+      );
+      if (this.handlers.onError && error instanceof Error)
+        this.handlers.onError(error);
       this.sendToolResult(callId, {
-        error: error instanceof Error ? error.message : 'Tool execution failed'
+        error: error instanceof Error ? error.message : 'Tool execution failed',
       });
     }
   }
@@ -401,8 +520,11 @@ export class OpenAIRealtimeSession {
     const output = typeof result === 'string' ? result : JSON.stringify(result);
     this.sendRaw({
       type: 'conversation.item.create',
-      item: { type: 'function_call_output', call_id: callId, output }
+      item: { type: 'function_call_output', call_id: callId, output },
     });
+    // Mark the start of the post-tool turn so first-audio latency is attributed
+    // to "after-tool" rather than the (older) caller-turn timestamp.
+    this.tToolResultSent = Date.now();
     this.sendRaw({ type: 'response.create' });
   }
 

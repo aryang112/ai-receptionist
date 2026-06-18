@@ -57,3 +57,17 @@ were all architectural.
 - Optional: mid-call OpenAI WS reconnect-and-resume (today a hard drop ends the call gracefully).
 - Optional architectural upgrade for the slow Phorest backend: capture booking
   intent live, commit to Phorest async after the call + SMS confirm.
+
+## Reading the latency metrics (added 2026-06-18)
+Per-turn timings are logged as `⏱` lines. To watch them live:
+```
+npm run dev | grep "⏱"
+```
+- `⏱ response latency 740ms (caller-turn)` — caller stopped → Erica's first audio
+  (the headline "feels human" number; aim sub-1s). `phase` is `greeting`,
+  `caller-turn`, or `after-tool`; `modelCreateMs` = time to the model's
+  response.created (decision start), so first-token ≈ responseMs − modelCreateMs.
+- `⏱ tool book_appointment 820ms` — how long each Phorest tool call took. If a
+  tool is slow, that's a backend (Phorest) problem, not a model problem — the
+  filler speech is what keeps it from being dead air.
+After a few real calls, scan for `after-tool` latencies and any tool >1500ms.
