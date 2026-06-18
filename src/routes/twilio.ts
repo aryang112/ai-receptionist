@@ -1,54 +1,41 @@
 // src/routes/twilio.ts
 import express from 'express';
 import twilio from 'twilio';
-import { aiReply } from '../services/ai.js';
-import { phorest } from '../services/phorest.js';
 
 const { VoiceResponse } = twilio.twiml;
 export const twilioVoice = express.Router();
 
-/** First webhook: greet + gather speech */
-twilioVoice.post('/voice', async (_req, res) => {
+function deriveStreamUrl(req: express.Request) {
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const protoHeader = (req.headers['x-forwarded-proto'] || req.protocol || 'https').toString();
+  const protocol = protoHeader.includes('https') ? 'wss' : 'ws';
+  return `${protocol}://${host}/twilio/stream`;
+}
+
+/**
+ * Primary webhook: greet caller and open a Twilio media stream that routes
+ * real-time audio through OpenAI Realtime.
+ */
+twilioVoice.post('/voice', (req, res) => {
+  const streamUrl = deriveStreamUrl(req);
+  console.log('📞 Twilio /voice called');
+  console.log('   Protocol from req.protocol:', req.protocol);
+  console.log('   X-Forwarded-Proto header:', req.headers['x-forwarded-proto']);
+  console.log('   Generated Stream URL:', streamUrl);
+
   const twiml = new VoiceResponse();
-  const gather = twiml.gather({
-    input: ['speech'],
-    action: '/twilio/gather',
-    method: 'POST',
-    speechTimeout: 'auto'
-  });
-  gather.say({ voice: 'Polly.Joanna' }, "Hi, this is Erica from Richa's Threading Salon. How can I help you today?");
-  // reprompt if silence
-  twiml.redirect('/twilio/voice');
+  twiml.say({ voice: 'Polly.Joanna-Neural' }, "Hi, this is Erica from Richa's Threading Salon. How can I help you today?");
+  const connect = twiml.connect();
+  connect.stream({ url: streamUrl });
+
   res.type('text/xml').send(twiml.toString());
 });
 
-/** Second webhook: Twilio posts SpeechResult here */
-twilioVoice.post('/gather', async (req, res) => {
-  const userText: string = req.body?.SpeechResult || '';
-
-  // quick, optional context to ground the model
-  let extraInfo: string | undefined;
-  const t = userText.toLowerCase();
-
-  if (t.includes('hour') || t.includes('open') || t.includes('close')) {
-    extraInfo = "We’re open Mon–Fri 10am–7pm, Sat 10am–6pm, and closed Sunday.";
-  } else if (t.includes('price') || t.includes('cost') || t.includes('service')) {
-    const services = await phorest.listServices();
-    const summary = services.slice(0, 4).map(s => `${s.name} ${s.price}`).join(', ');
-    extraInfo = `Popular services and prices: ${summary}. I can book one for you.`;
-  }
-
-  const reply = await aiReply(userText, extraInfo ? { extraInfo } : undefined);
-
+/**
+ * Legacy endpoint retained to avoid 404s if Twilio replays the gather URL.
+ */
+twilioVoice.post('/gather', (_req, res) => {
   const twiml = new VoiceResponse();
-  const gather = twiml.gather({
-    input: ['speech'],
-    action: '/twilio/gather',
-    method: 'POST',
-    speechTimeout: 'auto'
-  });
-  gather.say({ voice: 'Polly.Joanna' }, reply);
-  twiml.redirect('/twilio/voice');
-
+  twiml.say({ voice: 'Polly.Joanna' }, 'One moment while I connect you.');
   res.type('text/xml').send(twiml.toString());
 });

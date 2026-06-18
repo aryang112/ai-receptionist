@@ -1,21 +1,24 @@
+import http from 'http';
 import express from 'express';
-import { appointment } from './routes/appointment.js';
-import { metadata } from './routes/metadata.js';
 import cors from 'cors';
 import helmet from 'helmet';
+import { appointment } from './routes/appointment.js';
+import { metadata } from './routes/metadata.js';
 import { twilioVoice } from './routes/twilio.js';
+import { setupTwilioRealtimeStream } from './realtime/twilioStream.js';
 
 
 const app = express();
-app.use(express.json());
+app.set('trust proxy', true); // Trust proxy headers for correct protocol detection
 app.use(helmet());
 app.use(cors());
-app.use('/api', appointment);
-app.use('/api', metadata);
+app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
-app.use('/twilio', twilioVoice);
 // log incoming requests so we see traffic
 app.use((req, _res, next) => { console.log('REQ', req.method, req.url); next(); });
+app.use('/api', appointment);
+app.use('/api', metadata);
+app.use('/twilio', twilioVoice);
 
 app.get('/', (_req, res) => {
   res.status(200).type('html').send(`
@@ -31,4 +34,7 @@ app.get('/health', (_req, res) => {
 });
 
 const PORT = Number(process.env.PORT || 5050);
-app.listen(PORT, () => console.log('Server up on', PORT));
+const server = http.createServer(app);
+setupTwilioRealtimeStream(server);
+
+server.listen(PORT, () => console.log('Server up on', PORT));

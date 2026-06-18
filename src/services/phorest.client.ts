@@ -1,4 +1,10 @@
-import type { PhorestPort, Service, SlotISO, CustomerResult, AppointmentSummary } from './phorest.types.js';
+import type {
+  PhorestPort,
+  Service,
+  SlotISO,
+  CustomerResult,
+  AppointmentSummary,
+} from './phorest.types.js';
 import { env } from '../config/env.js';
 import { logger } from '../core/logger.js';
 import { DateTime } from 'luxon';
@@ -8,7 +14,7 @@ const REQUIRED_ENV = [
   'PHOREST_API_USERNAME',
   'PHOREST_API_SECRET',
   'PHOREST_BUSINESS_ID',
-  'PHOREST_BRANCH_ID'
+  'PHOREST_BRANCH_ID',
 ] as const;
 
 type RequiredKey = (typeof REQUIRED_ENV)[number];
@@ -63,6 +69,7 @@ type ClientRecord = {
 
 type ClientResponse = {
   _embedded?: { clients?: ClientRecord[] };
+  page?: { number: number; totalPages: number };
 };
 
 type ClientCreateResponse = { clientId: string };
@@ -98,7 +105,10 @@ type AppointmentListResponse = {
   page?: { number: number; totalPages: number };
 };
 
-type ServiceDetailResponse = ServiceRecord & { duration?: number; price?: number };
+type ServiceDetailResponse = ServiceRecord & {
+  duration?: number;
+  price?: number;
+};
 
 type RequestOptions = RequestInit & { expectEmpty?: boolean };
 
@@ -119,7 +129,7 @@ class PhorestHttpError extends Error {
 }
 
 function assertEnv() {
-  const missing: RequiredKey[] = REQUIRED_ENV.filter(key => !env[key]);
+  const missing: RequiredKey[] = REQUIRED_ENV.filter((key) => !env[key]);
   if (missing.length) {
     throw new Error(`Missing Phorest env vars: ${missing.join(', ')}`);
   }
@@ -147,7 +157,9 @@ function parseSalonDate(date: string): DateTime {
 function parseSalonDateTime(dateTime: string): DateTime {
   let dt = DateTime.fromISO(dateTime, { zone: SALON_TIMEZONE });
   if (!dt.isValid) {
-    dt = DateTime.fromFormat(dateTime, 'yyyy-MM-dd HH:mm:ss', { zone: SALON_TIMEZONE });
+    dt = DateTime.fromFormat(dateTime, 'yyyy-MM-dd HH:mm:ss', {
+      zone: SALON_TIMEZONE,
+    });
   }
   if (!dt.isValid) {
     throw new Error(`Invalid datetime: ${dateTime}`);
@@ -156,10 +168,19 @@ function parseSalonDateTime(dateTime: string): DateTime {
 }
 
 function toPhorestIso(dt: DateTime): string {
-  return dt.setZone(SALON_TIMEZONE).toISO({ suppressMilliseconds: true }) as string;
+  return dt
+    .setZone(SALON_TIMEZONE)
+    .toISO({ suppressMilliseconds: true }) as string;
 }
 
-async function phorestFetch<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
+// Hard cap on any single Phorest round-trip. Without this, a hung request
+// becomes unbounded dead air for the caller (undici default headersTimeout ~300s).
+const PHOREST_TIMEOUT_MS = Number(process.env.PHOREST_TIMEOUT_MS || 4000);
+
+async function phorestFetch<T = unknown>(
+  path: string,
+  options: RequestOptions = {}
+): Promise<T> {
   assertEnv();
   const url = new URL(path, baseUrl());
   const { expectEmpty, ...init } = options;
@@ -173,35 +194,133 @@ async function phorestFetch<T = unknown>(path: string, options: RequestOptions =
     `Basic ${Buffer.from(`${env.PHOREST_API_USERNAME}:${env.PHOREST_API_SECRET}`).toString('base64')}`
   );
 
-  const response = await fetch(url, { ...init, headers });
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    const redacted = text.slice(0, 500);
-    logger.error(
-      {
-        msg: 'Phorest request failed',
-        url: url.toString(),
-        status: response.status,
-        body: redacted
-      },
-      'Phorest request failed'
-    );
-    throw new PhorestHttpError(response.status, `Phorest request failed with ${response.status}`, redacted);
-  }
+  // Up to 2 attempts: retry once on a network/timeout error or a 5xx.
+  // Never retry a 4xx (it's a deterministic client error — retrying just wastes the caller's time).
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(url, {
+        ...init,
+        headers,
+        signal: AbortSignal.timeout(PHOREST_TIMEOUT_MS),
+      });
 
-  if (expectEmpty || response.status === 204) {
-    return undefined as T;
-  }
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        const redacted = text.slice(0, 500);
+        if (response.status >= 500 && attempt === 0) {
+          lastError = new PhorestHttpError(
+            response.status,
+            `Phorest request failed with ${response.status}`,
+            redacted
+          );
+          logger.warn(
+            { url: url.toString(), status: response.status },
+            'Phorest 5xx — retrying once'
+          );
+          continue;
+        }
+        logger.error(
+          {
+            msg: 'Phorest request failed',
+            url: url.toString(),
+            status: response.status,
+            body: redacted,
+          },
+          'Phorest request failed'
+        );
+        throw new PhorestHttpError(
+          response.status,
+          `Phorest request failed with ${response.status}`,
+          redacted
+        );
+      }
 
-  if (response.headers.get('Content-Length') === '0') {
-    return undefined as T;
-  }
+      if (expectEmpty || response.status === 204) {
+        return undefined as T;
+      }
 
-  return (await response.json()) as T;
+      if (response.headers.get('Content-Length') === '0') {
+        return undefined as T;
+      }
+
+      return (await response.json()) as T;
+    } catch (error) {
+      // PhorestHttpError for 4xx is already final; rethrow immediately.
+      if (error instanceof PhorestHttpError) throw error;
+      // Network error or timeout (AbortError) — retry once, then give up.
+      lastError = error;
+      if (attempt === 0) {
+        logger.warn(
+          { url: url.toString(), err: String(error) },
+          'Phorest request error — retrying once'
+        );
+        continue;
+      }
+      logger.error(
+        { url: url.toString(), err: String(error) },
+        'Phorest request failed after retry'
+      );
+      throw error;
+    }
+  }
+  throw lastError;
 }
 
 let serviceCache: Map<string, ServiceDetailResponse> | null = null;
 let staffCache: StaffRecord[] | null = null;
+let clientPhoneIndex: Map<string, ClientRecord> | null = null;
+let clientPhoneIndexLoading: Promise<Map<string, ClientRecord>> | null = null;
+
+async function loadClientPhoneIndex(): Promise<Map<string, ClientRecord>> {
+  if (clientPhoneIndex) return clientPhoneIndex;
+  if (clientPhoneIndexLoading) return clientPhoneIndexLoading;
+
+  clientPhoneIndexLoading = (async () => {
+    const index = new Map<string, ClientRecord>();
+    const addPage = (clients: ClientRecord[]) => {
+      for (const client of clients) {
+        const phone = normalizePhone(client.mobile ?? '');
+        if (phone && phone.length >= 7) {
+          index.set(phone, client);
+        }
+      }
+    };
+
+    const clientPath = (page: number) =>
+      `api/business/${env.PHOREST_BUSINESS_ID}/client?size=200&page=${page}`;
+
+    // Fetch page 0 to learn the page count, then fan out the rest in parallel.
+    // This turns N serial round-trips (5-10s for a large salon) into ~2.
+    const first = await phorestFetch<ClientResponse>(clientPath(0));
+    addPage(first._embedded?.clients ?? []);
+    const totalPages = first.page?.totalPages ?? 1;
+
+    if (totalPages > 1) {
+      const rest = await Promise.all(
+        Array.from({ length: totalPages - 1 }, (_, i) =>
+          phorestFetch<ClientResponse>(clientPath(i + 1)).catch((err) => {
+            logger.warn(
+              { page: i + 1, err: String(err) },
+              'Client index page failed — skipping'
+            );
+            return null;
+          })
+        )
+      );
+      for (const resp of rest) {
+        if (resp) addPage(resp._embedded?.clients ?? []);
+      }
+    }
+
+    logger.info({ clientCount: index.size }, 'Client phone index loaded');
+    clientPhoneIndex = index;
+    clientPhoneIndexLoading = null;
+    return index;
+  })();
+
+  return clientPhoneIndexLoading;
+}
 
 async function loadServices(): Promise<Map<string, ServiceDetailResponse>> {
   if (serviceCache) return serviceCache;
@@ -226,7 +345,9 @@ async function loadServices(): Promise<Map<string, ServiceDetailResponse>> {
   return results;
 }
 
-async function loadService(serviceId: string): Promise<ServiceDetailResponse | undefined> {
+async function loadService(
+  serviceId: string
+): Promise<ServiceDetailResponse | undefined> {
   const cache = await loadServices();
   const current = cache.get(serviceId);
   if (current) return current;
@@ -253,7 +374,7 @@ function normaliseService(record: ServiceDetailResponse): Service {
     id: record.serviceId,
     name: record.internetName || record.name,
     price: typeof record.price === 'number' ? Number(record.price) : 0,
-    durationMin: typeof record.duration === 'number' ? record.duration : 0
+    durationMin: typeof record.duration === 'number' ? record.duration : 0,
   };
 }
 
@@ -276,7 +397,9 @@ function sanitisePhone(phone?: string) {
 
 function normalizePhone(phone: string): string {
   const digits = phone.replace(/\D/g, '');
-  return digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
+  return digits.length === 11 && digits.startsWith('1')
+    ? digits.slice(1)
+    : digits;
 }
 
 async function findClientByEmail(email: string): Promise<string | undefined> {
@@ -287,36 +410,65 @@ async function findClientByEmail(email: string): Promise<string | undefined> {
 }
 
 async function findClientByPhone(phone: string): Promise<string | undefined> {
-  const response = await phorestFetch<ClientResponse>(
-    `api/business/${env.PHOREST_BUSINESS_ID}/client?phone=${encodeURIComponent(phone)}&size=1`
-  );
-  return response._embedded?.clients?.[0]?.clientId;
+  const normalized = normalizePhone(phone);
+  if (!normalized || normalized.length < 7) return undefined;
+  const index = await loadClientPhoneIndex();
+  return index.get(normalized)?.clientId;
 }
 
-async function createClient(customer: { name: string; phone?: string; email?: string }): Promise<string> {
+async function createClient(customer: {
+  name: string;
+  phone?: string;
+  email?: string;
+}): Promise<string> {
   const { firstName, lastName } = splitName(customer.name);
+  const phone = sanitisePhone(customer.phone);
+  // Phorest requires an email — generate a placeholder if none provided
+  const email =
+    customer.email?.trim() ||
+    `${phone || Date.now()}@placeholder.richasthreading.com`;
   const payload = {
     firstName,
     lastName,
-    email: customer.email?.trim() || undefined,
-    mobile: sanitisePhone(customer.phone),
-    creatingBranchId: env.PHOREST_BRANCH_ID
+    email,
+    mobile: phone,
+    creatingBranchId: env.PHOREST_BRANCH_ID,
   };
 
   const response = await phorestFetch<ClientCreateResponse>(
     `api/business/${env.PHOREST_BUSINESS_ID}/client`,
     {
       method: 'POST',
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     }
   );
   if (!response.clientId) {
     throw new Error('Failed to create Phorest client');
   }
+
+  // Keep the in-memory phone index hot: a caller who books a new profile and
+  // calls back in the same process should resolve instantly without a re-scan.
+  if (clientPhoneIndex && phone) {
+    const normalized = normalizePhone(phone);
+    if (normalized && normalized.length >= 7) {
+      clientPhoneIndex.set(normalized, {
+        clientId: response.clientId,
+        firstName,
+        lastName,
+        mobile: phone,
+        email,
+      });
+    }
+  }
+
   return response.clientId;
 }
 
-async function getOrCreateClient(customer: { name: string; phone?: string; email?: string }): Promise<string> {
+async function getOrCreateClient(customer: {
+  name: string;
+  phone?: string;
+  email?: string;
+}): Promise<string> {
   const email = customer.email?.trim().toLowerCase();
   if (email) {
     const existing = await findClientByEmail(email);
@@ -332,9 +484,12 @@ async function getOrCreateClient(customer: { name: string; phone?: string; email
   return createClient(customer);
 }
 
-async function pickStaffId(serviceId: string, disqualified: string[] = []): Promise<string> {
+async function pickStaffId(
+  serviceId: string,
+  disqualified: string[] = []
+): Promise<string> {
   const staffList = await loadStaff();
-  const allowed = staffList.filter(staff => {
+  const allowed = staffList.filter((staff) => {
     if (staff.archived) return false;
     if (staff.hideFromOnlineBookings) return false;
     if (staff.hideFromAppointmentScreen) return false;
@@ -344,14 +499,19 @@ async function pickStaffId(serviceId: string, disqualified: string[] = []): Prom
   });
 
   if (PREFERRED_STAFF_ID) {
-    const preferred = allowed.find(staff => staff.staffId === PREFERRED_STAFF_ID);
+    const preferred = allowed.find(
+      (staff) => staff.staffId === PREFERRED_STAFF_ID
+    );
     if (preferred) return preferred.staffId;
   }
 
   const staffId = allowed[0]?.staffId;
   if (!staffId) {
     if (PREFERRED_STAFF_ID) {
-      logger.warn({ serviceId, PREFERRED_STAFF_ID }, 'Preferred staff unavailable, forcing booking');
+      logger.warn(
+        { serviceId, PREFERRED_STAFF_ID },
+        'Preferred staff unavailable, forcing booking'
+      );
       return PREFERRED_STAFF_ID;
     }
     throw new Error('No eligible staff available for service');
@@ -359,10 +519,29 @@ async function pickStaffId(serviceId: string, disqualified: string[] = []): Prom
   return staffId;
 }
 
-async function fetchAppointment(appointmentId: string): Promise<AppointmentResponse | undefined> {
+async function fetchAppointment(
+  appointmentId: string
+): Promise<AppointmentResponse | undefined> {
+  // Fast path: fetch the single appointment by ID directly (1 round-trip).
+  // The history scan below is a fallback only if the direct lookup isn't
+  // available on this tenant — it can cost up to 10 sequential round-trips.
+  try {
+    const direct = await phorestFetch<AppointmentResponse>(
+      businessBranchPath(`/appointment/${appointmentId}`)
+    );
+    if (direct?.appointmentId) return direct;
+  } catch (error) {
+    logger.warn(
+      { appointmentId, err: String(error) },
+      'Direct appointment fetch failed — falling back to history scan'
+    );
+  }
+
   const now = new Date();
   const updatedTo = now.toISOString();
-  const updatedFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const updatedFrom = new Date(
+    now.getTime() - 30 * 24 * 60 * 60 * 1000
+  ).toISOString();
 
   let page = 0;
   while (page < 10) {
@@ -373,7 +552,9 @@ async function fetchAppointment(appointmentId: string): Promise<AppointmentRespo
     );
 
     const appointments = response._embedded?.appointments ?? [];
-    const match = appointments.find(item => item.appointmentId === appointmentId);
+    const match = appointments.find(
+      (item) => item.appointmentId === appointmentId
+    );
     if (match) return match;
 
     const totalPages = response.page?.totalPages ?? 1;
@@ -412,12 +593,12 @@ export const realPhorest: PhorestPort = {
               serviceSelections: [
                 {
                   serviceId,
-                  staffId: PREFERRED_STAFF_ID || undefined
-                }
-              ]
-            }
-          ]
-        })
+                  staffId: PREFERRED_STAFF_ID || undefined,
+                },
+              ],
+            },
+          ],
+        }),
       }
     );
 
@@ -446,8 +627,12 @@ export const realPhorest: PhorestPort = {
     const start = parseSalonDateTime(startIso);
     const end = start.plus({ minutes: service.duration ?? 0 });
 
-    const clientId = await getOrCreateClient(customer);
-    const staffId = await pickStaffId(serviceId, service.disqualifiedStaff ?? []);
+    // These two are independent — resolve them concurrently to shave a
+    // round-trip off the booking the caller is waiting on.
+    const [clientId, staffId] = await Promise.all([
+      getOrCreateClient(customer),
+      pickStaffId(serviceId, service.disqualifiedStaff ?? []),
+    ]);
 
     const payload = {
       clientId,
@@ -459,22 +644,24 @@ export const realPhorest: PhorestPort = {
               serviceId,
               staffId,
               startTime: toPhorestIso(start),
-              endTime: toPhorestIso(end)
-            }
-          ]
-        }
-      ]
+              endTime: toPhorestIso(end),
+            },
+          ],
+        },
+      ],
     };
 
     const response = await phorestFetch<BookingResponse>(
       businessBranchPath('/booking?force_selected_time=true'),
       {
         method: 'POST',
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       }
     );
 
-    const appointmentId = response.clientAppointmentSchedules?.[0]?.serviceSchedules?.[0]?.appointmentId;
+    const appointmentId =
+      response.clientAppointmentSchedules?.[0]?.serviceSchedules?.[0]
+        ?.appointmentId;
     if (!appointmentId) {
       throw new Error('Phorest booking response missing appointmentId');
     }
@@ -506,15 +693,17 @@ export const realPhorest: PhorestPort = {
       staffId: appointment.staffId,
       roomId: appointment.roomId,
       machineId: appointment.machineId,
-      confirmed: appointment.confirmed
+      confirmed: appointment.confirmed,
     };
 
     await phorestFetch(
-      businessBranchPath(`/appointment/${appointmentId}?force_selected_time=true`),
+      businessBranchPath(
+        `/appointment/${appointmentId}?force_selected_time=true`
+      ),
       {
         method: 'PUT',
         body: JSON.stringify(payload),
-        expectEmpty: true
+        expectEmpty: true,
       }
     );
 
@@ -523,10 +712,12 @@ export const realPhorest: PhorestPort = {
 
   async cancelAppointment(appointmentId: string) {
     await phorestFetch(
-      businessBranchPath(`/appointment/cancel?appointment_id=${encodeURIComponent(appointmentId)}`),
+      businessBranchPath(
+        `/appointment/cancel?appointment_id=${encodeURIComponent(appointmentId)}`
+      ),
       {
         method: 'POST',
-        expectEmpty: true
+        expectEmpty: true,
       }
     );
 
@@ -535,47 +726,63 @@ export const realPhorest: PhorestPort = {
 
   async lookupCustomerByPhone(phone: string): Promise<CustomerResult | null> {
     const normalized = normalizePhone(phone);
-    const response = await phorestFetch<ClientResponse>(
-      `api/business/${env.PHOREST_BUSINESS_ID}/client?mobile=${encodeURIComponent(normalized)}&size=1`
-    );
-    const client = response._embedded?.clients?.[0];
+    if (!normalized || normalized.length < 7) return null;
+
+    // Phorest's ?mobile= param doesn't filter — use our cached phone index
+    const index = await loadClientPhoneIndex();
+    const client = index.get(normalized);
     if (!client) return null;
-    const full = await phorestFetch<ClientRecord>(
-      `api/business/${env.PHOREST_BUSINESS_ID}/client/${client.clientId}`
-    );
     return {
-      clientId: full.clientId,
-      firstName: full.firstName || '',
-      lastName: full.lastName || '',
-      ...(full.mobile !== undefined && { phone: full.mobile }),
-      ...(full.email !== undefined && { email: full.email })
+      clientId: client.clientId,
+      firstName: client.firstName || '',
+      lastName: client.lastName || '',
+      ...(client.mobile !== undefined && { phone: client.mobile }),
+      ...(client.email !== undefined && { email: client.email }),
     };
   },
 
-  async lookupCustomerByName(firstName: string, lastName: string): Promise<CustomerResult[]> {
+  async lookupCustomerByName(
+    firstName: string,
+    lastName: string
+  ): Promise<CustomerResult[]> {
     const response = await phorestFetch<ClientResponse>(
       `api/business/${env.PHOREST_BUSINESS_ID}/client?firstName=${encodeURIComponent(firstName)}&lastName=${encodeURIComponent(lastName)}&size=10`
     );
     const clients = response._embedded?.clients ?? [];
-    return clients.map(c => ({
+    return clients.map((c) => ({
       clientId: c.clientId,
       firstName: c.firstName || firstName,
       lastName: c.lastName || lastName,
       ...(c.mobile !== undefined && { phone: c.mobile }),
-      ...(c.email !== undefined && { email: c.email })
+      ...(c.email !== undefined && { email: c.email }),
     }));
   },
 
-  async listAppointments(clientId: string, fromDate?: string): Promise<AppointmentSummary[]> {
-    const today = fromDate ?? DateTime.now().setZone(SALON_TIMEZONE).toISODate()!;
+  async listAppointments(
+    clientId: string,
+    fromDate?: string
+  ): Promise<AppointmentSummary[]> {
+    const today =
+      fromDate ?? DateTime.now().setZone(SALON_TIMEZONE).toISODate()!;
+    // Phorest requires both from_date and to_date — look 90 days ahead
+    const toDate = DateTime.fromISO(today).plus({ days: 90 }).toISODate()!;
     const response = await phorestFetch<AppointmentListResponse>(
-      businessBranchPath(`/appointment?clientId=${encodeURIComponent(clientId)}&from_date=${today}&size=20`)
+      businessBranchPath(
+        `/appointment?clientId=${encodeURIComponent(clientId)}&from_date=${today}&to_date=${toDate}&size=20`
+      )
     );
     const appointments = response._embedded?.appointments ?? [];
     return appointments
-      .filter(a => a.activationState === 'ACTIVE' && (a.state === 'BOOKED' || a.state === 'PAID'))
-      .map(a => {
-        const startUtc = DateTime.fromISO(`${a.appointmentDate}T${a.startTime}`, { zone: 'utc' });
+      .filter(
+        (a) =>
+          a.activationState === 'ACTIVE' &&
+          (a.state === 'BOOKED' || a.state === 'PAID')
+      )
+      .map((a) => {
+        const startUtc = DateTime.fromISO(
+          `${a.appointmentDate}T${a.startTime}`,
+          { zone: 'utc' }
+        );
         const startLocal = startUtc.setZone(SALON_TIMEZONE);
         return {
           appointmentId: a.appointmentId,
@@ -586,7 +793,9 @@ export const realPhorest: PhorestPort = {
           endTimeRaw: a.endTime ?? a.startTime,
         };
       })
-      .sort((a, b) => `${a.date}${a.startTimeRaw}`.localeCompare(`${b.date}${b.startTimeRaw}`));
+      .sort((a, b) =>
+        `${a.date}${a.startTimeRaw}`.localeCompare(`${b.date}${b.startTimeRaw}`)
+      );
   },
 
   async addAppointmentNote(appointmentId: string, note: string): Promise<void> {
@@ -596,24 +805,40 @@ export const realPhorest: PhorestPort = {
         {
           method: 'POST',
           body: JSON.stringify({ text: note }),
-          expectEmpty: true
+          expectEmpty: true,
         }
       );
     } catch (error) {
-      logger.warn({ appointmentId, error: String(error) }, 'Failed to add appointment note — continuing');
+      logger.warn(
+        { appointmentId, error: String(error) },
+        'Failed to add appointment note — continuing'
+      );
     }
+  },
+
+  async preloadClients(): Promise<void> {
+    await loadClientPhoneIndex();
   },
 
   async getTodayAppointments(): Promise<AppointmentSummary[]> {
     const today = DateTime.now().setZone(SALON_TIMEZONE).toISODate()!;
     const response = await phorestFetch<AppointmentListResponse>(
-      businessBranchPath(`/appointment?from_date=${today}&to_date=${today}&size=200`)
+      businessBranchPath(
+        `/appointment?from_date=${today}&to_date=${today}&size=200`
+      )
     );
     const appointments = response._embedded?.appointments ?? [];
     return appointments
-      .filter(a => a.activationState === 'ACTIVE' && (a.state === 'BOOKED' || a.state === 'PAID'))
-      .map(a => {
-        const startUtc = DateTime.fromISO(`${a.appointmentDate}T${a.startTime}`, { zone: 'utc' });
+      .filter(
+        (a) =>
+          a.activationState === 'ACTIVE' &&
+          (a.state === 'BOOKED' || a.state === 'PAID')
+      )
+      .map((a) => {
+        const startUtc = DateTime.fromISO(
+          `${a.appointmentDate}T${a.startTime}`,
+          { zone: 'utc' }
+        );
         const startLocal = startUtc.setZone(SALON_TIMEZONE);
         return {
           appointmentId: a.appointmentId,
@@ -625,5 +850,5 @@ export const realPhorest: PhorestPort = {
         };
       })
       .sort((a, b) => a.startTimeRaw.localeCompare(b.startTimeRaw));
-  }
+  },
 };

@@ -68,4 +68,7 @@ export interface PhorestPort {
 
   // Get all of today's appointments (for running-late squeeze check)
   getTodayAppointments(): Promise<AppointmentSummary[]>;
+
+  // Preload client phone index for fast lookups (optional, no-op in mock)
+  preloadClients?(): Promise<void>;
 }

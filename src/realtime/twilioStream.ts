@@ -6,7 +6,7 @@ import { logger } from '../core/logger.js';
 import { env } from '../config/env.js';
 import { suggestSlots, bookAppointment } from '../services/booking.js';
 import { phorest } from '../services/phorest.js';
-import { decodeMuLaw } from './audio.js';
+// decodeMuLaw no longer needed here — audio decoding happens in openaiSession
 import businessHours from '../config/business.json';
 
 // Lazy-initialised so tests don't fail without creds
@@ -29,13 +29,14 @@ PERSONALITY: Conversational, warm, efficient. Speak like a real person — not a
 BUSINESS HOURS: Always use the get_business_hours tool when asked about hours. Never guess.
 
 PRICING (memorised — do not call API):
-- Eyebrow Threading: $12, ~15 min
-- Eyebrow Waxing: $15, ~15 min
+- Brow Threading: $12, ~15 min
 - Eyebrow Tinting: $20, ~20 min
+- Full Face Threading: $35, ~30 min
+- Brazilian Wax: $50, ~30 min
+- Bikini Wax: $30, ~20 min
 - Facials: $60–90, ~60 min
-- Brazilian Waxing: $50, ~30 min
-- Eyelash Extensions: $80–120, ~90 min
-- Microblading: $400, ~2 hours
+
+When calling suggest_availability or book_appointment, use service names EXACTLY as listed above (e.g. "Brow Threading" not "Eyebrow Threading").
 
 ═══ CUSTOMER IDENTIFICATION (always do this first) ═══
 1. Ask: "What's your phone number?"
@@ -260,10 +261,8 @@ class TwilioRealtimeCall {
   private streamSid = '';
   private callSid = '';
   private closed = false;
-  private pendingAudioMs = 0;
   private hasReceivedFirstAudioChunk = false;
-  private silenceTimer: NodeJS.Timeout | null = null;
-  private hasPendingAudio = false;
+  private sessionReady = false;
 
   constructor(socket: WebSocket) {
     this.socket = socket;
@@ -302,6 +301,9 @@ class TwilioRealtimeCall {
           logger.info({ streamSid: this.streamSid }, '📞 Twilio stream started');
           await this.session.connect();
           await this.session.configureSession({ instructions: INSTRUCTIONS, tools: TOOL_DEFINITIONS });
+          this.sessionReady = true;
+          // Preload client phone index in background so lookup_customer is instant
+          phorest.preloadClients?.().catch(() => {});
           logger.info({ streamSid: this.streamSid }, '🎙️ Waiting for caller audio...');
           break;
         case 'media':
@@ -320,60 +322,14 @@ class TwilioRealtimeCall {
   }
 
   private async handleMedia(event: TwilioMediaEvent) {
-    if (!event.media?.payload) return;
+    if (!event.media?.payload || this.closed || !this.sessionReady) return;
 
-    const samples = decodeMuLaw(event.media.payload);
-    let sumSquares = 0;
-    for (let i = 0; i < samples.length; i++) {
-      const value = samples[i] ?? 0;
-      sumSquares += value * value;
-    }
-    const rms = Math.sqrt(sumSquares / Math.max(samples.length, 1));
-    const isSilent = rms < 80;
-
-    // Append audio to OpenAI buffer
-    await this.session.appendTwilioAudio(event.media.payload);
-    this.pendingAudioMs += samples.length / 8;
-
-    if (!isSilent) {
-      // Speech detected - cancel any pending silence timer and mark that we have audio
-      if (this.silenceTimer) {
-        clearTimeout(this.silenceTimer);
-        this.silenceTimer = null;
-      }
-      if (!this.hasPendingAudio) {
-        logger.info({ streamSid: this.streamSid, rms }, 'Speech detected, buffering audio');
-        this.hasPendingAudio = true;
-      }
-    } else if (this.hasPendingAudio && !this.silenceTimer) {
-      // Silence detected after speech - start timer to commit
-      this.silenceTimer = setTimeout(() => {
-        void this.commitAudio();
-      }, 700); // 700ms of silence triggers commit
-    }
-  }
-
-  private async commitAudio() {
-    if (!this.hasPendingAudio) return;
-
-    this.silenceTimer = null;
-    this.hasPendingAudio = false;
-
-    const bufferedMs = this.pendingAudioMs;
-    if (bufferedMs < 200) {
-      logger.debug({ pendingAudioMs: bufferedMs }, 'Skipping commit - buffer too small');
-      this.pendingAudioMs = 0;
-      return;
-    }
-
-    logger.info({ streamSid: this.streamSid, pendingAudioMs: bufferedMs }, 'Committing audio buffer to OpenAI');
+    // With server_vad enabled, just forward audio — OpenAI handles turn detection
     try {
-      await this.session.commitAndRespond();
-    } catch (error) {
-      logger.error({ err: error, streamSid: this.streamSid }, 'Failed to commit audio buffer');
-      throw error;
-    } finally {
-      this.pendingAudioMs = 0;
+      await this.session.appendTwilioAudio(event.media.payload);
+    } catch {
+      // Connection lost — stop processing, cleanup will handle the rest
+      if (!this.closed) this.cleanup();
     }
   }
 
@@ -383,8 +339,6 @@ class TwilioRealtimeCall {
       logger.error({ streamSid: this.streamSid, closed: this.closed }, '❌ Cannot send audio - stream not ready');
       return;
     }
-
-    this.pendingAudioMs = 0;
 
     // Log only the first audio chunk
     if (!this.hasReceivedFirstAudioChunk) {
@@ -618,11 +572,6 @@ class TwilioRealtimeCall {
   private cleanup() {
     if (this.closed) return;
     this.closed = true;
-    this.pendingAudioMs = 0;
-    if (this.silenceTimer) {
-      clearTimeout(this.silenceTimer);
-      this.silenceTimer = null;
-    }
     this.session.close();
     try {
       if (this.socket.readyState === WebSocket.OPEN) {

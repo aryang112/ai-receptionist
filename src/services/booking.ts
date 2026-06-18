@@ -9,7 +9,7 @@ export const SuggestSchema = z.object({
 
 export const BookSchema = z.object({
   serviceName: z.string().min(1),
-  date: z.string().regex(/^\d{2}|\d{4}-\d{2}-\d{2}$/), // keep your pattern; just placeholder here
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
   customer: z.object({
     name: z.string().min(1),
@@ -20,7 +20,20 @@ export const BookSchema = z.object({
 
 export async function findServiceByName(name: string) {
   const services = await phorest.listServices();
-  return services.find(s => s.name.toLowerCase().includes(name.toLowerCase()));
+  const q = name.toLowerCase();
+  // Try exact-ish match first (query in service name)
+  let match = services.find(s => s.name.toLowerCase().includes(q));
+  // Then try reverse (service name in query, e.g. "Brow Threading" in "Eyebrow Threading")
+  if (!match) match = services.find(s => q.includes(s.name.toLowerCase()));
+  // Then try matching any word overlap (e.g. "threading" + "brow")
+  if (!match) {
+    const words = q.split(/\s+/).filter(w => w.length > 2);
+    match = services.find(s => {
+      const sLower = s.name.toLowerCase();
+      return words.every(w => sLower.includes(w));
+    });
+  }
+  return match;
 }
 
 export async function suggestSlots(input: z.infer<typeof SuggestSchema>) {

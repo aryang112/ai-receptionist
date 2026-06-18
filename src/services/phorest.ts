@@ -6,6 +6,7 @@ import type { PhorestPort } from './phorest.types.js';
 import { mockPhorest } from './phorest.mock.js';
 import { realPhorest } from './phorest.client.js';
 
-// Choose which implementation to expose based on env flag
-export const phorest: PhorestPort =
-  env.USE_MOCK_PHOREST === 'true' ? mockPhorest : realPhorest;
+// Choose implementation based on env flag (tests always use the mock)
+const useMock = process.env.NODE_ENV === 'test' || env.USE_MOCK_PHOREST !== 'false';
+
+export const phorest: PhorestPort = useMock ? mockPhorest : realPhorest;
