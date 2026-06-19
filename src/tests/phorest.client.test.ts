@@ -92,6 +92,56 @@ describe('realPhorest hot-path hardening', () => {
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it('listAppointments: LOCAL times, only upcoming BOOKED, soonest first', async () => {
+    // Far-future July dates (clearly EDT) so the upcoming filter always keeps them.
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        _embedded: {
+          appointments: [
+            {
+              appointmentId: 'PAID1',
+              state: 'PAID',
+              activationState: 'ACTIVE',
+              appointmentDate: '2030-07-10',
+              startTime: '11:00:00',
+              endTime: '11:15:00',
+              serviceName: 'Completed',
+            },
+            {
+              appointmentId: 'LATER',
+              state: 'BOOKED',
+              activationState: 'ACTIVE',
+              appointmentDate: '2030-07-12',
+              startTime: '14:30:00',
+              endTime: '14:45:00',
+              serviceName: 'Brow Threading',
+            },
+            {
+              appointmentId: 'SOON',
+              state: 'BOOKED',
+              activationState: 'ACTIVE',
+              appointmentDate: '2030-07-10',
+              startTime: '09:15:00',
+              endTime: '09:20:00',
+              serviceName: 'Lip Threading',
+            },
+          ],
+        },
+        page: { number: 0, totalPages: 1 },
+      })
+    );
+    const phorest = await loadRealPhorest();
+
+    const res = await phorest.listAppointments('C');
+
+    // PAID (completed) excluded; sorted soonest-first.
+    expect(res.map((r) => r.appointmentId)).toEqual(['SOON', 'LATER']);
+    // Parsed as LOCAL salon time: 14:30 -> "2:30 PM" (the UTC bug would give 10:30 AM).
+    expect(res.find((r) => r.appointmentId === 'LATER')!.timeDisplay).toBe(
+      '2:30 PM'
+    );
+  });
+
   it('paginates the ENTIRE client list (finds a client on a later page)', async () => {
     const pageOf = (url: string) => {
       const m = url.match(/[?&]page=(\d+)/);

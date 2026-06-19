@@ -806,31 +806,33 @@ export const realPhorest: PhorestPort = {
         `/appointment?clientId=${encodeURIComponent(clientId)}&from_date=${today}&to_date=${toDate}&size=20`
       )
     );
+    // Phorest returns appointment times in the salon's LOCAL timezone (confirmed
+    // empirically: a 12:45 PM booking is stored as "12:45:00"), so parse as
+    // local — do NOT treat as UTC, or every time comes out hours early.
+    // Only surface UPCOMING, still-BOOKED appointments (PAID = already
+    // completed and can't be rescheduled/cancelled), soonest first, capped to a
+    // handful so Erica doesn't read out a wall of history.
+    const now = DateTime.now().setZone(SALON_TIMEZONE);
     const appointments = response._embedded?.appointments ?? [];
     return appointments
-      .filter(
-        (a) =>
-          a.activationState === 'ACTIVE' &&
-          (a.state === 'BOOKED' || a.state === 'PAID')
-      )
-      .map((a) => {
-        const startUtc = DateTime.fromISO(
-          `${a.appointmentDate}T${a.startTime}`,
-          { zone: 'utc' }
-        );
-        const startLocal = startUtc.setZone(SALON_TIMEZONE);
-        return {
-          appointmentId: a.appointmentId,
-          serviceName: a.serviceName ?? 'Appointment',
-          date: startLocal.toISODate()!,
-          timeDisplay: startLocal.toFormat('h:mm a'),
-          startTimeRaw: a.startTime,
-          endTimeRaw: a.endTime ?? a.startTime,
-        };
-      })
-      .sort((a, b) =>
-        `${a.date}${a.startTimeRaw}`.localeCompare(`${b.date}${b.startTimeRaw}`)
-      );
+      .filter((a) => a.activationState === 'ACTIVE' && a.state === 'BOOKED')
+      .map((a) => ({
+        a,
+        start: DateTime.fromISO(`${a.appointmentDate}T${a.startTime}`, {
+          zone: SALON_TIMEZONE,
+        }),
+      }))
+      .filter(({ start }) => start >= now)
+      .sort((x, y) => x.start.toMillis() - y.start.toMillis())
+      .slice(0, 5)
+      .map(({ a, start }) => ({
+        appointmentId: a.appointmentId,
+        serviceName: a.serviceName ?? 'Appointment',
+        date: start.toISODate()!,
+        timeDisplay: start.toFormat('h:mm a'),
+        startTimeRaw: a.startTime,
+        endTimeRaw: a.endTime ?? a.startTime,
+      }));
   },
 
   async addAppointmentNote(appointmentId: string, note: string): Promise<void> {
@@ -870,11 +872,11 @@ export const realPhorest: PhorestPort = {
           (a.state === 'BOOKED' || a.state === 'PAID')
       )
       .map((a) => {
-        const startUtc = DateTime.fromISO(
+        // Phorest times are salon-local, not UTC — parse as local.
+        const startLocal = DateTime.fromISO(
           `${a.appointmentDate}T${a.startTime}`,
-          { zone: 'utc' }
+          { zone: SALON_TIMEZONE }
         );
-        const startLocal = startUtc.setZone(SALON_TIMEZONE);
         return {
           appointmentId: a.appointmentId,
           serviceName: a.serviceName ?? 'Appointment',
