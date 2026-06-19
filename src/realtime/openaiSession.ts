@@ -219,6 +219,14 @@ export class OpenAIRealtimeSession {
         output_modalities: ['audio'],
         instructions,
         tools: this.configuredTools,
+        // Bound per-response output (default is 'inf') so one turn can't balloon
+        // tokens/min, and reinforce short replies at the budget level.
+        max_response_output_tokens: env.OPENAI_MAX_RESPONSE_TOKENS,
+        // When context exceeds the input limit, drop down to 80% at once instead
+        // of trimming a sliver every turn — fewer truncations AND it preserves the
+        // cached prompt prefix (cached audio input is ~$0.40/1M vs $32/1M). This is
+        // the key lever against the mid-call tokens/min "freeze".
+        truncation: { type: 'retention_ratio', retention_ratio: 0.8 },
         audio: {
           input: {
             format: { type: 'audio/pcmu' },
@@ -449,7 +457,24 @@ export class OpenAIRealtimeSession {
       case 'response.done':
       case 'response.completed': {
         this.activeItemId = null;
-        logger.info({ eventType: event.type }, 'OpenAI response completed');
+        // Surface token usage + cache hit rate so context/cost growth is visible.
+        const usage = event.response?.usage;
+        if (usage) {
+          const cached = usage.input_token_details?.cached_tokens ?? 0;
+          const input = usage.input_tokens ?? 0;
+          logger.info(
+            {
+              inputTokens: input,
+              outputTokens: usage.output_tokens,
+              totalTokens: usage.total_tokens,
+              cachedTokens: cached,
+              cacheHitPct: input ? Math.round((cached / input) * 100) : 0,
+            },
+            '📊 turn tokens'
+          );
+        } else {
+          logger.info({ eventType: event.type }, 'OpenAI response completed');
+        }
         if (this.handlers.onResponseComplete)
           this.handlers.onResponseComplete();
         break;
@@ -463,7 +488,20 @@ export class OpenAIRealtimeSession {
         break;
       }
       case 'rate_limits.updated': {
-        logger.debug({ rateLimits: event.rate_limits }, 'Rate limits updated');
+        // Watch remaining tokens-per-minute — this is what hit 0 and froze a call.
+        const tpm = event.rate_limits?.find((r: any) => r.name === 'tokens');
+        if (tpm) {
+          const level = tpm.remaining < 5000 ? logger.warn : logger.info;
+          level.call(
+            logger,
+            {
+              remaining: tpm.remaining,
+              limit: tpm.limit,
+              resetSeconds: tpm.reset_seconds,
+            },
+            `⚖️  TPM remaining ${tpm.remaining}/${tpm.limit}`
+          );
+        }
         break;
       }
       default:

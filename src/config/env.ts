@@ -19,6 +19,11 @@ export const env = {
   OPENAI_VAD_SILENCE_MS: Number(process.env.OPENAI_VAD_SILENCE_MS || 500),
   OPENAI_VAD_PREFIX_MS: Number(process.env.OPENAI_VAD_PREFIX_MS || 300),
   OPENAI_NOISE_REDUCTION: process.env.OPENAI_NOISE_REDUCTION || 'near_field',
+  // Cap per-response output (default 'inf' = unbounded). Bounds tokens/min and
+  // reinforces 1-2 sentence replies. Raise if you ever hear responses cut off.
+  OPENAI_MAX_RESPONSE_TOKENS: Number(
+    process.env.OPENAI_MAX_RESPONSE_TOKENS || 400
+  ),
   TIMEZONE: process.env.TIMEZONE || 'America/New_York',
   USE_MOCK_PHOREST: process.env.USE_MOCK_PHOREST || 'true',
 
