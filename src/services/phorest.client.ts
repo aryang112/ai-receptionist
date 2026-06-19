@@ -113,6 +113,13 @@ type ServiceDetailResponse = ServiceRecord & {
 
 type RequestOptions = RequestInit & { expectEmpty?: boolean };
 
+// ⏰ PHOREST TIMEZONE CONVENTION (learned the hard way — read before touching times):
+//  - GET /appointment returns times in salon-LOCAL time (e.g. "12:45:00" = 12:45 PM local).
+//  - POST /appointments/availability returns slot times in UTC (e.g. "...T19:00:00Z").
+//  - WRITES (booking/reschedule) send salon-local wall-clock; Phorest stores it as-is.
+// RULE: normalize EVERYTHING to salon-local at this adapter boundary, so the rest of
+// the app (and the model) only ever deals with salon-local time. Never hand a raw
+// Phorest time string to a caller/UI without converting it here first.
 const SALON_TIMEZONE = env.TIMEZONE || 'America/New_York';
 const PREFERRED_STAFF_ID = env.PHOREST_PRIMARY_STAFF_ID;
 const PREFERRED_SERVICE_IDS = new Set(env.PHOREST_PREFERRED_SERVICE_IDS);

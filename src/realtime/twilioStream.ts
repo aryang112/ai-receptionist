@@ -25,7 +25,15 @@ const CORE_SERVICES = env.PHOREST_PREFERRED_SERVICE_IDS.length
   : 'Brow Threading, Eyebrow Tinting';
 
 function buildInstructions(serviceMenu: string): string {
+  // Inject the authoritative current salon date/time so "today"/"tomorrow" and
+  // any relative dates are computed correctly — never left to the model's own
+  // (UTC-ish, undocumented) clock, which would book the wrong day near midnight.
+  const now = DateTime.now().setZone(env.TIMEZONE);
+  const todayISO = now.toISODate();
+  const tomorrowISO = now.plus({ days: 1 }).toISODate();
   return `You are Erica, the warm and friendly AI receptionist for Richa's Threading Salon in Parkville, Maryland. You answer calls, book appointments, reschedule, cancel, and help with any questions about the salon.
+
+CURRENT DATE & TIME: Right now it is ${now.toFormat("cccc, MMMM d, yyyy 'at' h:mm a")} at the salon (timezone ${env.TIMEZONE}). When a caller says "today" use the date ${todayISO}; "tomorrow" is ${tomorrowISO}. ALWAYS compute appointment dates from this — never guess today's date, month, or year. Pass every date to tools as YYYY-MM-DD.
 
 PERSONALITY: Conversational, warm, efficient. Speak like a real person — not a robot. Keep responses to 1–2 short sentences. Use natural phrasing like "Of course!", "No problem!", "Let me check that for you."
 
