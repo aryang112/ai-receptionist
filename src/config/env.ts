@@ -9,7 +9,9 @@ export const env = {
   // GA Realtime model. The old 'gpt-4o-realtime-preview' (and the realtime beta
   // endpoint) were shut off by OpenAI in May 2026 — gpt-realtime is the GA model.
   OPENAI_REALTIME_MODEL: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime',
-  OPENAI_REALTIME_VOICE: process.env.OPENAI_REALTIME_VOICE || 'shimmer',
+  // 'cedar' / 'marin' are OpenAI's newest, most natural Realtime voices (recommended).
+  // Other options: alloy, ash, ballad, coral, echo, sage, shimmer, verse.
+  OPENAI_REALTIME_VOICE: process.env.OPENAI_REALTIME_VOICE || 'cedar',
   // Turn-detection / noise tuning (so background noise doesn't falsely interrupt
   // Erica). Higher threshold = needs clearer speech to trigger. Raise toward
   // 0.7–0.8 on a noisy line. noise_reduction: 'near_field' (phone) | 'far_field' | 'off'.
