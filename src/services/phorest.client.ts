@@ -798,8 +798,9 @@ export const realPhorest: PhorestPort = {
   ): Promise<AppointmentSummary[]> {
     const today =
       fromDate ?? DateTime.now().setZone(SALON_TIMEZONE).toISODate()!;
-    // Phorest requires both from_date and to_date — look 90 days ahead
-    const toDate = DateTime.fromISO(today).plus({ days: 90 }).toISODate()!;
+    // Phorest requires both from_date and to_date AND caps the range at 31 days
+    // ("Max date range allowed is 31 days"). Use 30 to stay safely under it.
+    const toDate = DateTime.fromISO(today).plus({ days: 30 }).toISODate()!;
     const response = await phorestFetch<AppointmentListResponse>(
       businessBranchPath(
         `/appointment?clientId=${encodeURIComponent(clientId)}&from_date=${today}&to_date=${toDate}&size=20`

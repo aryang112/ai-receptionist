@@ -53,6 +53,13 @@ describe('realPhorest hot-path hardening', () => {
     const url = String(fetchMock.mock.calls[0]![0]);
     expect(url).toContain('from_date=');
     expect(url).toContain('to_date=');
+
+    // Phorest caps the range at 31 days ("Max date range allowed is 31 days").
+    const from = new URL(url).searchParams.get('from_date')!;
+    const to = new URL(url).searchParams.get('to_date')!;
+    const days = (Date.parse(to) - Date.parse(from)) / 86_400_000;
+    expect(days).toBeGreaterThan(0);
+    expect(days).toBeLessThanOrEqual(31);
   });
 
   it('retries once on a network error, then succeeds', async () => {
