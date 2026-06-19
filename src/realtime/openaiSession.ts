@@ -259,6 +259,23 @@ export class OpenAIRealtimeSession {
     this.flushQueue();
   }
 
+  /**
+   * Add an out-of-band context note to the conversation (e.g. "the caller is a
+   * recognized client named Aryan"). Added AFTER the cached instruction prefix,
+   * so it personalizes without busting prompt caching.
+   */
+  injectContext(text: string) {
+    if (!this.isOpen()) return;
+    this.sendRaw({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'system',
+        content: [{ type: 'input_text', text }],
+      },
+    });
+  }
+
   /** Ask Erica to greet the caller first (one consistent voice, no Polly handoff). */
   requestGreeting() {
     if (!this.isOpen()) return;

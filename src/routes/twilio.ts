@@ -32,7 +32,12 @@ twilioVoice.post('/voice', (req, res) => {
   // openaiSession.requestGreeting() makes her speak first.
   const twiml = new VoiceResponse();
   const connect = twiml.connect();
-  connect.stream({ url: streamUrl });
+  const stream = connect.stream({ url: streamUrl });
+  // Pass the caller's number through so the stream handler can pre-fetch their
+  // account/appointments before they even finish speaking (arrives in the
+  // Twilio 'start' event as start.customParameters.from).
+  const from = (req.body?.From || '').toString();
+  if (from) stream.parameter({ name: 'from', value: from });
 
   res.type('text/xml').send(twiml.toString());
 });

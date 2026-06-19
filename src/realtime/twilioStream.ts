@@ -10,6 +10,10 @@ import {
   findServiceByName,
 } from '../services/booking.js';
 import { phorest } from '../services/phorest.js';
+import type {
+  CustomerResult,
+  AppointmentSummary,
+} from '../services/phorest.types.js';
 import { getHoursStatus, getOpenClose } from '../core/hours.js';
 import { DateTime } from 'luxon';
 // decodeMuLaw no longer needed here — audio decoding happens in openaiSession
@@ -338,7 +342,11 @@ interface TwilioMediaEvent extends TwilioEventBase {
 
 interface TwilioStartEvent extends TwilioEventBase {
   event: 'start';
-  start: { streamSid: string; callSid: string };
+  start: {
+    streamSid: string;
+    callSid: string;
+    customParameters?: Record<string, string>;
+  };
 }
 
 interface TwilioStopEvent extends TwilioEventBase {
@@ -371,6 +379,14 @@ class TwilioRealtimeCall {
   private latestMediaTimestamp = 0;
   private responseStartTimestamp: number | null = null;
   private markQueue: string[] = [];
+  // Caller looked up by their phone number (caller ID) at call start, so tools
+  // answer instantly and Erica can greet them by name. null = not recognized.
+  private prefetch: {
+    clientId: string;
+    firstName: string;
+    lastName: string;
+    appointments: AppointmentSummary[] | null;
+  } | null = null;
 
   constructor(socket: WebSocket) {
     this.socket = socket;
@@ -427,6 +443,56 @@ class TwilioRealtimeCall {
     );
   }
 
+  /**
+   * Look the caller up by their phone number (from caller ID). If found, cache
+   * their record + warm their appointments in the background, and inject a note
+   * so Erica greets them by name. Fully dynamic — nothing is hardcoded; the name
+   * is whatever Phorest returns for that number. Any failure → no prefetch, and
+   * Erica falls back to the normal "what's your phone number?" flow.
+   */
+  private async warmCallerContext(callerPhone?: string) {
+    if (!callerPhone) return;
+    try {
+      // Don't let a cold lookup delay the greeting (normally instant — the phone
+      // index is warmed at boot — but cap it just in case).
+      const customer = await Promise.race<CustomerResult | null>([
+        phorest.lookupCustomerByPhone(callerPhone).catch(() => null),
+        new Promise((r) => setTimeout(() => r(null), 700)),
+      ]);
+      if (!customer) {
+        logger.info(
+          { tool: 'prefetch' },
+          'Caller ID not recognized — normal flow'
+        );
+        return;
+      }
+      this.prefetch = {
+        clientId: customer.clientId,
+        firstName: customer.firstName,
+        lastName: customer.lastName,
+        appointments: null,
+      };
+      logger.info(
+        { tool: 'prefetch', clientId: customer.clientId },
+        'Caller recognized by phone — warming context'
+      );
+      // Warm their upcoming appointments so reschedule/cancel is instant later.
+      phorest
+        .listAppointments(customer.clientId)
+        .then((appts) => {
+          if (this.prefetch) this.prefetch.appointments = appts;
+        })
+        .catch(() => {});
+      // Tell Erica who's calling (the looked-up name, not a hardcoded one).
+      const fullName = `${customer.firstName} ${customer.lastName}`.trim();
+      this.session.injectContext(
+        `The caller is phoning from a number we recognize. Their name is ${fullName} and they are an existing client — you already have their account on file. Greet them warmly by their FIRST name and ask how you can help. Do NOT ask for their phone number unless they say they're calling about a different account. When you need their details for booking/reschedule/cancel, call lookup_customer with no arguments — it will use their caller ID.`
+      );
+    } catch {
+      this.prefetch = null; // graceful: behave exactly as today (ask for phone)
+    }
+  }
+
   private async handleMessage(data: WebSocket.RawData) {
     try {
       const event = JSON.parse(data.toString()) as TwilioEvent;
@@ -451,6 +517,12 @@ class TwilioRealtimeCall {
             tools: TOOL_DEFINITIONS,
           });
           this.sessionReady = true;
+          // Look the caller up by THEIR phone number (caller ID) and, if we
+          // recognize them, tell Erica so she greets by name + skips asking for
+          // the number. If not recognized (or no caller ID), she greets normally.
+          await this.warmCallerContext(
+            (event as TwilioStartEvent).start.customParameters?.from
+          );
           // Erica greets first, in her own voice (no separate Polly handoff).
           this.session.requestGreeting();
           // Preload client phone index in background so lookup_customer is instant
@@ -656,6 +728,7 @@ class TwilioRealtimeCall {
         },
         'Appointment booked successfully'
       );
+      if (this.prefetch) this.prefetch.appointments = null; // warmed list is now stale
       return {
         appointmentId: result.appointment.appointmentId,
         service: result.service.name,
@@ -692,6 +765,7 @@ class TwilioRealtimeCall {
         },
         'Appointment rescheduled successfully'
       );
+      if (this.prefetch) this.prefetch.appointments = null; // warmed list is now stale
       return {
         appointmentId: payload.appointmentId,
         date: payload.date,
@@ -718,6 +792,7 @@ class TwilioRealtimeCall {
         { tool: 'cancel_appointment', appointmentId: payload.appointmentId },
         'Appointment cancelled successfully'
       );
+      if (this.prefetch) this.prefetch.appointments = null; // warmed list is now stale
       return { appointmentId: payload.appointmentId, cancelled: true };
     } catch (error) {
       logger.error(
@@ -807,6 +882,21 @@ class TwilioRealtimeCall {
       };
       logger.info({ tool: 'lookup_customer' }, 'Tool called: lookup_customer');
 
+      // If we already recognized the caller from their caller ID and the model
+      // didn't supply a different phone/name, answer instantly from the prefetch.
+      if (this.prefetch && !payload.phone && !payload.firstName) {
+        logger.info(
+          { tool: 'lookup_customer', clientId: this.prefetch.clientId },
+          'Customer served from caller-ID prefetch'
+        );
+        return {
+          found: true,
+          clientId: this.prefetch.clientId,
+          name: `${this.prefetch.firstName} ${this.prefetch.lastName}`.trim(),
+          matchedBy: 'caller-id',
+        };
+      }
+
       if (payload.phone) {
         const result = await phorest.lookupCustomerByPhone(payload.phone);
         if (result) {
@@ -869,7 +959,14 @@ class TwilioRealtimeCall {
         { tool: 'list_appointments', clientId: payload.clientId },
         'Tool called: list_appointments'
       );
-      const appointments = await phorest.listAppointments(payload.clientId);
+      // Serve from the caller-ID prefetch if it's the same client and already
+      // warmed (zero Phorest round-trip on the critical path).
+      const appointments =
+        this.prefetch &&
+        this.prefetch.appointments &&
+        this.prefetch.clientId === payload.clientId
+          ? this.prefetch.appointments
+          : await phorest.listAppointments(payload.clientId);
       // Hand the model ONLY clean, unambiguous fields — never the raw HH:mm:ss
       // (which it could mis-read as the spoken time). It must quote `date`/`time`
       // verbatim.
