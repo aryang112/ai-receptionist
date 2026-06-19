@@ -339,8 +339,18 @@ async function loadClientPhoneIndex(): Promise<Map<string, ClientRecord>> {
   return clientPhoneIndexLoading;
 }
 
+// Prices/services change rarely, so cache the catalog and only refresh on a TTL
+// (default 24h; tune with SERVICE_CACHE_TTL_HOURS — e.g. 336 for 2 weeks). This
+// keeps get_prices/availability instant without re-hitting Phorest every call,
+// while still picking up real price changes without a server restart.
+const SERVICE_CACHE_TTL_MS =
+  Number(process.env.SERVICE_CACHE_TTL_HOURS || 24) * 60 * 60 * 1000;
+let serviceCacheAt = 0;
+
 async function loadServices(): Promise<Map<string, ServiceDetailResponse>> {
-  if (serviceCache) return serviceCache;
+  if (serviceCache && Date.now() - serviceCacheAt < SERVICE_CACHE_TTL_MS) {
+    return serviceCache;
+  }
 
   const results = new Map<string, ServiceDetailResponse>();
   let page = 0;
@@ -359,6 +369,7 @@ async function loadServices(): Promise<Map<string, ServiceDetailResponse>> {
   }
 
   serviceCache = results;
+  serviceCacheAt = Date.now();
   return results;
 }
 

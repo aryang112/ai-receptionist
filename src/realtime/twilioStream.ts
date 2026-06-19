@@ -4,7 +4,11 @@ import twilio from 'twilio';
 import { OpenAIRealtimeSession, type ToolDefinition } from './openaiSession.js';
 import { logger } from '../core/logger.js';
 import { env } from '../config/env.js';
-import { suggestSlots, bookAppointment } from '../services/booking.js';
+import {
+  suggestSlots,
+  bookAppointment,
+  findServiceByName,
+} from '../services/booking.js';
 import { phorest } from '../services/phorest.js';
 import { getHoursStatus, getOpenClose } from '../core/hours.js';
 import { DateTime } from 'luxon';
@@ -24,7 +28,7 @@ const CORE_SERVICES = env.PHOREST_PREFERRED_SERVICE_IDS.length
   ? env.PHOREST_PREFERRED_SERVICE_IDS.join(', ')
   : 'Brow Threading, Eyebrow Tinting';
 
-function buildInstructions(serviceMenu: string): string {
+function buildInstructions(): string {
   // Inject the authoritative current salon date/time so "today"/"tomorrow" and
   // any relative dates are computed correctly — never left to the model's own
   // (UTC-ish, undocumented) clock, which would book the wrong day near midnight.
@@ -45,9 +49,8 @@ NEVER LEAVE SILENCE: Before you call ANY tool (looking something up, booking, ch
 
 BUSINESS HOURS: Always use the get_business_hours tool when asked about hours. Never guess.
 
-═══ SERVICES & PRICES (live from our booking system — this is the SOURCE OF TRUTH) ═══
-Callers often ask for prices. Quote ONLY from this list — never guess or make up a price. Read service names naturally (ignore any leading numbers/codes like "3)"). If a caller asks for the price of something here, answer immediately and warmly (no tool call needed). If a service truly isn't on this list, say "let me double-check that one for you" rather than guessing.
-${serviceMenu}
+═══ SERVICES & PRICES ═══
+Callers often ask for prices. When they ask the price of a service, say a quick filler ("Let me check that for you…") and call get_prices WITH the serviceName they asked about — it returns that service's exact price and duration. Only omit serviceName if they ask broadly "what services do you offer." Quote ONLY what get_prices returns; NEVER guess or make up a price. Read service names naturally (ignore any leading numbers/codes like "3)").
 
 Some callers use different names for the same service — treat these as the same:
 - "lash lamination" = our "Lash Lift"
@@ -137,7 +140,7 @@ When you do transfer, say first: "Of course, let me get Richa for you — one mo
 ═══ GENERAL RULES ═══
 - Never read appointment IDs aloud — use human-readable descriptions
 - Never guess at hours — use get_business_hours
-- Never guess prices — use the SERVICES & PRICES list above
+- Never guess prices — call get_prices
 - Never invent appointments, services, times, or prices — only state what a tool actually returned
 - When telling a caller about an appointment, read the 'service', 'date', and 'time' fields from list_appointments EXACTLY as given — never round, shift, guess, or approximate the time
 - If you mishear something, just say "Sorry, could you say that again?"
@@ -146,23 +149,16 @@ When you do transfer, say first: "Of course, let me get Richa for you — one mo
 `;
 }
 
-/** Format the live Phorest catalog into a price list for the system prompt. */
-async function getServiceMenuText(): Promise<string> {
-  try {
-    const services = await phorest.listServices();
-    const lines = services
-      .filter((s) => s.price > 0 || s.durationMin > 0) // skip $0/0min admin entries
-      .map((s) => {
-        const name = s.name.replace(/^\s*\d+[a-z]?\)\s*/i, '').trim(); // drop "3) " prefixes
-        const dur = s.durationMin ? `, ~${s.durationMin} min` : '';
-        return `- ${name}: $${s.price}${dur}`;
-      });
-    return lines.length
-      ? lines.join('\n')
-      : '(menu temporarily unavailable — do not guess prices; offer to check with Richa)';
-  } catch {
-    return '(menu temporarily unavailable — do not guess prices; offer to check with Richa)';
-  }
+/** Live Phorest catalog as clean { service, price, durationMin } rows for the get_prices tool. */
+async function getServiceCatalog() {
+  const services = await phorest.listServices();
+  return services
+    .filter((s) => s.price > 0 || s.durationMin > 0) // skip $0/0min admin entries
+    .map((s) => ({
+      service: s.name.replace(/^\s*\d+[a-z]?\)\s*/i, '').trim(), // drop "3) " prefixes
+      price: s.price,
+      durationMin: s.durationMin,
+    }));
 }
 
 const TOOL_DEFINITIONS: ToolDefinition[] = [
@@ -238,6 +234,23 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {},
+      required: [],
+    },
+  },
+  {
+    type: 'function',
+    name: 'get_prices',
+    description:
+      'Get the price and duration of salon services. PREFERRED: pass the serviceName the caller asked about to get just that one (fast, accurate). Omit serviceName only when the caller asks broadly what services we offer, to get the full menu.',
+    parameters: {
+      type: 'object',
+      properties: {
+        serviceName: {
+          type: 'string',
+          description:
+            'The service the caller asked the price of (e.g. "Brow Threading"). Optional.',
+        },
+      },
       required: [],
     },
   },
@@ -386,6 +399,9 @@ class TwilioRealtimeCall {
     this.session.registerTool('get_business_hours', (args) =>
       this.handleGetBusinessHours(args)
     );
+    this.session.registerTool('get_prices', (args) =>
+      this.handleGetPrices(args)
+    );
     this.session.registerTool('lookup_customer', (args) =>
       this.handleLookupCustomer(args)
     );
@@ -427,11 +443,11 @@ class TwilioRealtimeCall {
             '📞 Twilio stream started'
           );
           await this.session.connect();
-          // Inject the live service menu/prices so Erica quotes real prices and
-          // never hallucinates. Services are cached (warmed at boot), so this is fast.
-          const serviceMenu = await getServiceMenuText();
+          // Prices come from the get_prices tool on demand (NOT baked into the
+          // prompt) — keeps the per-turn token footprint small so long calls
+          // don't exhaust the Realtime token-per-minute rate limit.
           await this.session.configureSession({
-            instructions: buildInstructions(serviceMenu),
+            instructions: buildInstructions(),
             tools: TOOL_DEFINITIONS,
           });
           this.sessionReady = true;
@@ -739,6 +755,44 @@ class TwilioRealtimeCall {
       logger.error(
         { tool: 'get_business_hours', error: this.formatError(error) },
         'Tool error: get_business_hours'
+      );
+      return { error: this.formatError(error) };
+    }
+  }
+
+  private async handleGetPrices(args: unknown) {
+    try {
+      const payload = (args ?? {}) as { serviceName?: string };
+      // Targeted lookup = a few tokens back to the model (vs the whole 63-item
+      // catalog). Only return the full menu when no specific service was named.
+      if (payload.serviceName) {
+        const svc = await findServiceByName(payload.serviceName);
+        if (svc) {
+          logger.info(
+            { tool: 'get_prices', match: svc.name },
+            'Price lookup (single)'
+          );
+          return {
+            service: svc.name,
+            price: svc.price,
+            durationMin: svc.durationMin,
+          };
+        }
+        logger.info(
+          { tool: 'get_prices', serviceName: payload.serviceName },
+          'No single match — returning full menu'
+        );
+      }
+      const services = await getServiceCatalog();
+      logger.info(
+        { tool: 'get_prices', count: services.length },
+        'Full price menu returned'
+      );
+      return { services };
+    } catch (error) {
+      logger.error(
+        { tool: 'get_prices', error: this.formatError(error) },
+        'Tool error: get_prices'
       );
       return { error: this.formatError(error) };
     }
