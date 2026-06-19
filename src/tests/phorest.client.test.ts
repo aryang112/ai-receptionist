@@ -142,6 +142,47 @@ describe('realPhorest hot-path hardening', () => {
     );
   });
 
+  it('listAppointments uses client_id and NEVER returns another client appointment', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        _embedded: {
+          appointments: [
+            // "THEIRS" is sooner, so without the client filter it would be returned first (the bug).
+            {
+              appointmentId: 'THEIRS',
+              clientId: 'OTHER',
+              state: 'BOOKED',
+              activationState: 'ACTIVE',
+              appointmentDate: '2030-07-10',
+              startTime: '12:30:00',
+              endTime: '12:35:00',
+              serviceName: 'Someone Else',
+            },
+            {
+              appointmentId: 'MINE',
+              clientId: 'C',
+              state: 'BOOKED',
+              activationState: 'ACTIVE',
+              appointmentDate: '2030-07-10',
+              startTime: '13:00:00',
+              endTime: '13:05:00',
+              serviceName: 'Brow Threading',
+            },
+          ],
+        },
+        page: { number: 0, totalPages: 1 },
+      })
+    );
+    const phorest = await loadRealPhorest();
+
+    const res = await phorest.listAppointments('C');
+
+    expect(res.map((r) => r.appointmentId)).toEqual(['MINE']); // foreign client excluded
+    const url = String(fetchMock.mock.calls[0]![0]);
+    expect(url).toContain('client_id=C');
+    expect(url).not.toContain('clientId=');
+  });
+
   it('paginates the ENTIRE client list (finds a client on a later page)', async () => {
     const pageOf = (url: string) => {
       const m = url.match(/[?&]page=(\d+)/);

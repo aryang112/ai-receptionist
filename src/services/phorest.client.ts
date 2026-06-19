@@ -98,6 +98,7 @@ type AppointmentResponse = {
   serviceId: string;
   state?: string;
   activationState?: string;
+  clientId?: string;
 };
 
 type AppointmentListResponse = {
@@ -801,9 +802,13 @@ export const realPhorest: PhorestPort = {
     // Phorest requires both from_date and to_date AND caps the range at 31 days
     // ("Max date range allowed is 31 days"). Use 30 to stay safely under it.
     const toDate = DateTime.fromISO(today).plus({ days: 30 }).toISODate()!;
+    // CRITICAL: the param is snake_case `client_id`. The camelCase `clientId`
+    // is silently IGNORED by Phorest and returns EVERY client's appointments
+    // (a privacy leak + wrong-client reschedule/cancel risk). We also re-filter
+    // by clientId client-side as defense-in-depth.
     const response = await phorestFetch<AppointmentListResponse>(
       businessBranchPath(
-        `/appointment?clientId=${encodeURIComponent(clientId)}&from_date=${today}&to_date=${toDate}&size=20`
+        `/appointment?client_id=${encodeURIComponent(clientId)}&from_date=${today}&to_date=${toDate}&size=20`
       )
     );
     // Phorest returns appointment times in the salon's LOCAL timezone (confirmed
@@ -815,7 +820,13 @@ export const realPhorest: PhorestPort = {
     const now = DateTime.now().setZone(SALON_TIMEZONE);
     const appointments = response._embedded?.appointments ?? [];
     return appointments
-      .filter((a) => a.activationState === 'ACTIVE' && a.state === 'BOOKED')
+      .filter(
+        (a) =>
+          // Never surface another client's appointment, even if the API filter fails.
+          (!a.clientId || a.clientId === clientId) &&
+          a.activationState === 'ACTIVE' &&
+          a.state === 'BOOKED'
+      )
       .map((a) => ({
         a,
         start: DateTime.fromISO(`${a.appointmentDate}T${a.startTime}`, {
