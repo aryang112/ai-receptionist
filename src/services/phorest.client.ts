@@ -625,7 +625,19 @@ export const realPhorest: PhorestPort = {
       }
     }
 
-    return Array.from(slotSet).sort();
+    // The availability endpoint returns slot times in UTC (e.g. "...T19:00:00Z"),
+    // UNLIKE the appointment GET endpoint which returns salon-local time. Convert
+    // every slot to salon-local ISO so the rest of the app (and the model) reads
+    // the right wall-clock time — otherwise 3 PM (19:00Z) gets spoken as "7 PM".
+    return Array.from(slotSet)
+      .map(
+        (s) =>
+          DateTime.fromISO(s, { zone: 'utc' })
+            .setZone(SALON_TIMEZONE)
+            .toISO({ suppressMilliseconds: true })!
+      )
+      .filter(Boolean)
+      .sort();
   },
 
   async createAppointment(serviceId, startIso, customer) {

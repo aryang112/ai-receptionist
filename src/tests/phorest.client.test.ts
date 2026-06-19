@@ -183,6 +183,25 @@ describe('realPhorest hot-path hardening', () => {
     expect(url).not.toContain('clientId=');
   });
 
+  it('getAvailability converts UTC slot times to salon-local (3 PM not 7 PM)', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        data: [
+          { startTime: '2026-06-19T19:00:00.000Z' }, // 19:00 UTC = 3:00 PM EDT
+          { startTime: '2026-06-19T22:55:00.000Z' }, // 22:55 UTC = 6:55 PM EDT
+        ],
+      })
+    );
+    const phorest = await loadRealPhorest();
+
+    const slots = await phorest.getAvailability('svc', '2026-06-19');
+
+    expect(slots).toHaveLength(2);
+    // Local wall-clock, not the raw UTC hour.
+    expect(slots.some((s) => s.startsWith('2026-06-19T15:00:00'))).toBe(true); // 3 PM
+    expect(slots.some((s) => s.startsWith('2026-06-19T18:55:00'))).toBe(true); // 6:55 PM
+  });
+
   it('paginates the ENTIRE client list (finds a client on a later page)', async () => {
     const pageOf = (url: string) => {
       const m = url.match(/[?&]page=(\d+)/);

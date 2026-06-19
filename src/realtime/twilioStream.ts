@@ -6,7 +6,8 @@ import { logger } from '../core/logger.js';
 import { env } from '../config/env.js';
 import { suggestSlots, bookAppointment } from '../services/booking.js';
 import { phorest } from '../services/phorest.js';
-import { getHoursStatus } from '../core/hours.js';
+import { getHoursStatus, getOpenClose } from '../core/hours.js';
+import { DateTime } from 'luxon';
 // decodeMuLaw no longer needed here — audio decoding happens in openaiSession
 import businessHours from '../config/business.json';
 
@@ -60,23 +61,25 @@ For ANY service a caller names, just try to book it (suggest_availability matche
 
 ═══ BOOKING ═══
 1. Identify customer (see above)
-2. "What service were you thinking today?"
-3. "And what day works for you?"
-4. Call suggest_availability with serviceName and date
-5. Offer the first 3 slots: "I have [time], [time], and [time] — which works best?"
-6. Confirm: "Perfect — so [service] on [day] at [time] for [First Name]. Shall I go ahead and book that?"
-7. Call book_appointment ONLY after they say yes
-8. "You're all set! See you [day] at [time]. Anything else I can help with?"
+2. "What service were you thinking?"
+3. Proactively offer times for BOTH today and tomorrow — don't make the caller guess a day:
+   - Call suggest_availability for today, and again for tomorrow (two calls).
+   - Offer a couple of options from each: "I have [time] or [time] today, and [time] or [time] tomorrow — what works best?"
+   - If the caller already named a specific day or time, check that day and offer the closest available times instead.
+4. Confirm: "Perfect — so [service] on [day] at [time] for [First Name]. Shall I go ahead and book that?"
+5. Call book_appointment ONLY after they say yes.
+6. "You're all set! See you [day] at [time]. Anything else I can help with?"
 
 Booking MORE THAN ONE service is completely normal and expected. If, after "Anything else?", the caller wants another service, just run the booking flow again for it (another suggest_availability + book_appointment). Keep going for as many services as they want. NEVER transfer to Richa just because they're booking a second or third service.
 
 Same-day bookings: No minimum notice. If there's availability, book it.
 
-READING suggest_availability RESULTS (important — don't confuse "closed" with "fully booked"):
+READING suggest_availability RESULTS (important):
+- 'slots' is a list of objects with a 'time' and a 'value'. SAY the time (e.g. "1:10 PM"). When you then call book_appointment or reschedule_appointment, pass that slot's value (24-hour, e.g. "13:10") as the time. Only ever offer times that appear in slots — these are already filtered to business hours, so never offer a time that isn't in the list.
+- If the caller wants a time that isn't in slots (e.g. they ask for 6 PM but it's not listed), say it's not open and offer the nearest available times instead — do not invent it.
 - If salonOpenThatDay is false → we don't open that day at all. Say "We're closed [that day]" and offer the next opening (nextOpen). NEVER say "fully booked" for a day we're closed.
-- If closedRightNow is true → we're already closed for today. Say something like "We're actually closed right now — our hours today are [hoursThatDay], and we open again [nextOpen]." Then offer to book a future time. Do NOT say "fully booked."
+- If closedRightNow is true → we're already closed for today. Say "We're actually closed right now — our hours today are [hoursThatDay], and we open again [nextOpen]." Do NOT say "fully booked."
 - If salonOpenThatDay is true and slots is empty → THEN we're genuinely fully booked that day; say so and offer another day (nextOpen).
-- Only offer times that appear in slots.
 
 ═══ RESCHEDULING ═══
 1. Identify customer (phone first, name fallback)
@@ -87,10 +90,9 @@ READING suggest_availability RESULTS (important — don't confuse "closed" with 
    - The list is already sorted soonest-first. Lead with just the SOONEST one — don't read out a long list.
 3. "I see your next appointment is [service] on [day] at [time] — is that the one you'd like to move?" (If they say that's not it and there are others, mention the next one.)
 4. "What day and time works better for you?"
-5. Call suggest_availability for the new slot
-6. "I have [time] open — does that work?"
-7. Call reschedule_appointment once confirmed
-8. "Done! You're all set for [new day] at [new time]."
+5. Call suggest_availability for that day. Offer the nearest available times to what they asked for: "I have [time] or [time] — does either work?" (only times from slots).
+6. Call reschedule_appointment once they pick — pass the chosen slot's value (24-hour) as the time.
+7. "Done! You're all set for [new day] at [new time]."
 
 ═══ CANCELLATION ═══
 1. Identify customer.
@@ -557,19 +559,43 @@ class TwilioRealtimeCall {
       const result = await suggestSlots(payload);
       // Hours context so Erica can tell "we're closed" apart from "fully booked".
       const hours = getHoursStatus(payload.date);
+
+      // Keep only slots that START within open hours AND let the service FINISH
+      // before closing — Phorest/staff schedules can run past the salon's stated
+      // hours, and we must never offer a time that ends after close. Hand the
+      // model clean fields: `time` to say, `value` (24h) to pass to book/reschedule.
+      const openClose = getOpenClose(payload.date);
+      const durationMin = result.service.durationMin || 0;
+      const slots = result.slots
+        .map((iso) => DateTime.fromISO(iso))
+        .filter(
+          (dt) =>
+            dt.isValid &&
+            (!openClose || dt >= openClose.open) &&
+            (!openClose || dt.plus({ minutes: durationMin }) <= openClose.close)
+        )
+        .slice(0, 12)
+        .map((dt) => ({
+          time: dt.toFormat('h:mm a'),
+          value: dt.toFormat('HH:mm'),
+        }));
+
       logger.info(
         {
           tool: 'suggest_availability',
-          slotsCount: result.slots.length,
+          date: payload.date,
+          rawCount: result.slots.length,
+          offeredCount: slots.length,
           salonOpenThatDay: hours.salonOpenThatDay,
           closedRightNow: hours.closedRightNow,
+          slots: slots.map((s) => s.time),
         },
         'Availability slots found'
       );
       return {
         service: result.service.name,
         date: result.date,
-        slots: result.slots.slice(0, 6),
+        slots, // [{ time: "1:10 PM", value: "13:10" }] — within business hours only
         salonOpenThatDay: hours.salonOpenThatDay,
         hoursThatDay: hours.hoursThatDay,
         closedRightNow: hours.closedRightNow,

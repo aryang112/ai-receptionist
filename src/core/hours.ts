@@ -26,8 +26,10 @@ function atTime(date: DateTime, hhmm: string): DateTime {
   const [h, m] = hhmm.split(':').map(Number);
   return date.set({ hour: h ?? 0, minute: m ?? 0, second: 0, millisecond: 0 });
 }
-const rangeStart = (date: DateTime, range: string) => atTime(date, range.split('-')[0]!);
-const rangeEnd = (date: DateTime, range: string) => atTime(date, range.split('-')[1]!);
+const rangeStart = (date: DateTime, range: string) =>
+  atTime(date, range.split('-')[0]!);
+const rangeEnd = (date: DateTime, range: string) =>
+  atTime(date, range.split('-')[1]!);
 
 function fmtTime(dt: DateTime): string {
   return dt.minute === 0 ? dt.toFormat('h a') : dt.toFormat('h:mm a');
@@ -46,11 +48,27 @@ export type HoursStatus = {
   nextOpen: string | null;
 };
 
+/** Opening and closing instants for a date, or null if the salon is closed that day. */
+export function getOpenClose(
+  dateISO: string
+): { open: DateTime; close: DateTime } | null {
+  const date = DateTime.fromISO(dateISO, { zone: TZ }).startOf('day');
+  const ranges = rangesForDate(date);
+  if (!ranges.length) return null;
+  return {
+    open: rangeStart(date, ranges[0]!),
+    close: rangeEnd(date, ranges[ranges.length - 1]!),
+  };
+}
+
 /**
  * Compute open/closed context for a requested date so the receptionist can tell
  * "we're closed" apart from "we're fully booked". `now` is injectable for tests.
  */
-export function getHoursStatus(dateISO: string, now: DateTime = DateTime.now()): HoursStatus {
+export function getHoursStatus(
+  dateISO: string,
+  now: DateTime = DateTime.now()
+): HoursStatus {
   const nowDt = now.setZone(TZ);
   const date = DateTime.fromISO(dateISO, { zone: TZ }).startOf('day');
   const ranges = rangesForDate(date);
@@ -59,11 +77,17 @@ export function getHoursStatus(dateISO: string, now: DateTime = DateTime.now()):
 
   let closedRightNow = false;
   if (isToday) {
-    closedRightNow = !salonOpenThatDay || nowDt >= rangeEnd(date, ranges[ranges.length - 1]!);
+    closedRightNow =
+      !salonOpenThatDay || nowDt >= rangeEnd(date, ranges[ranges.length - 1]!);
   }
 
   const hoursThatDay = salonOpenThatDay
-    ? ranges.map((r) => `${fmtTime(rangeStart(date, r))} to ${fmtTime(rangeEnd(date, r))}`).join(', ')
+    ? ranges
+        .map(
+          (r) =>
+            `${fmtTime(rangeStart(date, r))} to ${fmtTime(rangeEnd(date, r))}`
+        )
+        .join(', ')
     : 'Closed';
 
   // First opening datetime strictly in the future (scan up to 2 weeks).
@@ -74,7 +98,8 @@ export function getHoursStatus(dateISO: string, now: DateTime = DateTime.now()):
     if (!r.length) continue;
     const open = rangeStart(d, r[0]!);
     if (open > nowDt) {
-      const dayLabel = i === 0 ? 'today' : i === 1 ? 'tomorrow' : d.toFormat('cccc');
+      const dayLabel =
+        i === 0 ? 'today' : i === 1 ? 'tomorrow' : d.toFormat('cccc');
       nextOpen = `${dayLabel} at ${fmtTime(open)}`;
       break;
     }
