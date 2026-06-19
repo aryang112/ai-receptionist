@@ -10,7 +10,9 @@ const BRANCH = process.env.PHOREST_BRANCH_ID || '';
 const TZ = process.env.TIMEZONE || 'America/New_York';
 const AUTH =
   'Basic ' +
-  Buffer.from(`${process.env.PHOREST_API_USERNAME}:${process.env.PHOREST_API_SECRET}`).toString('base64');
+  Buffer.from(
+    `${process.env.PHOREST_API_USERNAME}:${process.env.PHOREST_API_SECRET}`
+  ).toString('base64');
 
 const apptId = process.argv[2] || 'c20q0se_UkEMbvXkOYu4OA';
 const firstName = process.argv[3] || 'Aryan';
@@ -26,13 +28,25 @@ async function api(path: string): Promise<any> {
 }
 
 function showAppt(a: any, label: string) {
-  const asUtc = DateTime.fromISO(`${a.appointmentDate}T${a.startTime}`, { zone: 'utc' }).setZone(TZ);
-  const asLocal = DateTime.fromISO(`${a.appointmentDate}T${a.startTime}`, { zone: TZ });
+  const asUtc = DateTime.fromISO(`${a.appointmentDate}T${a.startTime}`, {
+    zone: 'utc',
+  }).setZone(TZ);
+  const asLocal = DateTime.fromISO(`${a.appointmentDate}T${a.startTime}`, {
+    zone: TZ,
+  });
   console.log(`  [${label}] id=${a.appointmentId}`);
-  console.log(`     state=${a.state}  activationState=${a.activationState}  confirmed=${a.confirmed}  service=${a.serviceName}`);
-  console.log(`     stored: date=${a.appointmentDate} start=${a.startTime} end=${a.endTime}`);
-  console.log(`     if stored value is UTC  -> ${asUtc.toFormat('ccc MMM d, h:mm a')} ${TZ}`);
-  console.log(`     if stored value is LOCAL-> ${asLocal.toFormat('ccc MMM d, h:mm a')} ${TZ}`);
+  console.log(
+    `     state=${a.state}  activationState=${a.activationState}  confirmed=${a.confirmed}  service=${a.serviceName}`
+  );
+  console.log(
+    `     stored: date=${a.appointmentDate} start=${a.startTime} end=${a.endTime}`
+  );
+  console.log(
+    `     if stored value is UTC  -> ${asUtc.toFormat('ccc MMM d, h:mm a')} ${TZ}`
+  );
+  console.log(
+    `     if stored value is LOCAL-> ${asLocal.toFormat('ccc MMM d, h:mm a')} ${TZ}`
+  );
 }
 
 async function main() {
@@ -40,10 +54,16 @@ async function main() {
 
   // 1) Direct GET by appointment id
   try {
-    const a = await api(`api/business/${BID}/branch/${BRANCH}/appointment/${apptId}`);
+    const a = await api(
+      `api/business/${BID}/branch/${BRANCH}/appointment/${apptId}`
+    );
     console.log('Direct GET /appointment/{id}:');
     if (a && a.appointmentId) showAppt(a, 'direct');
-    else console.log('  (no appointmentId in response)', JSON.stringify(a).slice(0, 300));
+    else
+      console.log(
+        '  (no appointmentId in response)',
+        JSON.stringify(a).slice(0, 300)
+      );
   } catch (e) {
     console.log('Direct GET /appointment/{id} FAILED:', String(e));
   }
@@ -61,10 +81,12 @@ async function main() {
     for (const cl of clients) {
       console.log(`  clientId=${cl.clientId} mobile=${cl.mobile}`);
       const r = await api(
-        `api/business/${BID}/branch/${BRANCH}/appointment?clientId=${encodeURIComponent(cl.clientId)}&from_date=${today}&to_date=${to}&size=50`
+        `api/business/${BID}/branch/${BRANCH}/appointment?client_id=${encodeURIComponent(cl.clientId)}&from_date=${today}&to_date=${to}&size=50`
       );
       const appts = r._embedded?.appointments ?? [];
-      console.log(`    appointments in next 14 days (raw, no state filter): ${appts.length}`);
+      console.log(
+        `    appointments in next 14 days (raw, no state filter): ${appts.length}`
+      );
       for (const a of appts) showAppt(a, 'by-client');
     }
   } catch (e) {
