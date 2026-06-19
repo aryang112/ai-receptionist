@@ -219,9 +219,8 @@ export class OpenAIRealtimeSession {
         output_modalities: ['audio'],
         instructions,
         tools: this.configuredTools,
-        // Bound per-response output (default is 'inf') so one turn can't balloon
-        // tokens/min, and reinforce short replies at the budget level.
-        max_response_output_tokens: env.OPENAI_MAX_RESPONSE_TOKENS,
+        // (max output is bounded via the 1-2 sentence prompt rule; the GA session
+        // schema rejects a session-level max_response_output_tokens field.)
         // When context exceeds the input limit, drop down to 80% at once instead
         // of trimming a sliver every turn — fewer truncations AND it preserves the
         // cached prompt prefix (cached audio input is ~$0.40/1M vs $32/1M). This is
