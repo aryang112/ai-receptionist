@@ -18,19 +18,31 @@ export const BookSchema = z.object({
   }),
 });
 
+// Common caller phrasings that don't share a keyword with the real service name.
+const SERVICE_ALIASES: Record<string, string> = {
+  'lash lamination': 'lash lift',
+  'lash laminations': 'lash lift',
+  'lash laminate': 'lash lift',
+  'eyelash lamination': 'lash lift',
+  'eyelash lift': 'lash lift',
+  'brow laminations': 'brow lamination',
+  'eyebrow lamination': 'brow lamination',
+};
+
 export async function findServiceByName(name: string) {
   const services = await phorest.listServices();
-  const q = name.toLowerCase();
+  const raw = name.toLowerCase().trim();
+  const q = SERVICE_ALIASES[raw] ?? raw;
   // Try exact-ish match first (query in service name)
-  let match = services.find(s => s.name.toLowerCase().includes(q));
+  let match = services.find((s) => s.name.toLowerCase().includes(q));
   // Then try reverse (service name in query, e.g. "Brow Threading" in "Eyebrow Threading")
-  if (!match) match = services.find(s => q.includes(s.name.toLowerCase()));
+  if (!match) match = services.find((s) => q.includes(s.name.toLowerCase()));
   // Then try matching any word overlap (e.g. "threading" + "brow")
   if (!match) {
-    const words = q.split(/\s+/).filter(w => w.length > 2);
-    match = services.find(s => {
+    const words = q.split(/\s+/).filter((w) => w.length > 2);
+    match = services.find((s) => {
       const sLower = s.name.toLowerCase();
-      return words.every(w => sLower.includes(w));
+      return words.every((w) => sLower.includes(w));
     });
   }
   return match;
@@ -58,6 +70,10 @@ export async function bookAppointment(input: z.infer<typeof BookSchema>) {
     ...(customer.email ? { email: customer.email } : {}),
   };
 
-  const appointment = await phorest.createAppointment(svc.id, startIso, customerClean);
+  const appointment = await phorest.createAppointment(
+    svc.id,
+    startIso,
+    customerClean
+  );
   return { service: svc, appointment };
 }

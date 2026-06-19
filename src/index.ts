@@ -64,4 +64,14 @@ server.listen(PORT, () => {
       'Client index warm-up failed (will load lazily)'
     );
   });
+  // Warm the service catalog too, so the live price menu is ready before the
+  // first call and the first availability check isn't a cold load.
+  phorest.listServices().then(
+    (s) => logger.info({ serviceCount: s.length }, 'Service catalog warmed'),
+    (err) =>
+      logger.warn(
+        { err: String(err) },
+        'Service catalog warm-up failed (will load lazily)'
+      )
+  );
 });
