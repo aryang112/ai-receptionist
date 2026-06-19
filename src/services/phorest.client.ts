@@ -645,6 +645,12 @@ export const realPhorest: PhorestPort = {
 
     const payload = {
       clientId,
+      // Create the booking ACTIVE, not as a RESERVED/held hold. Phorest's
+      // booking lifecycle is ACTIVE|RESERVED|CANCELED; a RESERVED booking can
+      // render as a white, uneditable block in the Phorest calendar. (If a
+      // tenant ever forces RESERVED-on-create, follow with POST
+      // .../booking/{bookingId}/activate using response.bookingId.)
+      bookingStatus: 'ACTIVE',
       clientAppointmentSchedules: [
         {
           clientId,
@@ -674,6 +680,25 @@ export const realPhorest: PhorestPort = {
     if (!appointmentId) {
       throw new Error('Phorest booking response missing appointmentId');
     }
+
+    // Non-blocking diagnostic: read the appointment back and log its real state
+    // so we can see whether it lands ACTIVE/BOOKED (normal, editable) vs a
+    // RESERVED hold (white, uneditable). Does not delay the caller's confirmation.
+    void fetchAppointment(appointmentId)
+      .then((appt) => {
+        if (appt) {
+          logger.info(
+            {
+              appointmentId,
+              state: appt.state,
+              activationState: appt.activationState,
+              confirmed: appt.confirmed,
+            },
+            '🗓️  Booking state after create'
+          );
+        }
+      })
+      .catch(() => {});
 
     return { appointmentId, bookingId: response.bookingId };
   },
