@@ -10,6 +10,13 @@ export const env = {
   // endpoint) were shut off by OpenAI in May 2026 — gpt-realtime is the GA model.
   OPENAI_REALTIME_MODEL: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime',
   OPENAI_REALTIME_VOICE: process.env.OPENAI_REALTIME_VOICE || 'shimmer',
+  // Turn-detection / noise tuning (so background noise doesn't falsely interrupt
+  // Erica). Higher threshold = needs clearer speech to trigger. Raise toward
+  // 0.7–0.8 on a noisy line. noise_reduction: 'near_field' (phone) | 'far_field' | 'off'.
+  OPENAI_VAD_THRESHOLD: Number(process.env.OPENAI_VAD_THRESHOLD || 0.6),
+  OPENAI_VAD_SILENCE_MS: Number(process.env.OPENAI_VAD_SILENCE_MS || 500),
+  OPENAI_VAD_PREFIX_MS: Number(process.env.OPENAI_VAD_PREFIX_MS || 300),
+  OPENAI_NOISE_REDUCTION: process.env.OPENAI_NOISE_REDUCTION || 'near_field',
   TIMEZONE: process.env.TIMEZONE || 'America/New_York',
   USE_MOCK_PHOREST: process.env.USE_MOCK_PHOREST || 'true',
 

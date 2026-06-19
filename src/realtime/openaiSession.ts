@@ -201,6 +201,16 @@ export class OpenAIRealtimeSession {
     // GA session schema: audio config is nested under session.audio.input/output,
     // formats are typed objects ({type:'audio/pcmu'}), and output modality lives
     // in output_modalities. server_vad turn_detection sits under audio.input.
+    //
+    // Background-noise robustness (so Erica doesn't cut herself off on a noise):
+    //  - noise_reduction filters input audio BEFORE the VAD sees it.
+    //  - a higher threshold makes the VAD require clearer speech to trigger.
+    // Both are env-tunable so they can be dialed in on a real noisy line.
+    const noiseReduction =
+      env.OPENAI_NOISE_REDUCTION === 'off'
+        ? undefined
+        : { type: env.OPENAI_NOISE_REDUCTION }; // 'near_field' (phone) | 'far_field'
+
     const sessionConfig = {
       type: 'session.update',
       session: {
@@ -212,11 +222,12 @@ export class OpenAIRealtimeSession {
         audio: {
           input: {
             format: { type: 'audio/pcmu' },
+            ...(noiseReduction ? { noise_reduction: noiseReduction } : {}),
             turn_detection: {
               type: 'server_vad',
-              threshold: 0.5,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 400,
+              threshold: env.OPENAI_VAD_THRESHOLD,
+              prefix_padding_ms: env.OPENAI_VAD_PREFIX_MS,
+              silence_duration_ms: env.OPENAI_VAD_SILENCE_MS,
             },
           },
           output: {
@@ -228,8 +239,13 @@ export class OpenAIRealtimeSession {
     };
 
     logger.info(
-      { model: this.model, voice: this.voice },
-      'Sending GA session.update (g711_ulaw passthrough + server_vad)'
+      {
+        model: this.model,
+        voice: this.voice,
+        vadThreshold: env.OPENAI_VAD_THRESHOLD,
+        noiseReduction: env.OPENAI_NOISE_REDUCTION,
+      },
+      'Sending GA session.update (g711_ulaw passthrough + server_vad + noise reduction)'
     );
     this.queueMessage(sessionConfig);
     this.flushQueue();
