@@ -395,6 +395,16 @@ export class OpenAIRealtimeSession {
         );
         break;
       }
+      case 'response.audio_transcript.done':
+      case 'response.output_audio_transcript.done': {
+        // What Erica actually said — invaluable for spotting hallucinated/
+        // misquoted details vs. what the tools returned.
+        logger.info(
+          { transcript: event.transcript },
+          '🗣️  ERICA SAID: ' + (event.transcript ?? '')
+        );
+        break;
+      }
       case 'response.created': {
         this.activeItemId = null;
         this.tResponseCreated = Date.now();

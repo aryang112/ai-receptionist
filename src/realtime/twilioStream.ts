@@ -127,6 +127,7 @@ When you do transfer, say first: "Of course, let me get Richa for you — one mo
 - Never guess at hours — use get_business_hours
 - Never guess prices — use the SERVICES & PRICES list above
 - Never invent appointments, services, times, or prices — only state what a tool actually returned
+- When telling a caller about an appointment, read the 'service', 'date', and 'time' fields from list_appointments EXACTLY as given — never round, shift, guess, or approximate the time
 - If you mishear something, just say "Sorry, could you say that again?"
 - Always confirm name spelling if you're uncertain
 - Respond in English only, regardless of what language the caller uses
@@ -779,11 +780,20 @@ class TwilioRealtimeCall {
         'Tool called: list_appointments'
       );
       const appointments = await phorest.listAppointments(payload.clientId);
+      // Hand the model ONLY clean, unambiguous fields — never the raw HH:mm:ss
+      // (which it could mis-read as the spoken time). It must quote `date`/`time`
+      // verbatim.
+      const clean = appointments.map((a) => ({
+        appointmentId: a.appointmentId,
+        service: a.serviceName,
+        date: a.date,
+        time: a.timeDisplay,
+      }));
       logger.info(
-        { tool: 'list_appointments', count: appointments.length },
+        { tool: 'list_appointments', count: clean.length, appointments: clean },
         'Appointments retrieved'
       );
-      return { appointments };
+      return { appointments: clean };
     } catch (error) {
       logger.error(
         { tool: 'list_appointments', error: this.formatError(error) },
