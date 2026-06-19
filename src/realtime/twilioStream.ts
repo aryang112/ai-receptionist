@@ -6,6 +6,7 @@ import { logger } from '../core/logger.js';
 import { env } from '../config/env.js';
 import { suggestSlots, bookAppointment } from '../services/booking.js';
 import { phorest } from '../services/phorest.js';
+import { getHoursStatus } from '../core/hours.js';
 // decodeMuLaw no longer needed here — audio decoding happens in openaiSession
 import businessHours from '../config/business.json';
 
@@ -66,7 +67,11 @@ When calling suggest_availability or book_appointment, use service names EXACTLY
 
 Same-day bookings: No minimum notice. If there's availability, book it.
 
-After-hours bookings: Always take the booking for a future date. Only say "we're currently closed" if they're asking to come in RIGHT NOW. Otherwise proceed normally and book the future slot.
+READING suggest_availability RESULTS (important — don't confuse "closed" with "fully booked"):
+- If salonOpenThatDay is false → we don't open that day at all. Say "We're closed [that day]" and offer the next opening (nextOpen). NEVER say "fully booked" for a day we're closed.
+- If closedRightNow is true → we're already closed for today. Say something like "We're actually closed right now — our hours today are [hoursThatDay], and we open again [nextOpen]." Then offer to book a future time. Do NOT say "fully booked."
+- If salonOpenThatDay is true and slots is empty → THEN we're genuinely fully booked that day; say so and offer another day (nextOpen).
+- Only offer times that appear in slots.
 
 ═══ RESCHEDULING ═══
 1. Identify customer (phone first, name fallback)
@@ -511,14 +516,25 @@ class TwilioRealtimeCall {
         'Tool called: suggest_availability'
       );
       const result = await suggestSlots(payload);
+      // Hours context so Erica can tell "we're closed" apart from "fully booked".
+      const hours = getHoursStatus(payload.date);
       logger.info(
-        { tool: 'suggest_availability', slotsCount: result.slots.length },
+        {
+          tool: 'suggest_availability',
+          slotsCount: result.slots.length,
+          salonOpenThatDay: hours.salonOpenThatDay,
+          closedRightNow: hours.closedRightNow,
+        },
         'Availability slots found'
       );
       return {
         service: result.service.name,
         date: result.date,
         slots: result.slots.slice(0, 6),
+        salonOpenThatDay: hours.salonOpenThatDay,
+        hoursThatDay: hours.hoursThatDay,
+        closedRightNow: hours.closedRightNow,
+        nextOpen: hours.nextOpen,
       };
     } catch (error) {
       logger.error(
