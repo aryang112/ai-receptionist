@@ -16,7 +16,7 @@ export const env = {
   // Erica). Higher threshold = needs clearer speech to trigger. Raise toward
   // 0.7–0.8 on a noisy line. noise_reduction: 'near_field' (phone) | 'far_field' | 'off'.
   OPENAI_VAD_THRESHOLD: Number(process.env.OPENAI_VAD_THRESHOLD || 0.6),
-  OPENAI_VAD_SILENCE_MS: Number(process.env.OPENAI_VAD_SILENCE_MS || 500),
+  OPENAI_VAD_SILENCE_MS: Number(process.env.OPENAI_VAD_SILENCE_MS || 700),
   OPENAI_VAD_PREFIX_MS: Number(process.env.OPENAI_VAD_PREFIX_MS || 300),
   OPENAI_NOISE_REDUCTION: process.env.OPENAI_NOISE_REDUCTION || 'near_field',
   // Cap per-response output (default 'inf' = unbounded). Bounds tokens/min and

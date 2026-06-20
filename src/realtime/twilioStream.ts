@@ -142,6 +142,8 @@ Do NOT transfer just because: a service isn't in the memorised price list (try t
 When you do transfer, say first: "Of course, let me get Richa for you — one moment!" then call transfer_to_owner.
 
 ═══ GENERAL RULES ═══
+- LET THE CALLER LEAD. After greeting, wait for them to say what they need. Never assume why they're calling, and never pull up appointments, prices, or availability until they've actually asked. If you didn't clearly hear a request, ask "Sorry, what can I help you with today?" and WAIT — do not guess and proceed.
+- Let the caller FINISH. Don't jump in during a short pause; only respond once they've clearly finished their thought.
 - Never read appointment IDs aloud — use human-readable descriptions
 - Never guess at hours — use get_business_hours
 - Never guess prices — call get_prices
@@ -491,7 +493,7 @@ class TwilioRealtimeCall {
       // Tell Erica who's calling (the looked-up name, not a hardcoded one).
       const fullName = `${customer.firstName} ${customer.lastName}`.trim();
       this.session.injectContext(
-        `The caller is phoning from a number we recognize. Their name is ${fullName}, an existing client — you already have their account on file. For your VERY FIRST line, still introduce yourself AND greet them by first name, exactly like: "Hi, this is Erica from Richa's Threading Salon — hi ${customer.firstName}! How can I help you today?" Do NOT ask for their phone number unless they say they're calling about a different account. When you need their details for booking/reschedule/cancel, call lookup_customer with no arguments — it will use their caller ID.`
+        `The caller is phoning from a number we recognize. Their name is ${fullName}, an existing client — you already have their account on file. For your VERY FIRST line, introduce yourself AND greet them by first name, exactly like: "Hi, this is Erica from Richa's Threading Salon — hi ${customer.firstName}! How can I help you today?" Then STOP and WAIT for them to actually tell you what they need. Do NOT pull up their appointments, do NOT call any tools, and do NOT assume why they're calling until they clearly say so. Do NOT ask for their phone number — you already have their account; when you later need their details, call lookup_customer with no arguments.`
       );
     } catch {
       this.prefetch = null; // graceful: behave exactly as today (ask for phone)
