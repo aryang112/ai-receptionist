@@ -82,7 +82,7 @@ For ANY service a caller names, just try to book it (suggest_availability matche
 3. Proactively offer times for BOTH today and tomorrow — don't make the caller guess a day:
    - Call suggest_availability for today, and again for tomorrow (two calls).
    - Offer a couple of options from each: "I have [time] or [time] today, and [time] or [time] tomorrow — what works best?"
-   - If the caller already named a specific day or time, check that day and offer the closest available times instead.
+   - If the caller names a desired time (e.g. "4 PM", "evening", "morning"), ALWAYS pass it to suggest_availability as preferredTime (24h HH:MM, e.g. "16:00" for 4 PM, "18:00" for evening) so the returned slots are centered on what they asked for — then offer the closest ones.
 4. Confirm: "Perfect — so [service] on [day] at [time] for [First Name]. Shall I go ahead and book that?"
 5. Call book_appointment ONLY after they say yes.
 6. "You're all set! See you [day] at [time]. Anything else I can help with?"
@@ -176,6 +176,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         serviceName: { type: 'string' },
         date: { type: 'string', description: 'ISO date YYYY-MM-DD' },
+        preferredTime: {
+          type: 'string',
+          description:
+            "If the caller mentioned a desired time (e.g. '4 PM', 'evening', 'morning'), pass it as 24h HH:MM (e.g. '16:00') so the returned slots are centered on it. Omit if they have no preference.",
+        },
       },
       required: ['serviceName', 'date'],
     },
@@ -486,7 +491,7 @@ class TwilioRealtimeCall {
       // Tell Erica who's calling (the looked-up name, not a hardcoded one).
       const fullName = `${customer.firstName} ${customer.lastName}`.trim();
       this.session.injectContext(
-        `The caller is phoning from a number we recognize. Their name is ${fullName} and they are an existing client — you already have their account on file. Greet them warmly by their FIRST name and ask how you can help. Do NOT ask for their phone number unless they say they're calling about a different account. When you need their details for booking/reschedule/cancel, call lookup_customer with no arguments — it will use their caller ID.`
+        `The caller is phoning from a number we recognize. Their name is ${fullName}, an existing client — you already have their account on file. For your VERY FIRST line, still introduce yourself AND greet them by first name, exactly like: "Hi, this is Erica from Richa's Threading Salon — hi ${customer.firstName}! How can I help you today?" Do NOT ask for their phone number unless they say they're calling about a different account. When you need their details for booking/reschedule/cancel, call lookup_customer with no arguments — it will use their caller ID.`
       );
     } catch {
       this.prefetch = null; // graceful: behave exactly as today (ask for phone)
@@ -649,7 +654,11 @@ class TwilioRealtimeCall {
 
   private async handleSuggestAvailability(args: unknown) {
     try {
-      const payload = args as { serviceName: string; date: string };
+      const payload = args as {
+        serviceName: string;
+        date: string;
+        preferredTime?: string;
+      };
       logger.info(
         { tool: 'suggest_availability', args: payload },
         'Tool called: suggest_availability'
@@ -660,23 +669,51 @@ class TwilioRealtimeCall {
 
       // Keep only slots that START within open hours AND let the service FINISH
       // before closing — Phorest/staff schedules can run past the salon's stated
-      // hours, and we must never offer a time that ends after close. Hand the
-      // model clean fields: `time` to say, `value` (24h) to pass to book/reschedule.
+      // hours, and we must never offer a time that ends after close.
       const openClose = getOpenClose(payload.date);
       const durationMin = result.service.durationMin || 0;
-      const slots = result.slots
+      const inHours = result.slots
         .map((iso) => DateTime.fromISO(iso))
         .filter(
           (dt) =>
             dt.isValid &&
             (!openClose || dt >= openClose.open) &&
             (!openClose || dt.plus({ minutes: durationMin }) <= openClose.close)
-        )
-        .slice(0, 12)
-        .map((dt) => ({
-          time: dt.toFormat('h:mm a'),
-          value: dt.toFormat('HH:mm'),
-        }));
+        );
+
+      // CRITICAL: don't just take the earliest N (that hid afternoon/evening
+      // slots). If the caller asked for a time, return the slots CLOSEST to it;
+      // otherwise return an even spread across the whole day so morning AND
+      // evening are represented. Hand the model { time, value } only.
+      const MAX = 10;
+      const pref = payload.preferredTime
+        ? DateTime.fromISO(`${payload.date}T${payload.preferredTime}`, {
+            zone: env.TIMEZONE,
+          })
+        : null;
+      let picked: DateTime[];
+      if (pref && pref.isValid) {
+        picked = [...inHours]
+          .sort(
+            (a, b) =>
+              Math.abs(a.toMillis() - pref.toMillis()) -
+              Math.abs(b.toMillis() - pref.toMillis())
+          )
+          .slice(0, MAX)
+          .sort((a, b) => a.toMillis() - b.toMillis());
+      } else if (inHours.length <= MAX) {
+        picked = inHours;
+      } else {
+        const step = (inHours.length - 1) / (MAX - 1);
+        picked = Array.from(
+          { length: MAX },
+          (_, i) => inHours[Math.round(i * step)]!
+        );
+      }
+      const slots = picked.map((dt) => ({
+        time: dt.toFormat('h:mm a'),
+        value: dt.toFormat('HH:mm'),
+      }));
 
       logger.info(
         {
