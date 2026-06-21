@@ -1,9 +1,11 @@
 # AI Receptionist — Claude Instructions
 
 ## Auto-Resume (do this every session, no matter what)
-1. Read `PLAN.md` in this directory
+1. Read `state.md` (current status + pending action items), `tasks/lessons.md`
+   (the gotchas — READ before touching Phorest times / OpenAI session config),
+   and `docs/CODEMAP.md` (file map). `PLAN.md` is the older feature plan (context only).
 2. Run `git status && npm test 2>&1 | tail -20`
-3. Find the first unchecked `- [ ]` in PLAN.md
+3. Pick up from the "PENDING — action items" in `state.md`
 4. Continue from there — do not ask the user, just go
 
 ## Mid-Task Recovery
@@ -24,7 +26,12 @@ If interrupted mid-task:
 - Never log secrets or full phone numbers
 - PhorestPort interface is the contract — mock and real must match exactly
 - business.json is hours source of truth — do not change it
-- All Phorest times are UTC; display in America/New_York
+- ⏰ Phorest timezone is INCONSISTENT per endpoint (NOT all UTC!): GET /appointment
+  returns salon-LOCAL time, /appointments/availability returns UTC, writes send
+  local wall-clock. Normalize to salon-local in phorest.client.ts. See tasks/lessons.md.
+- Phorest query params are snake_case (client_id, from_date) — camelCase is silently ignored
+- Validate any NEW OpenAI session.update field against the live API before shipping (a
+  bad field fails the whole session → instant call hangup)
 - Phone: 10 digits, strip leading 1
 - Voice responses: 1-2 sentences, conversational, no IDs/URLs read aloud
 - Run `npm test` after every change — keep all green
