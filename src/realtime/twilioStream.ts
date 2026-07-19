@@ -9,7 +9,9 @@ import {
   suggestSlots,
   bookAppointment,
   findServiceByName,
+  resolveService,
 } from '../services/booking.js';
+import type { Service } from '../services/phorest.types.js';
 import { phorest } from '../services/phorest.js';
 import { CallStore } from '../services/callStore.js';
 import type {
@@ -74,11 +76,13 @@ Callers often use different names for a service (e.g. "lash lamination" for our 
    → Match on the appointment date/time they give you
 8. If no match at all: "No worries, I'll get you set up! What's your first and last name?"
    → Proceed to booking and the system will create their profile
+9. If lookup_customer returns needLastName (you searched with only a first name): ask "And your last name?" and call lookup_customer again with BOTH names — do NOT tell them they weren't found off a first name alone.
+10. If we ALREADY recognized the caller by caller ID but they tell you their number has CHANGED: keep using their account (their name is on file). Just note the new number, and when you book, call book_appointment with BOTH their clientId AND the new phone number in customer.phone — so the booking stays on their existing account and updates the number. Do NOT re-run lookup on the new number (it won't be on file yet) and do NOT treat them as a brand-new person.
 
 ═══ BOOKING ═══
 1. Identify customer (see above)
 2. "What service were you thinking?"
-3. Proactively offer times for BOTH today and tomorrow — don't make the caller guess a day:
+3. If the caller ALREADY named a day (e.g. "Saturday", "tomorrow", "the 5th"), check THAT day ONLY — one suggest_availability call for that date — don't also pull today/tomorrow. Otherwise, proactively offer times for BOTH today and tomorrow so they don't have to guess a day:
    - Call suggest_availability for today, and again for tomorrow (two calls).
    - Offer a couple of options from each: "I have [time] or [time] today, and [time] or [time] tomorrow — what works best?"
    - If the caller names a desired time (e.g. "4 PM", "evening", "morning"), ALWAYS pass it to suggest_availability as preferredTime (24h HH:MM, e.g. "16:00" for 4 PM, "18:00" for evening) so the returned slots are centered on what they asked for — then offer the closest ones.
@@ -190,21 +194,30 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'book_appointment',
     description:
-      'Book an appointment once all details are confirmed with the caller.',
+      'Book an appointment once all details are confirmed with the caller. For a caller we already recognized (their account is on file), you do NOT need their phone number — book with just their name.',
     parameters: {
       type: 'object',
       properties: {
         serviceName: { type: 'string' },
         date: { type: 'string', description: 'ISO date YYYY-MM-DD' },
         time: { type: 'string', description: '24h time HH:MM' },
+        clientId: {
+          type: 'string',
+          description:
+            "The recognized caller's account id, if lookup_customer returned one. Optional — omit for a brand-new caller. The system also fills this in automatically when the caller was matched by caller ID.",
+        },
         customer: {
           type: 'object',
           properties: {
             name: { type: 'string' },
-            phone: { type: 'string' },
+            phone: {
+              type: 'string',
+              description:
+                'Only needed for a NEW caller with no account on file. Omit when we already know the caller (clientId set / recognized by caller ID).',
+            },
             email: { type: 'string' },
           },
-          required: ['name', 'phone'],
+          required: ['name'],
         },
       },
       required: ['serviceName', 'date', 'time', 'customer'],
@@ -322,7 +335,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'transfer_to_owner',
     description:
-      'Transfer the call to Richa (the salon owner). Use when: caller asks to speak to Richa or a person, request involves multiple services or group booking, you are unable to help after one clarifying attempt, caller sounds frustrated.',
+      'Transfer the call to Richa (the salon owner). LAST RESORT only — you handle booking (including multiple services), rescheduling, cancelling, hours, and running-late yourself. Use ONLY when: the caller explicitly asks for Richa or a real person; it is a group booking for several DIFFERENT people; a tool keeps failing AFTER you retried it; or the caller is clearly upset and wants a human.',
     parameters: {
       type: 'object',
       properties: {
@@ -371,9 +384,12 @@ type TwilioEvent =
   | TwilioMarkEvent
   | TwilioEventBase;
 
-class TwilioRealtimeCall {
+export class TwilioRealtimeCall {
   private readonly socket: WebSocket;
-  private readonly session: OpenAIRealtimeSession;
+  // Built on the Twilio "start" event (once streamSid is known) so the session's
+  // logs carry a per-call tag (RT-9). Never touched before "start" — media can't
+  // arrive first — so the definite-assignment `!` is safe; cleanup guards it too.
+  private session!: OpenAIRealtimeSession;
   private streamSid = '';
   private callSid = '';
   private closed = false;
@@ -383,6 +399,12 @@ class TwilioRealtimeCall {
   private transferring = false;
   private hasReceivedFirstAudioChunk = false;
   private sessionReady = false;
+  // RT-8: media frames that arrive during the ~300–500ms OpenAI handshake (before
+  // sessionReady) used to be dropped, swallowing an impatient early "hello?".
+  // Buffer them (bounded so a flood can't grow memory unbounded) and flush once
+  // the session is ready. ~250 frames ≈ 5s of 20ms mu-law audio.
+  private static readonly PENDING_MEDIA_CAP = 250;
+  private pendingMedia: string[] = [];
   // Barge-in bookkeeping (mirrors OpenAI's Twilio sample): track the caller's
   // media clock and when the current Erica response began playing, so we can
   // truncate to exactly what was heard when the caller interrupts.
@@ -395,6 +417,10 @@ class TwilioRealtimeCall {
     clientId: string;
     firstName: string;
     lastName: string;
+    // Normalized caller phone (from caller ID / the Phorest record). Threaded
+    // into the lookup_customer prefetch response and into book_appointment so we
+    // never fabricate a number or duplicate the client's account.
+    phone?: string;
     appointments: AppointmentSummary[] | null;
   } | null = null;
   // WRITE-PATH SECURITY: appointment IDs this call has actually surfaced to the
@@ -422,12 +448,33 @@ class TwilioRealtimeCall {
     this.socket = socket;
     logger.info('New Twilio WebSocket connection');
 
+    socket.on('message', (data: WebSocket.RawData) => this.handleMessage(data));
+    socket.on('close', () => this.cleanup());
+    socket.on('error', (err) =>
+      this.handleError(
+        err instanceof Error ? err : new Error('Twilio socket error')
+      )
+    );
+  }
+
+  /**
+   * Build the OpenAI session and register every tool. Deferred out of the
+   * constructor to the Twilio "start" event so we can tag the session's logger
+   * with a per-call id (RT-9) and wire onClose to the same graceful owner-
+   * failover as a fatal error (RT-1). callTag is the tail of the streamSid.
+   */
+  private createSession(callTag: string) {
     this.session = new OpenAIRealtimeSession({
+      callTag,
       onAudioChunk: (chunk) => this.sendAudioToTwilio(chunk),
       onTextDelta: (delta) => this.handleAssistantText(delta),
       onSpeechStarted: () => this.handleBargeIn(),
       onResponseComplete: () => this.handleResponseComplete(),
       onError: (error) => this.handleError(error),
+      // RT-1: an unexpected OpenAI drop (not our own close()) would otherwise
+      // leave the caller live in silence — run the SAME graceful failover to the
+      // owner as a fatal error, then tear down.
+      onClose: () => this.failoverToOwner('OpenAI session closed unexpectedly'),
     });
 
     this.session.registerTool('suggest_availability', (args) =>
@@ -463,14 +510,6 @@ class TwilioRealtimeCall {
     logger.debug(
       'OpenAI tools registered: suggest_availability, book_appointment, reschedule_appointment, cancel_appointment, get_business_hours, lookup_customer, list_appointments, log_running_late, transfer_to_owner'
     );
-
-    socket.on('message', (data: WebSocket.RawData) => this.handleMessage(data));
-    socket.on('close', () => this.cleanup());
-    socket.on('error', (err) =>
-      this.handleError(
-        err instanceof Error ? err : new Error('Twilio socket error')
-      )
-    );
   }
 
   /**
@@ -502,10 +541,16 @@ class TwilioRealtimeCall {
         );
         return;
       }
+      // Prefer the phone Phorest has on the account; fall back to the caller ID
+      // we dialed in with. Normalized to 10 digits (strip leading 1) so it's the
+      // canonical form the booking path expects — never a fabricated number.
+      const prefetchPhone =
+        this.normalizePhone(customer.phone) ?? this.normalizePhone(callerPhone);
       this.prefetch = {
         clientId: customer.clientId,
         firstName: customer.firstName,
         lastName: customer.lastName,
+        ...(prefetchPhone ? { phone: prefetchPhone } : {}),
         appointments: null,
       };
       logger.info(
@@ -525,7 +570,7 @@ class TwilioRealtimeCall {
       // Tell Erica who's calling (the looked-up name, not a hardcoded one).
       const fullName = `${customer.firstName} ${customer.lastName}`.trim();
       this.session.injectContext(
-        `The caller is phoning from a number we recognize. Their name is ${fullName}, an existing client — you already have their account on file. For your VERY FIRST line, introduce yourself as the virtual receptionist AND greet them by first name, exactly like: "Hi, this is Erica, the virtual receptionist at Richa's Threading Salon — hi ${customer.firstName}! How can I help you today?" Then STOP and WAIT for them to actually tell you what they need. Do NOT pull up their appointments, do NOT call any tools, and do NOT assume why they're calling until they clearly say so. Do NOT ask for their phone number — you already have their account; when you later need their details, call lookup_customer with no arguments.`
+        `The caller is phoning from a number we recognize. Their name is ${customer.firstName} (full name ${fullName}), an existing client — the system already has their account on file. For your VERY FIRST line, use the standard GREETING from your instructions but include their first name right after the salon name (e.g. "...Richa's Threading Salon — hi ${customer.firstName}!"). Do NOT invent a different greeting; just personalize the standard one. Then STOP and WAIT for them to actually tell you what they need. Do NOT pull up their appointments, do NOT call any tools, and do NOT assume why they're calling until they clearly say so. Do NOT ask for their phone number and NEVER read a phone number back to them — the system already knows their account. When you later need their details, call lookup_customer with no arguments. When you book for them, you do NOT need a phone number — just book with their name; the system attaches their account automatically.`
       );
     } catch {
       this.prefetch = null; // graceful: behave exactly as today (ask for phone)
@@ -569,6 +614,10 @@ class TwilioRealtimeCall {
             { streamSid: this.streamSid },
             '📞 Twilio stream started'
           );
+          // Build the session now that streamSid is known — RT-9 tags every
+          // session log line with the last 8 of the streamSid. Only after the
+          // auth gate above, so a rejected stream never spins one up.
+          this.createSession(this.streamSid.slice(-8));
           await this.session.connect();
           // Prices come from the get_prices tool on demand (NOT baked into the
           // prompt) — keeps the per-turn token footprint small so long calls
@@ -578,6 +627,9 @@ class TwilioRealtimeCall {
             tools: TOOL_DEFINITIONS,
           });
           this.sessionReady = true;
+          // RT-8: replay any caller audio that arrived during the handshake so an
+          // early "hello?" isn't swallowed.
+          this.flushPendingMedia();
           // Look the caller up by THEIR phone number (caller ID) and, if we
           // recognize them, tell Erica so she greets by name + skips asking for
           // the number. If not recognized (or no caller ID), she greets normally.
@@ -616,7 +668,14 @@ class TwilioRealtimeCall {
           break;
         }
         case 'mark':
+          // RT-4: Twilio acks each played chunk. When the queue drains to empty,
+          // playback of the current response is truly finished — only THEN clear
+          // responseStartTimestamp. Resetting it earlier (at response.done, which
+          // fires seconds before Twilio finishes the buffered tail) disarmed
+          // barge-in for the whole tail. This keeps interruption live through the
+          // entire playback without leaving a stale reference for the next turn.
           if (this.markQueue.length > 0) this.markQueue.shift();
+          if (this.markQueue.length === 0) this.responseStartTimestamp = null;
           break;
         case 'stop':
           logger.info(
@@ -638,10 +697,36 @@ class TwilioRealtimeCall {
   }
 
   private handleMedia(event: TwilioMediaEvent) {
-    if (!event.media?.payload || this.closed || !this.sessionReady) return;
+    if (!event.media?.payload || this.closed) return;
+    // RT-8: the OpenAI session isn't ready yet (~300–500ms handshake). Rather than
+    // drop the caller's early speech (a clipped "hello?"), buffer it up to the cap
+    // and flush once ready. Past the cap we drop (bounded memory) — 5s of unheard
+    // pre-greeting audio is already well beyond anything useful.
+    if (!this.sessionReady) {
+      if (this.pendingMedia.length < TwilioRealtimeCall.PENDING_MEDIA_CAP) {
+        this.pendingMedia.push(event.media.payload);
+      }
+      return;
+    }
     // g711 mu-law passthrough — forward Twilio's frame verbatim, no transcoding.
     // appendTwilioAudio is a safe no-op if the session has closed (never throws).
     this.session.appendTwilioAudio(event.media.payload);
+  }
+
+  /**
+   * RT-8: flush any media frames buffered during the OpenAI handshake, in order,
+   * so the caller's early audio isn't lost. Called once, right after the session
+   * is marked ready. No-op if nothing was buffered or the call already closed.
+   */
+  private flushPendingMedia() {
+    if (this.closed || this.pendingMedia.length === 0) return;
+    const frames = this.pendingMedia;
+    this.pendingMedia = [];
+    logger.info(
+      { streamSid: this.streamSid, frames: frames.length },
+      '⏩ Flushing buffered pre-ready media frames'
+    );
+    for (const payload of frames) this.session.appendTwilioAudio(payload);
   }
 
   private sendAudioToTwilio(base64Mulaw: string) {
@@ -714,8 +799,13 @@ class TwilioRealtimeCall {
   }
 
   private handleResponseComplete() {
-    this.responseStartTimestamp = null;
-    this.markQueue = [];
+    // RT-4: intentionally do NOT reset responseStartTimestamp or markQueue here.
+    // response.done fires seconds before Twilio finishes playing the buffered
+    // audio tail; clearing state now would disarm barge-in during that tail (an
+    // interruption would no-op — no truncate, no clear). The Twilio "mark" ack
+    // owns the reset instead: responseStartTimestamp is nulled only once the
+    // markQueue drains to empty (see handleMessage 'mark'). This mirrors OpenAI's
+    // reference pattern and keeps barge-in armed through the whole playback.
   }
 
   private handleAssistantText(delta: string) {
@@ -747,6 +837,54 @@ class TwilioRealtimeCall {
         'Tool called: suggest_availability'
       );
       const result = await suggestSlots(payload);
+
+      // suggestSlots returns a discriminated union — narrow it before reading
+      // slot fields. If the phrase didn't resolve to a single service, hand the
+      // model the alternatives (never crash on a missing .service/.slots).
+      if ('notOffered' in result) {
+        logger.info(
+          {
+            tool: 'suggest_availability',
+            serviceName: payload.serviceName,
+            closest: result.closest.map((s) => s.name),
+          },
+          'suggest_availability — service not offered'
+        );
+        CallStore.recordToolCall(this.callSid, {
+          name: 'suggest_availability',
+          ok: true,
+          detail: { notOffered: payload.serviceName },
+        });
+        return {
+          notOffered: true,
+          serviceName: payload.serviceName,
+          // Cap at 3 (CONTRACT #1) so Erica offers a couple of real alternatives,
+          // never a long list.
+          closest: result.closest.slice(0, 3).map((s) => s.name),
+        };
+      }
+      if ('ambiguous' in result) {
+        logger.info(
+          {
+            tool: 'suggest_availability',
+            serviceName: payload.serviceName,
+            candidates: result.ambiguous.map((s) => s.name),
+          },
+          'suggest_availability — ambiguous service'
+        );
+        CallStore.recordToolCall(this.callSid, {
+          name: 'suggest_availability',
+          ok: true,
+          detail: { ambiguous: payload.serviceName },
+        });
+        return {
+          ambiguous: true,
+          serviceName: payload.serviceName,
+          // Cap at 3 (CONTRACT #1) — a short "did you mean X or Y?" list.
+          candidates: result.ambiguous.slice(0, 3).map((s) => s.name),
+        };
+      }
+
       // Hours context so Erica can tell "we're closed" apart from "fully booked".
       const hours = getHoursStatus(payload.date);
 
@@ -867,7 +1005,11 @@ class TwilioRealtimeCall {
         serviceName: string;
         date: string;
         time: string;
-        customer: { name: string; phone: string; email?: string };
+        // clientId is only present if TOOL_SCHEMAS admits it; the recognized-
+        // caller path below fills it from prefetch regardless, so the model
+        // never has to supply it.
+        clientId?: string;
+        customer: { name: string; phone?: string; email?: string };
       };
       // Log only non-PII fields. NEVER log payload.customer (full name, phone,
       // email) — pino has no redaction configured, so it would write the
@@ -919,7 +1061,29 @@ class TwilioRealtimeCall {
         );
       }
 
-      const result = await bookAppointment(payload as any);
+      // CT-1: thread the recognized caller's real identity. If the model didn't
+      // pass a clientId but we matched this caller by caller ID, inject the
+      // prefetch clientId deterministically so we book against their existing
+      // record (skips getOrCreateClient) instead of fabricating/duplicating one.
+      // Also backfill their real phone from prefetch when the model has none, so
+      // a brand-new-looking booking still ties to the right account.
+      const clientId = payload.clientId ?? this.prefetch?.clientId;
+      const bookInput = {
+        serviceName: payload.serviceName,
+        date: payload.date,
+        time: payload.time,
+        ...(clientId ? { clientId } : {}),
+        customer: {
+          name: payload.customer.name,
+          ...(payload.customer.phone
+            ? { phone: payload.customer.phone }
+            : this.prefetch?.phone
+              ? { phone: this.prefetch.phone }
+              : {}),
+          ...(payload.customer.email ? { email: payload.customer.email } : {}),
+        },
+      };
+      const result = await bookAppointment(bookInput);
       logger.info(
         {
           tool: 'book_appointment',
@@ -1145,10 +1309,13 @@ class TwilioRealtimeCall {
       }
       const payload = parsed.data as { serviceName?: string };
       // Targeted lookup = a few tokens back to the model (vs the whole 63-item
-      // catalog). Only return the full menu when no specific service was named.
+      // catalog). The full menu is returned ONLY when NO specific service was
+      // named — on a named-but-unmatched query we return the closest FEW, never
+      // the whole catalog (that flood makes Erica read out dozens of prices).
       if (payload.serviceName) {
-        const svc = await findServiceByName(payload.serviceName);
-        if (svc) {
+        const match = await resolveService(payload.serviceName);
+        if (match.kind === 'match') {
+          const svc = match.service;
           logger.info(
             { tool: 'get_prices', match: svc.name },
             'Price lookup (single)'
@@ -1165,11 +1332,41 @@ class TwilioRealtimeCall {
             durationMin: svc.durationMin,
           };
         }
+        // Ambiguous OR not-offered: hand back only the closest few priced rows so
+        // Erica can offer real alternatives ("did you mean X or Y?") instead of
+        // dumping the entire menu. Cap at 3 defensively (CONTRACT #1) — never a
+        // long list, and NEVER the full catalog.
+        const near: Service[] = (
+          match.kind === 'ambiguous' ? match.candidates : match.closest
+        ).slice(0, 3);
+        const services = this.priceRows(near);
         logger.info(
-          { tool: 'get_prices', serviceName: payload.serviceName },
-          'No single match — returning full menu'
+          {
+            tool: 'get_prices',
+            serviceName: payload.serviceName,
+            outcome: match.kind,
+            closest: services.map((s) => s.service),
+          },
+          'No single price match — returning closest few (not full menu)'
         );
+        this.markInfoOutcome();
+        CallStore.recordToolCall(this.callSid, {
+          name: 'get_prices',
+          ok: true,
+          detail: {
+            serviceName: payload.serviceName,
+            closest: services.length,
+          },
+        });
+        return {
+          matched: false,
+          serviceName: payload.serviceName,
+          ambiguous: match.kind === 'ambiguous',
+          services, // closest few [{ service, price, durationMin }]
+        };
       }
+      // No service named at all → the caller asked broadly what we offer. This is
+      // the only path that returns the full menu.
       const services = await getServiceCatalog();
       logger.info(
         { tool: 'get_prices', count: services.length },
@@ -1230,6 +1427,10 @@ class TwilioRealtimeCall {
           found: true,
           clientId: this.prefetch.clientId,
           name: `${this.prefetch.firstName} ${this.prefetch.lastName}`.trim(),
+          // Hand the phone back so the model has the caller's real number on file
+          // and never has to ask for (or invent) one to book. Optional — omitted
+          // if we couldn't derive a clean 10-digit number.
+          ...(this.prefetch.phone ? { phone: this.prefetch.phone } : {}),
           matchedBy: 'caller-id',
         };
       }
@@ -1256,6 +1457,27 @@ class TwilioRealtimeCall {
         }
       }
 
+      // CT-7: a first name alone is not enough to identify anyone — asking Erica
+      // to search on it returns a noisy list (or a false "not found"). Signal that
+      // we need the last name so she asks for it, rather than declaring them not
+      // on file. (Only when no phone match already resolved above.)
+      if (payload.firstName && !payload.lastName) {
+        logger.info(
+          { tool: 'lookup_customer' },
+          'Lookup by first name only — need last name'
+        );
+        CallStore.recordToolCall(this.callSid, {
+          name: 'lookup_customer',
+          ok: true,
+          detail: { needLastName: true },
+        });
+        return {
+          found: false,
+          needLastName: true,
+          message: 'A first name alone is not enough — ask for the last name.',
+        };
+      }
+
       if (payload.firstName && payload.lastName) {
         const results = await phorest.lookupCustomerByName(
           payload.firstName,
@@ -1280,6 +1502,26 @@ class TwilioRealtimeCall {
           };
         }
         if (results.length > 1) {
+          // CT-2: surface up to 3 candidates WITH each one's next appointment so
+          // Erica can match on the appointment the caller describes (not just a
+          // bare count). Fetch each candidate's soonest appt concurrently but
+          // bounded, and tolerate a per-candidate failure (-> null) — one slow or
+          // failing lookup must never sink the whole disambiguation.
+          const top = results.slice(0, 3);
+          const candidates = await Promise.all(
+            top.map(async (r) => ({
+              clientId: r.clientId,
+              firstName: r.firstName,
+              lastName: r.lastName,
+              nextAppointment: await this.nextAppointmentFor(r.clientId),
+            }))
+          );
+          // The candidates' appts are now surfaced to this call — allow acting on
+          // them once the caller picks (ownership guard).
+          for (const c of candidates) {
+            if (c.nextAppointment)
+              this.servedAppointmentIds.add(c.nextAppointment.appointmentId);
+          }
           this.markInfoOutcome();
           CallStore.recordToolCall(this.callSid, {
             name: 'lookup_customer',
@@ -1290,8 +1532,19 @@ class TwilioRealtimeCall {
             found: true,
             multiple: true,
             count: results.length,
+            candidates: candidates.map((c) => ({
+              clientId: c.clientId,
+              firstName: c.firstName,
+              lastName: c.lastName,
+              nextAppointment: c.nextAppointment
+                ? {
+                    date: c.nextAppointment.date,
+                    time: c.nextAppointment.time,
+                  }
+                : null,
+            })),
             message:
-              'Multiple matches — ask for appointment date/time to disambiguate',
+              'Multiple matches — ask which appointment is theirs to disambiguate',
           };
         }
       }
@@ -1480,6 +1733,13 @@ class TwilioRealtimeCall {
       }
 
       this.transferring = true;
+      // RT-6: Erica just spoke the "let me get Richa for you" line in her own
+      // voice, but that audio is still sitting in Twilio's outbound buffer. If we
+      // fire the REST redirect immediately the <Dial> cuts the sentence off
+      // mid-word. Wait for the mark queue to drain (i.e. Twilio finished playing
+      // the handoff line) before redirecting — capped so a stuck queue can't hang
+      // the transfer. (The Polly <Say> was already removed — do NOT re-add it.)
+      await this.waitForPlaybackToDrain(3000);
       // Erica has already spoken the handoff line in her own voice, so go
       // straight to <Dial> — no Polly <Say> (a jarring mid-call voice switch).
       await client.calls(this.callSid).update({
@@ -1525,6 +1785,81 @@ class TwilioRealtimeCall {
   }
 
   /**
+   * RT-6: resolve once Twilio has finished playing the current outbound audio
+   * (the mark queue has drained), or after `capMs` — whichever comes first. Used
+   * before the transfer redirect so the "let me get Richa for you" line isn't cut
+   * off mid-sentence by the <Dial>. Polls cheaply; never rejects.
+   */
+  private waitForPlaybackToDrain(capMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      if (this.markQueue.length === 0 || this.closed) {
+        resolve();
+        return;
+      }
+      const started = Date.now();
+      const timer = setInterval(() => {
+        if (
+          this.markQueue.length === 0 ||
+          this.closed ||
+          Date.now() - started >= capMs
+        ) {
+          clearInterval(timer);
+          resolve();
+        }
+      }, 50);
+    });
+  }
+
+  /** 10-digit US phone (strip non-digits + a leading country 1). null if unusable. */
+  private normalizePhone(raw?: string): string | undefined {
+    if (!raw) return undefined;
+    let digits = raw.replace(/\D/g, '');
+    if (digits.length === 11 && digits.startsWith('1'))
+      digits = digits.slice(1);
+    return digits.length === 10 ? digits : undefined;
+  }
+
+  /**
+   * CT-2: fetch a candidate's SOONEST upcoming appointment as clean, spoken
+   * fields for name disambiguation. listAppointments is already sorted soonest-
+   * first, so we take [0]. Best-effort — any failure returns null so one bad
+   * candidate never breaks the whole multi-match response.
+   */
+  private async nextAppointmentFor(
+    clientId: string
+  ): Promise<{ appointmentId: string; date: string; time: string } | null> {
+    try {
+      const appts = await phorest.listAppointments(clientId);
+      const soonest = appts[0];
+      if (!soonest) return null;
+      return {
+        appointmentId: soonest.appointmentId,
+        date: soonest.date,
+        time: soonest.timeDisplay,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * CT-5: map catalog Services to the same clean price rows getServiceCatalog
+   * emits (drop "3) " menu prefixes, skip $0/0-min admin entries) so a "closest
+   * few" price response reads identically to a single hit — just a short list.
+   */
+  private priceRows(
+    services: Service[]
+  ): Array<{ service: string; price: number; durationMin: number }> {
+    return services
+      .filter((s) => s.price > 0 || s.durationMin > 0)
+      .map((s) => ({
+        service: s.name.replace(/^\s*\d+[a-z]?\)\s*/i, '').trim(),
+        price: s.price,
+        durationMin: s.durationMin,
+      }));
+  }
+
+  /**
    * Mark the call outcome as "info" (a lookup/hours/price/list happened) but only
    * while it's still the default — never downgrade a write outcome like "booked".
    */
@@ -1533,13 +1868,27 @@ class TwilioRealtimeCall {
   }
 
   private async handleError(error: Error) {
+    // handleError now only receives genuinely-fatal errors — the OpenAI session
+    // (Lane B) softens recoverable glitches and escalates only fatals/breaker
+    // trips/unhealthy connections. So every error that reaches here warrants the
+    // graceful owner failover.
     logger.error(
       { err: error, streamSid: this.streamSid },
       'Twilio realtime call error'
     );
-    // Don't leave the caller on a dead line: best-effort redirect the live call
-    // to the salon owner before we tear down. Guard so we only try once and a
-    // failure here can NEVER re-enter handleError (mark transferring first).
+    await this.failoverToOwner('fatal error');
+  }
+
+  /**
+   * RT-1: don't leave the caller on a dead line. Best-effort redirect the live
+   * call to the salon owner (with a brief apology, since the caller heard nothing
+   * from us), then tear down. Shared by handleError (fatal) and the OpenAI
+   * onClose handler (unexpected drop). Idempotent: the transferring guard means a
+   * failure here can NEVER re-enter, and a deliberate transfer already ran won't
+   * double-redirect. Marks transferring FIRST so cleanup()→session.close() can't
+   * re-trigger onClose into a second failover.
+   */
+  private async failoverToOwner(reason: string) {
     const client = getTwilioClient();
     if (client && this.callSid && !this.closed && !this.transferring) {
       this.transferring = true;
@@ -1548,13 +1897,13 @@ class TwilioRealtimeCall {
           twiml: `<Response><Say voice="Polly.Joanna-Neural">I'm so sorry, I'm having a technical problem — let me connect you with the salon.</Say><Dial>${env.OWNER_PHONE}</Dial></Response>`,
         });
         logger.info(
-          { streamSid: this.streamSid, callSid: this.callSid },
-          'Fatal error — call redirected to owner'
+          { streamSid: this.streamSid, callSid: this.callSid, reason },
+          'Call redirected to owner (failover)'
         );
       } catch (redirectErr) {
         logger.error(
-          { err: redirectErr, streamSid: this.streamSid },
-          'Failed to redirect call to owner after fatal error'
+          { err: redirectErr, streamSid: this.streamSid, reason },
+          'Failed to redirect call to owner after failover'
         );
       }
     }
@@ -1575,7 +1924,9 @@ class TwilioRealtimeCall {
         outcome: this.outcome,
       });
     }
-    this.session.close();
+    // session may be undefined if the socket errored/closed before Twilio's
+    // "start" event ever built it — guard so cleanup never throws.
+    this.session?.close();
     try {
       if (this.socket.readyState === WebSocket.OPEN) {
         this.socket.close();
