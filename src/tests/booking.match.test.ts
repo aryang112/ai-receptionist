@@ -61,4 +61,23 @@ describe('resolveService — live-verified traps (against the mock catalog)', ()
       'Lip Threading'
     );
   });
+
+  // F4 — spec-mandated cases the defects swarm skipped.
+  it('"micro blading" (split compound) resolves to Microblading, not a dead end', async () => {
+    const r = await resolveService('micro blading');
+    expect(r.kind).toBe('match');
+    if (r.kind === 'match') expect(r.service.name).toMatch(/microblading/i);
+  });
+
+  it('"massage" (not offered here) -> notOffered', async () => {
+    const r = await resolveService('massage');
+    expect(r.kind).toBe('notOffered');
+  });
+
+  it('never returns more than 3 ambiguous candidates ("threading")', async () => {
+    const r = await resolveService('threading');
+    if (r.kind === 'ambiguous') {
+      expect(r.candidates.length).toBeLessThanOrEqual(3);
+    }
+  });
 });

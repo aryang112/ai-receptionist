@@ -99,6 +99,7 @@ type AppointmentResponse = {
   state?: string;
   activationState?: string;
   clientId?: string;
+  duration?: number; // minutes; used to derive end when endTime is absent (F10a)
 };
 
 type AppointmentListResponse = {
@@ -475,9 +476,15 @@ async function loadServices(): Promise<Map<string, ServiceDetailResponse>> {
     // the caller. Serve the copy we still hold (warn once per failure); only a
     // TRULY cold cache (never loaded) re-throws.
     if (serviceCache) {
+      // F9: back off before retrying — otherwise EVERY get_prices/availability
+      // call during a Phorest outage re-attempts a full (2x4s) refresh, i.e.
+      // ~8s of dead air per tool call. Push serviceCacheAt forward so we serve
+      // the stale copy for ~60s before trying again.
+      const REFRESH_BACKOFF_MS = 60_000;
+      serviceCacheAt = Date.now() - SERVICE_CACHE_TTL_MS + REFRESH_BACKOFF_MS;
       logger.warn(
         { err: String(err) },
-        'Service catalog refresh failed — serving stale cached copy'
+        'Service catalog refresh failed — serving stale cached copy (retry in ~60s)'
       );
       return serviceCache;
     }
@@ -572,12 +579,20 @@ async function findClientIdByName(
   const clients = response._embedded?.clients ?? [];
   const wantFirst = firstName.trim().toLowerCase();
   const wantLast = lastName.trim().toLowerCase();
-  const match = clients.find((c) => {
+  const matches = clients.filter((c) => {
     const first = (c.firstName ?? '').trim().toLowerCase();
     const last = (c.lastName ?? '').trim().toLowerCase();
     return first === wantFirst && (!wantLast || last === wantLast);
   });
-  return match?.clientId;
+  // F10j: more than one client with the same name — we pick the first, but make
+  // the ambiguity visible (booking could land on the wrong same-named record).
+  if (matches.length > 1) {
+    logger.warn(
+      { firstName: wantFirst, matchCount: matches.length },
+      'Multiple clients share this name — using the first (name lookup is ambiguous)'
+    );
+  }
+  return matches[0]?.clientId;
 }
 
 async function createClient(customer: {
@@ -612,9 +627,17 @@ async function createClient(customer: {
 
   // Keep the in-memory phone index hot: a caller who books a new profile and
   // calls back in the same process should resolve instantly without a re-scan.
+  // F5: NEVER overwrite an existing entry. On a shared/family number the A5
+  // guard creates a second profile (e.g. the daughter) that carries the same
+  // phone; overwriting would make the original owner's (mom's) next call
+  // prefetch the wrong person. First writer for a number wins.
   if (clientPhoneIndex && phone) {
     const normalized = normalizePhone(phone);
-    if (normalized && normalized.length >= 7) {
+    if (
+      normalized &&
+      normalized.length >= 7 &&
+      !clientPhoneIndex.has(normalized)
+    ) {
       clientPhoneIndex.set(normalized, {
         clientId: response.clientId,
         firstName,
@@ -1077,10 +1100,15 @@ export const realPhorest: PhorestPort = {
         const start = DateTime.fromISO(`${a.appointmentDate}T${a.startTime}`, {
           zone: SALON_TIMEZONE,
         });
-        const endRaw = a.endTime ?? a.startTime;
-        const end = DateTime.fromISO(`${a.appointmentDate}T${endRaw}`, {
-          zone: SALON_TIMEZONE,
-        });
+        // F10a: when the API omits endTime, derive it from the service duration
+        // (fallback 60m) rather than collapsing to startTime — otherwise a
+        // still-running appointment (especially a long one) looks 0-length and
+        // is wrongly dropped by the "end >= now" filter.
+        const end = a.endTime
+          ? DateTime.fromISO(`${a.appointmentDate}T${a.endTime}`, {
+              zone: SALON_TIMEZONE,
+            })
+          : start.plus({ minutes: a.duration ?? 60 });
         return { a, start, end };
       })
       .filter(
@@ -1091,13 +1119,13 @@ export const realPhorest: PhorestPort = {
       )
       .sort((x, y) => x.start.toMillis() - y.start.toMillis())
       .slice(0, 5)
-      .map(({ a, start }) => ({
+      .map(({ a, start, end }) => ({
         appointmentId: a.appointmentId,
         serviceName: a.serviceName ?? 'Appointment',
         date: start.toISODate()!,
         timeDisplay: start.toFormat('h:mm a'),
         startTimeRaw: a.startTime,
-        endTimeRaw: a.endTime ?? a.startTime,
+        endTimeRaw: a.endTime ?? end.toFormat('HH:mm:ss'),
       }));
   },
 

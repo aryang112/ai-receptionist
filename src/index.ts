@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import { metadata } from './routes/metadata.js';
 import { twilioVoice } from './routes/twilio.js';
 import { setupTwilioRealtimeStream } from './realtime/twilioStream.js';
+import { warnStaleAliases } from './services/booking.js';
 import { rateLimiter } from './middleware/rateLimit.js';
 import { assertWsAuthConfigured } from './security/wsAuth.js';
 import { env } from './config/env.js';
@@ -84,7 +85,11 @@ server.listen(PORT, () => {
   // Warm the service catalog too, so the live price menu is ready before the
   // first call and the first availability check isn't a cold load.
   phorest.listServices().then(
-    (s) => logger.info({ serviceCount: s.length }, 'Service catalog warmed'),
+    (s) => {
+      logger.info({ serviceCount: s.length }, 'Service catalog warmed');
+      // Flag any service alias that no longer resolves against the live catalog.
+      void warnStaleAliases();
+    },
     (err) =>
       logger.warn(
         { err: String(err) },

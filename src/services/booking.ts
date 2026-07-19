@@ -1,6 +1,7 @@
 // src/services/booking.ts
 import { z } from 'zod';
 import { phorest } from './phorest.js';
+import { logger } from '../core/logger.js';
 import type { Service } from './phorest.types.js';
 
 export const SuggestSchema = z.object({
@@ -113,6 +114,28 @@ export async function resolveService(name: string): Promise<ServiceMatch> {
     });
 
   if (scored.length === 0) {
+    // F4: split compound words ("micro blading") share no WHOLE token with a
+    // catalog entry like "Microblading Consult". Before giving up, retry with
+    // the query's spaces collapsed so a split compound can match a single
+    // catalog token — this is the "micro blading -> dead end while Microblading
+    // exists" trap. (>2 chars so we don't collapse trivially.)
+    const collapsed = queryTokens.join('');
+    if (collapsed.length > 2) {
+      const hits = [
+        ...new Map(
+          services
+            .filter((s) =>
+              tokens(s.name).some(
+                (t) => t === collapsed || t.includes(collapsed)
+              )
+            )
+            .map((s) => [s.id, s])
+        ).values(),
+      ];
+      if (hits.length === 1) return { kind: 'match', service: hits[0]! };
+      if (hits.length > 1)
+        return { kind: 'ambiguous', candidates: hits.slice(0, 3) };
+    }
     // Nothing contained every query token — surface the closest few by how many
     // query tokens they share, so Erica can offer real alternatives.
     const closest = services
@@ -141,7 +164,7 @@ export async function resolveService(name: string): Promise<ServiceMatch> {
     if (fullyNamed.length > 1) {
       return {
         kind: 'ambiguous',
-        candidates: fullyNamed.map((x) => x.service),
+        candidates: fullyNamed.slice(0, 3).map((x) => x.service),
       };
     }
     return { kind: 'match', service: top.service };
@@ -154,12 +177,36 @@ export async function resolveService(name: string): Promise<ServiceMatch> {
   if (distinct.size > 1) {
     return {
       kind: 'ambiguous',
-      candidates: [...distinct.values()].map((x) => x.service),
+      candidates: [...distinct.values()].slice(0, 3).map((x) => x.service),
     };
   }
 
   // A single service contains the fragment — resolve to it.
   return { kind: 'match', service: top.service };
+}
+
+/**
+ * Alias-rot detector (F4 bonus): warn at boot for any SERVICE_ALIASES target
+ * that no longer resolves against the live catalog — a renamed/removed service
+ * silently turns an alias into a dead end. Best-effort; never throws.
+ */
+export async function warnStaleAliases(): Promise<void> {
+  try {
+    const services = await phorest.listServices();
+    const names = new Set(services.map((s) => normalize(s.name)));
+    const targets = new Set(Object.values(SERVICE_ALIASES));
+    const stale = [...targets].filter(
+      (t) => !names.has(t) && ![...names].some((n) => tokens(n).includes(t))
+    );
+    if (stale.length) {
+      logger.warn(
+        { staleAliasTargets: stale },
+        'SERVICE_ALIASES targets no longer resolve against the live catalog (alias rot)'
+      );
+    }
+  } catch {
+    /* boot-time diagnostic only — never block startup */
+  }
 }
 
 // Thin wrapper kept for callers that only need the resolved Service (or
