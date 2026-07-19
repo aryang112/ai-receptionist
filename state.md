@@ -3,6 +3,31 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-07-19 — Defects swarm (DONE, committed, NOT pushed) — ⚠️ NEEDS LIVE SMOKE TEST
+13-agent A∥B→C swarm (`tasks/swarm-defects.mjs`) fixed the `docs/DEFECTS_2026-07-19.md`
+functional/correctness audit. `tsc` clean, **78/78 vitest** (was 39), green under
+`TZ=UTC`. Adversarial review across 4 dimensions → **0 must-fix** (it CONFIRMED the
+barge-in invariant, bounded/once-flushed media buffer, capped transfer timing, no
+dropped safety rules). 3 lane commits + 1 low-sev follow-up (activeResponse reset).
+- **Lane A (Phorest/booking):** PH-4 idempotent retries (no double-book), PH-1 index
+  promise reset, PH-2/3 appt window (finds late + 5-week-out appts), PH-5 matcher
+  rewrite (ambiguous/notOffered; "wax" no longer silent-picks), PH-6/7/8, CF-4
+  fail-fast, CT-9 doc-rot, CT-1 clientId booking + shared-phone/name guard.
+- **Lane B (openaiSession):** RT-1 onClose teardown (no zombie calls), RT-2 defer
+  response.create (no interrupt-during-tool drop), RT-3 stop fatalizing recoverable
+  errors, RT-5 failed-response retry, RT-7 stray-delta gating, RT-9 call-tagged logs.
+  Structural only — session.update untouched, no guessed error strings.
+- **Lane C (twilioStream):** consume matcher union (notOffered/ambiguous, no full-menu
+  dump), CT-1/CT-2 identity threading + name disambiguation, RT-1 onClose→failover,
+  RT-4 barge-in tail, RT-8 pre-ready media buffer, RT-6 transfer timing, CT-3/6/7/10.
+- **⚠️ THE BEHAVIORAL FIXES (RT-2/RT-4/RT-5) NEED A LIVE SMOKE TEST** — compile/tests/
+  logic verified, but real audio timing can't be proven offline. Run the scenario→
+  defect map at the bottom of `docs/DEFECTS_2026-07-19.md` (interrupt-during-tool,
+  interrupt-near-end-of-list, running-late-after-start, "book a wax", etc.).
+- **Still deferred:** PH-9 name-fuzzy + PH-6/PH-11 full verify (need live probe), B0
+  live error-code capture (nice-to-have precise fast-path), CF-1 2026 closedDates
+  (OWNER data), semantic_vad / Spanish / SMS features.
+
 ## 2026-07-19 — Security-hardening swarm (DONE, committed, NOT pushed)
 20-agent file-partitioned swarm (`tasks/swarm-hardening.mjs`) completed Phases
 0–3 + call persistence (4.1) from `tasks/todo.md`. `tsc` clean, **39/39 vitest**
@@ -30,8 +55,8 @@ PLAN.md secret). 3 local commits on `feat/erica-v2`.
   soak. semantic_vad / Spanish / SMS still need live validation.
 
 ## Current status
-- **Branch:** `feat/erica-v2` (NOT merged to main). ~30 commits of fixes.
-- **Build/tests:** `tsc` clean, **39/39 vitest** green. Run `npm test` after every change.
+- **Branch:** `feat/erica-v2` (NOT merged to main). ~34 commits of fixes.
+- **Build/tests:** `tsc` clean, **78/78 vitest** green (also under `TZ=UTC`). Run `npm test` after every change.
 - **Runtime:** `npm run dev` (tsx watch, auto-reloads on save) → server on :5050.
   `USE_MOCK_PHOREST=false` (real Phorest in `.env`). Voice = **cedar**, model = **gpt-realtime**.
 - The core loop WORKS end-to-end on real calls: greet, book, reschedule, cancel,
