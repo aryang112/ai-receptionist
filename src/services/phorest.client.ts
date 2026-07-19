@@ -111,7 +111,16 @@ type ServiceDetailResponse = ServiceRecord & {
   price?: number;
 };
 
-type RequestOptions = RequestInit & { expectEmpty?: boolean };
+type RequestOptions = RequestInit & {
+  expectEmpty?: boolean;
+  // Whether a network/timeout/5xx failure may be safely retried. Defaults to
+  // (method === 'GET') — i.e. idempotent reads only. NON-idempotent writes
+  // (booking POST, client POST, appointment PUT, cancel POST) must pass false /
+  // leave it default-false: a timed-out write that actually succeeded server-side
+  // would DOUBLE-BOOK / duplicate a client if we retried it. Read-only POSTs
+  // (availability) may opt back in with retriable: true.
+  retriable?: boolean;
+};
 
 // ⏰ PHOREST TIMEZONE CONVENTION (learned the hard way — read before touching times):
 //  - GET /appointment returns times in salon-LOCAL time (e.g. "12:45:00" = 12:45 PM local).
@@ -191,7 +200,12 @@ async function phorestFetch<T = unknown>(
 ): Promise<T> {
   assertEnv();
   const url = new URL(path, baseUrl());
-  const { expectEmpty, ...init } = options;
+  const { expectEmpty, retriable, ...init } = options;
+  // Only idempotent requests may be retried. Default: GETs. Any write must opt
+  // out (default-false for non-GET) to avoid a duplicate on a timed-out-but-
+  // -succeeded write.
+  const method = (init.method ?? 'GET').toUpperCase();
+  const canRetry = retriable ?? method === 'GET';
   const headers = new Headers(init.headers);
   headers.set('Accept', 'application/json');
   if (init.body && !headers.has('Content-Type')) {
@@ -202,10 +216,12 @@ async function phorestFetch<T = unknown>(
     `Basic ${Buffer.from(`${env.PHOREST_API_USERNAME}:${env.PHOREST_API_SECRET}`).toString('base64')}`
   );
 
-  // Up to 2 attempts: retry once on a network/timeout error or a 5xx.
-  // Never retry a 4xx (it's a deterministic client error — retrying just wastes the caller's time).
+  // Up to 2 attempts: retry once on a network/timeout error or a 5xx — but ONLY
+  // for idempotent requests (canRetry). Never retry a 4xx (deterministic client
+  // error). Never retry a write (a timed-out booking may have succeeded).
+  const maxAttempts = canRetry ? 2 : 1;
   let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const response = await fetch(url, {
         ...init,
@@ -216,7 +232,7 @@ async function phorestFetch<T = unknown>(
       if (!response.ok) {
         const text = await response.text().catch(() => '');
         const redacted = text.slice(0, 500);
-        if (response.status >= 500 && attempt === 0) {
+        if (response.status >= 500 && canRetry && attempt === 0) {
           lastError = new PhorestHttpError(
             response.status,
             `Phorest request failed with ${response.status}`,
@@ -256,9 +272,10 @@ async function phorestFetch<T = unknown>(
     } catch (error) {
       // PhorestHttpError for 4xx is already final; rethrow immediately.
       if (error instanceof PhorestHttpError) throw error;
-      // Network error or timeout (AbortError) — retry once, then give up.
+      // Network error or timeout (AbortError) — retry once for reads, then give
+      // up. Writes are never retried (canRetry === false) to avoid a duplicate.
       lastError = error;
-      if (attempt === 0) {
+      if (canRetry && attempt === 0) {
         logger.warn(
           { url: url.toString(), err: String(error) },
           'Phorest request error — retrying once'
@@ -283,6 +300,12 @@ let clientPhoneIndexLoading: Promise<Map<string, ClientRecord>> | null = null;
 let clientPhoneIndexAt = 0;
 // Guards against firing overlapping background reloads.
 let clientPhoneIndexReloading = false;
+// Set when a client-list page failed (post-retry) during an index build, so the
+// index is missing some clients (a caller on a dropped page won't be recognized
+// → risk of a duplicate profile at booking). Warned about once per process to
+// avoid log spam; behavior is otherwise unchanged.
+let clientIndexIncomplete = false;
+let clientIndexIncompleteWarned = false;
 
 // The client list changes slowly, but a long-running process must not serve a
 // stale phone index forever (a client added today would never resolve). After
@@ -303,8 +326,10 @@ async function buildClientPhoneIndex(): Promise<Map<string, ClientRecord>> {
   const clientPath = (page: number) =>
     `api/business/${env.PHOREST_BUSINESS_ID}/client?size=200&page=${page}`;
 
+  let pageFailed = false;
   const fetchPage = (page: number) =>
     phorestFetch<ClientResponse>(clientPath(page)).catch((err) => {
+      pageFailed = true;
       logger.warn(
         { page, err: String(err) },
         'Client index page failed — skipping'
@@ -332,11 +357,31 @@ async function buildClientPhoneIndex(): Promise<Map<string, ClientRecord>> {
     }
   }
 
+  // If any page dropped, flag the index as incomplete (warn once). We still
+  // serve what we have — a partial index is better than none — but a caller on
+  // a missing page won't resolve, so the risk of a duplicate profile at booking
+  // is knowable rather than silent.
+  clientIndexIncomplete = pageFailed;
+  if (pageFailed && !clientIndexIncompleteWarned) {
+    clientIndexIncompleteWarned = true;
+    logger.warn(
+      { pages: totalPages },
+      'Client phone index INCOMPLETE — at least one page failed after retry; some callers may not be recognized'
+    );
+  }
+
   logger.info(
-    { clientCount: index.size, pages: totalPages },
+    { clientCount: index.size, pages: totalPages, incomplete: pageFailed },
     'Client phone index loaded'
   );
   return index;
+}
+
+// True when the last-built client phone index dropped at least one page and so
+// is missing some clients. Exposed for observability/health checks; the booking
+// path is unchanged (we still serve the partial index).
+export function isClientIndexIncomplete(): boolean {
+  return clientIndexIncomplete;
 }
 
 // Fire-and-forget refresh: rebuilds the index off the request path and swaps it
@@ -373,11 +418,19 @@ async function loadClientPhoneIndex(): Promise<Map<string, ClientRecord>> {
   if (clientPhoneIndexLoading) return clientPhoneIndexLoading;
 
   clientPhoneIndexLoading = (async () => {
-    const index = await buildClientPhoneIndex();
-    clientPhoneIndex = index;
-    clientPhoneIndexAt = Date.now();
-    clientPhoneIndexLoading = null;
-    return index;
+    try {
+      const index = await buildClientPhoneIndex();
+      clientPhoneIndex = index;
+      clientPhoneIndexAt = Date.now();
+      return index;
+    } finally {
+      // ALWAYS clear the in-flight promise — success OR failure. If a single
+      // boot-time load rejected (a Phorest blip) and we left the rejected
+      // promise cached, every later lookup AND booking (getOrCreateClient ->
+      // findClientRecordByPhone) would keep re-throwing that same failure for
+      // the life of the process. Clearing it lets the next call retry cleanly.
+      clientPhoneIndexLoading = null;
+    }
   })();
 
   return clientPhoneIndexLoading;
@@ -396,25 +449,40 @@ async function loadServices(): Promise<Map<string, ServiceDetailResponse>> {
     return serviceCache;
   }
 
-  const results = new Map<string, ServiceDetailResponse>();
-  let page = 0;
-  while (true) {
-    const response = await phorestFetch<ServiceResponse>(
-      businessBranchPath(`/service?size=100&page=${page}`)
-    );
-    const services = response._embedded?.services ?? [];
-    for (const svc of services) {
-      if (svc.archived) continue;
-      results.set(svc.serviceId, svc);
+  try {
+    const results = new Map<string, ServiceDetailResponse>();
+    let page = 0;
+    while (true) {
+      const response = await phorestFetch<ServiceResponse>(
+        businessBranchPath(`/service?size=100&page=${page}`)
+      );
+      const services = response._embedded?.services ?? [];
+      for (const svc of services) {
+        if (svc.archived) continue;
+        results.set(svc.serviceId, svc);
+      }
+      const totalPages = response.page?.totalPages ?? 1;
+      if (page >= totalPages - 1) break;
+      page += 1;
     }
-    const totalPages = response.page?.totalPages ?? 1;
-    if (page >= totalPages - 1) break;
-    page += 1;
-  }
 
-  serviceCache = results;
-  serviceCacheAt = Date.now();
-  return results;
+    serviceCache = results;
+    serviceCacheAt = Date.now();
+    return results;
+  } catch (err) {
+    // A TTL-EXPIRED refresh that fails must not blow up mid-call: prices/services
+    // change rarely, so a slightly-stale catalog is far better than throwing at
+    // the caller. Serve the copy we still hold (warn once per failure); only a
+    // TRULY cold cache (never loaded) re-throws.
+    if (serviceCache) {
+      logger.warn(
+        { err: String(err) },
+        'Service catalog refresh failed — serving stale cached copy'
+      );
+      return serviceCache;
+    }
+    throw err;
+  }
 }
 
 async function loadService(
@@ -481,11 +549,35 @@ async function findClientByEmail(email: string): Promise<string | undefined> {
   return response._embedded?.clients?.[0]?.clientId;
 }
 
-async function findClientByPhone(phone: string): Promise<string | undefined> {
+async function findClientRecordByPhone(
+  phone: string
+): Promise<ClientRecord | undefined> {
   const normalized = normalizePhone(phone);
   if (!normalized || normalized.length < 7) return undefined;
   const index = await loadClientPhoneIndex();
-  return index.get(normalized)?.clientId;
+  return index.get(normalized);
+}
+
+// Name lookup used as a fallback when a phone match belongs to a DIFFERENT
+// person (shared/family number). Returns the first client whose first+last name
+// matches case-insensitively, else undefined.
+async function findClientIdByName(
+  firstName: string,
+  lastName: string
+): Promise<string | undefined> {
+  if (!firstName) return undefined;
+  const response = await phorestFetch<ClientResponse>(
+    `api/business/${env.PHOREST_BUSINESS_ID}/client?firstName=${encodeURIComponent(firstName)}${lastName ? `&lastName=${encodeURIComponent(lastName)}` : ''}&size=10`
+  );
+  const clients = response._embedded?.clients ?? [];
+  const wantFirst = firstName.trim().toLowerCase();
+  const wantLast = lastName.trim().toLowerCase();
+  const match = clients.find((c) => {
+    const first = (c.firstName ?? '').trim().toLowerCase();
+    const last = (c.lastName ?? '').trim().toLowerCase();
+    return first === wantFirst && (!wantLast || last === wantLast);
+  });
+  return match?.clientId;
 }
 
 async function createClient(customer: {
@@ -547,10 +639,28 @@ async function getOrCreateClient(customer: {
     if (existing) return existing;
   }
 
+  const { firstName: wantFirst, lastName: wantLast } = splitName(customer.name);
+
   const phone = sanitisePhone(customer.phone);
   if (phone) {
-    const existing = await findClientByPhone(phone);
-    if (existing) return existing;
+    const record = await findClientRecordByPhone(phone);
+    if (record) {
+      // Only reuse the phone match if the caller's name is consistent with the
+      // record. On a SHARED/FAMILY number, blindly reusing the phone owner books
+      // the wrong person (name silently discarded) — and the booking is then
+      // invisible to a later "when's my appointment?" under the real name. If a
+      // firstName was provided and does NOT match, fall through to name lookup,
+      // then create a fresh profile. (No name provided -> keep old behavior.)
+      const recFirst = (record.firstName ?? '').trim().toLowerCase();
+      const provided = wantFirst.trim().toLowerCase();
+      const nameMatches =
+        !provided || provided === 'guest' || recFirst === provided;
+      if (nameMatches) return record.clientId;
+
+      const byName = await findClientIdByName(wantFirst, wantLast);
+      if (byName) return byName;
+      return createClient(customer);
+    }
   }
 
   return createClient(customer);
@@ -591,30 +701,12 @@ async function pickStaffId(
   return staffId;
 }
 
-async function fetchAppointment(
-  appointmentId: string
+// Scan one updated_from..updated_to window (paged) for a specific appointment.
+async function scanAppointmentWindow(
+  appointmentId: string,
+  updatedFrom: string,
+  updatedTo: string
 ): Promise<AppointmentResponse | undefined> {
-  // Fast path: fetch the single appointment by ID directly (1 round-trip).
-  // The history scan below is a fallback only if the direct lookup isn't
-  // available on this tenant — it can cost up to 10 sequential round-trips.
-  try {
-    const direct = await phorestFetch<AppointmentResponse>(
-      businessBranchPath(`/appointment/${appointmentId}`)
-    );
-    if (direct?.appointmentId) return direct;
-  } catch (error) {
-    logger.warn(
-      { appointmentId, err: String(error) },
-      'Direct appointment fetch failed — falling back to history scan'
-    );
-  }
-
-  const now = new Date();
-  const updatedTo = now.toISOString();
-  const updatedFrom = new Date(
-    now.getTime() - 30 * 24 * 60 * 60 * 1000
-  ).toISOString();
-
   let page = 0;
   while (page < 10) {
     const response = await phorestFetch<AppointmentListResponse>(
@@ -632,6 +724,53 @@ async function fetchAppointment(
     const totalPages = response.page?.totalPages ?? 1;
     if (page >= totalPages - 1) break;
     page += 1;
+  }
+  return undefined;
+}
+
+async function fetchAppointment(
+  appointmentId: string
+): Promise<AppointmentResponse | undefined> {
+  // Fast path: fetch the single appointment by ID directly (1 round-trip).
+  // GATED OFF by default: on this tenant GET /appointment/{id} ALWAYS 404s, so
+  // the direct call is pure mid-call latency + a guaranteed error before we fall
+  // back to the scan. Flip PHOREST_DIRECT_GET_APPT=true only on a tenant where
+  // the direct GET actually resolves.
+  if (env.PHOREST_DIRECT_GET_APPT) {
+    try {
+      const direct = await phorestFetch<AppointmentResponse>(
+        businessBranchPath(`/appointment/${appointmentId}`)
+      );
+      if (direct?.appointmentId) return direct;
+    } catch (error) {
+      logger.warn(
+        { appointmentId, err: String(error) },
+        'Direct appointment fetch failed — falling back to history scan'
+      );
+    }
+  }
+
+  // Scan appointments UPDATED in the last ~60 days as two sequential windows.
+  // Phorest caps a single updated range at 31 days, so one 30-day window would
+  // miss anything last touched 5+ weeks ago (a long-standing booking being
+  // rescheduled). Two 30-day windows widen the reach without breaching the cap.
+  const now = Date.now();
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const windows: Array<[string, string]> = [
+    [new Date(now - 30 * DAY_MS).toISOString(), new Date(now).toISOString()],
+    [
+      new Date(now - 60 * DAY_MS).toISOString(),
+      new Date(now - 30 * DAY_MS).toISOString(),
+    ],
+  ];
+
+  for (const [updatedFrom, updatedTo] of windows) {
+    const match = await scanAppointmentWindow(
+      appointmentId,
+      updatedFrom,
+      updatedTo
+    );
+    if (match) return match;
   }
 
   return undefined;
@@ -657,6 +796,8 @@ export const realPhorest: PhorestPort = {
       businessBranchPath('/appointments/availability'),
       {
         method: 'POST',
+        // Availability is a read-only query despite being a POST — safe to retry.
+        retriable: true,
         body: JSON.stringify({
           startTime: toPhorestIso(start),
           endTime: toPhorestIso(end),
@@ -702,7 +843,7 @@ export const realPhorest: PhorestPort = {
       .sort();
   },
 
-  async createAppointment(serviceId, startIso, customer) {
+  async createAppointment(serviceId, startIso, customer, clientId?: string) {
     const service = await loadService(serviceId);
     if (!service) {
       throw new Error(`Service ${serviceId} not found in Phorest`);
@@ -711,15 +852,18 @@ export const realPhorest: PhorestPort = {
     const start = parseSalonDateTime(startIso);
     const end = start.plus({ minutes: service.duration ?? 0 });
 
-    // These two are independent — resolve them concurrently to shave a
-    // round-trip off the booking the caller is waiting on.
-    const [clientId, staffId] = await Promise.all([
-      getOrCreateClient(customer),
+    // If the caller is a KNOWN account (recognized by caller ID) the orchestrator
+    // hands us their clientId directly — book against it and SKIP the phone/name
+    // resolution entirely. This is the deterministic fix for the "recognized
+    // caller" path: no phone needed, no duplicate profile, no wrong-record match.
+    // Only when no clientId is supplied do we resolve by email/phone/name.
+    const [resolvedClientId, staffId] = await Promise.all([
+      clientId ? Promise.resolve(clientId) : getOrCreateClient(customer),
       pickStaffId(serviceId, service.disqualifiedStaff ?? []),
     ]);
 
     const payload = {
-      clientId,
+      clientId: resolvedClientId,
       // Create the booking ACTIVE, not as a RESERVED/held hold. Phorest's
       // booking lifecycle is ACTIVE|RESERVED|CANCELED; a RESERVED booking can
       // render as a white, uneditable block in the Phorest calendar. (If a
@@ -728,7 +872,7 @@ export const realPhorest: PhorestPort = {
       bookingStatus: 'ACTIVE',
       clientAppointmentSchedules: [
         {
-          clientId,
+          clientId: resolvedClientId,
           serviceSchedules: [
             {
               serviceId,
@@ -871,29 +1015,57 @@ export const realPhorest: PhorestPort = {
     clientId: string,
     fromDate?: string
   ): Promise<AppointmentSummary[]> {
-    const today =
-      fromDate ?? DateTime.now().setZone(SALON_TIMEZONE).toISODate()!;
-    // Phorest requires both from_date and to_date AND caps the range at 31 days
-    // ("Max date range allowed is 31 days"). Use 30 to stay safely under it.
-    const toDate = DateTime.fromISO(today).plus({ days: 30 }).toISODate()!;
+    const startDate = DateTime.fromISO(
+      fromDate ?? DateTime.now().setZone(SALON_TIMEZONE).toISODate()!,
+      { zone: SALON_TIMEZONE }
+    );
+    // Phorest requires both from_date and to_date AND caps a single request at
+    // 31 days ("Max date range allowed is 31 days"). A single 30-day window
+    // hides appointments 5+ weeks out — the caller then hears "no upcoming
+    // appointments" and gets offered a DUPLICATE booking. Cover ~60 days with
+    // two sequential <=30-day windows and concatenate the results.
+    const windows: Array<[string, string]> = [
+      [startDate.toISODate()!, startDate.plus({ days: 30 }).toISODate()!],
+      [
+        startDate.plus({ days: 30 }).toISODate()!,
+        startDate.plus({ days: 60 }).toISODate()!,
+      ],
+    ];
+
     // CRITICAL: the param is snake_case `client_id`. The camelCase `clientId`
     // is silently IGNORED by Phorest and returns EVERY client's appointments
     // (a privacy leak + wrong-client reschedule/cancel risk). We also re-filter
     // by clientId client-side as defense-in-depth.
-    const response = await phorestFetch<AppointmentListResponse>(
-      businessBranchPath(
-        `/appointment?client_id=${encodeURIComponent(clientId)}&from_date=${today}&to_date=${toDate}&size=20`
-      )
-    );
+    const raw: AppointmentResponse[] = [];
+    const seen = new Set<string>();
+    for (const [from, to] of windows) {
+      const response = await phorestFetch<AppointmentListResponse>(
+        businessBranchPath(
+          `/appointment?client_id=${encodeURIComponent(clientId)}&from_date=${from}&to_date=${to}&size=20`
+        )
+      );
+      for (const a of response._embedded?.appointments ?? []) {
+        // Windows share a boundary day — dedupe by appointmentId.
+        if (seen.has(a.appointmentId)) continue;
+        seen.add(a.appointmentId);
+        raw.push(a);
+      }
+    }
+
     // Phorest returns appointment times in the salon's LOCAL timezone (confirmed
     // empirically: a 12:45 PM booking is stored as "12:45:00"), so parse as
     // local — do NOT treat as UTC, or every time comes out hours early.
-    // Only surface UPCOMING, still-BOOKED appointments (PAID = already
-    // completed and can't be rescheduled/cancelled), soonest first, capped to a
-    // handful so Erica doesn't read out a wall of history.
+    // Only surface still-BOOKED appointments (PAID = already completed and can't
+    // be rescheduled/cancelled), soonest first, capped to a handful so Erica
+    // doesn't read out a wall of history.
     const now = DateTime.now().setZone(SALON_TIMEZONE);
-    const appointments = response._embedded?.appointments ?? [];
-    return appointments
+    // Grace so an ALREADY-STARTED appointment stays visible: the #1 running-late
+    // call ("it's 3:05, my 3:00 appt") and same-day post-start cancels must NOT
+    // return empty. Keep anything whose END is still in the future, and — as a
+    // fallback for missing/parse-failed end times — anything that started within
+    // the last 120 minutes.
+    const graceStart = now.minus({ minutes: 120 });
+    return raw
       .filter(
         (a) =>
           // Never surface another client's appointment, even if the API filter fails.
@@ -901,13 +1073,22 @@ export const realPhorest: PhorestPort = {
           a.activationState === 'ACTIVE' &&
           a.state === 'BOOKED'
       )
-      .map((a) => ({
-        a,
-        start: DateTime.fromISO(`${a.appointmentDate}T${a.startTime}`, {
+      .map((a) => {
+        const start = DateTime.fromISO(`${a.appointmentDate}T${a.startTime}`, {
           zone: SALON_TIMEZONE,
-        }),
-      }))
-      .filter(({ start }) => start >= now)
+        });
+        const endRaw = a.endTime ?? a.startTime;
+        const end = DateTime.fromISO(`${a.appointmentDate}T${endRaw}`, {
+          zone: SALON_TIMEZONE,
+        });
+        return { a, start, end };
+      })
+      .filter(
+        ({ start, end }) =>
+          // Keep if the appointment hasn't finished yet (end in the future),
+          // or (fallback) it started within the grace window.
+          (end.isValid && end >= now) || start >= graceStart
+      )
       .sort((x, y) => x.start.toMillis() - y.start.toMillis())
       .slice(0, 5)
       .map(({ a, start }) => ({

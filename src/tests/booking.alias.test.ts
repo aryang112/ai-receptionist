@@ -12,7 +12,7 @@ vi.mock('../services/phorest.js', () => ({
   },
 }));
 
-import { findServiceByName } from '../services/booking.js';
+import { findServiceByName, resolveService } from '../services/booking.js';
 
 describe('findServiceByName synonym aliases', () => {
   it('maps "lash lamination" -> Lash Lift', async () => {
@@ -22,9 +22,26 @@ describe('findServiceByName synonym aliases', () => {
     expect((await findServiceByName('eyelash lift'))?.name).toBe('Lash Lift');
   });
   it('maps "eyebrow lamination" -> Brow Lamination', async () => {
-    expect((await findServiceByName('eyebrow lamination'))?.name).toBe('Brow Lamination');
+    expect((await findServiceByName('eyebrow lamination'))?.name).toBe(
+      'Brow Lamination'
+    );
   });
   it('still matches a direct service name', async () => {
-    expect((await findServiceByName('Brow Threading'))?.name).toBe('Brow Threading');
+    expect((await findServiceByName('Brow Threading'))?.name).toBe(
+      'Brow Threading'
+    );
+  });
+  it('strips a leading menu prefix ("3) Brow Threading")', async () => {
+    expect((await findServiceByName('3) Brow Threading'))?.name).toBe(
+      'Brow Threading'
+    );
+  });
+});
+
+describe('resolveService aliases return a decisive match', () => {
+  it('"lash lamination" resolves (kind: match) to Lash Lift', async () => {
+    const r = await resolveService('lash lamination');
+    expect(r.kind).toBe('match');
+    if (r.kind === 'match') expect(r.service.name).toBe('Lash Lift');
   });
 });

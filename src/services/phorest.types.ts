@@ -2,10 +2,10 @@
 
 // A salon service (e.g., Eyebrow Threading)
 export type Service = {
-  id: string;            // unique ID for the service
-  name: string;          // name the client sees
-  price: number;         // cost in dollars (or local currency)
-  durationMin: number;   // duration in minutes
+  id: string; // unique ID for the service
+  name: string; // name the client sees
+  price: number; // cost in dollars (or local currency)
+  durationMin: number; // duration in minutes
 };
 
 // A slot is a date+time in ISO format (e.g., "2025-10-01T14:20:00")
@@ -22,10 +22,10 @@ export type CustomerResult = {
 export type AppointmentSummary = {
   appointmentId: string;
   serviceName: string;
-  date: string;         // "YYYY-MM-DD" in salon timezone
-  timeDisplay: string;  // "2:00 PM" human-readable
-  startTimeRaw: string; // "HH:mm:ss" UTC — for internal logic
-  endTimeRaw: string;   // "HH:mm:ss" UTC — for internal logic
+  date: string; // "YYYY-MM-DD" in salon timezone
+  timeDisplay: string; // "2:00 PM" human-readable
+  startTimeRaw: string; // "HH:mm:ss" salon-LOCAL — for internal logic
+  endTimeRaw: string; // "HH:mm:ss" salon-LOCAL — for internal logic
 };
 
 // The full contract for any Phorest implementation (mock or real)
@@ -36,11 +36,14 @@ export interface PhorestPort {
   // Ask for availability of one service on a given date
   getAvailability(serviceId: string, date: string): Promise<SlotISO[]>;
 
-  // Create a new appointment for a customer
+  // Create a new appointment for a customer. When the caller is a KNOWN account
+  // (recognized by caller ID), the orchestrator passes clientId so we book
+  // against that record directly and skip resolving by phone/name.
   createAppointment(
     serviceId: string,
     startIso: string,
-    customer: { name: string; phone?: string; email?: string }
+    customer: { name: string; phone?: string; email?: string },
+    clientId?: string
   ): Promise<{ appointmentId: string }>;
 
   // Update an existing appointment
@@ -58,10 +61,16 @@ export interface PhorestPort {
   lookupCustomerByPhone(phone: string): Promise<CustomerResult | null>;
 
   // Look up customers by name
-  lookupCustomerByName(firstName: string, lastName: string): Promise<CustomerResult[]>;
+  lookupCustomerByName(
+    firstName: string,
+    lastName: string
+  ): Promise<CustomerResult[]>;
 
   // List upcoming appointments for a client
-  listAppointments(clientId: string, fromDate?: string): Promise<AppointmentSummary[]>;
+  listAppointments(
+    clientId: string,
+    fromDate?: string
+  ): Promise<AppointmentSummary[]>;
 
   // Add a note to an appointment (best-effort)
   addAppointmentNote(appointmentId: string, note: string): Promise<void>;

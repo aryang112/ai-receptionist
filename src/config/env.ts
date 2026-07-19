@@ -57,6 +57,11 @@ export const env = {
   // Caller lookup cache: how long the phone->client index stays warm.
   CLIENT_INDEX_TTL_HOURS: Number(process.env.CLIENT_INDEX_TTL_HOURS || 1),
 
+  // Phorest GET /appointment/{id} 404s on this tenant (always), so the direct
+  // fetch is pure latency + a guaranteed error before we fall back to the scan.
+  // Off by default; flip to 'true' only on a tenant where the direct GET works.
+  PHOREST_DIRECT_GET_APPT: process.env.PHOREST_DIRECT_GET_APPT === 'true',
+
   // Append-only call log (JSONL) for the admin surface / auditing.
   CALL_STORE_PATH: process.env.CALL_STORE_PATH || './data/calls.jsonl',
 };
