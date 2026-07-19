@@ -45,6 +45,8 @@ type EndEntry = {
   durationMs: number;
   // e.g. "booked" | "rescheduled" | "cancelled" | "transferred" | "info" | "none"
   outcome: string;
+  // Optional: Erica's accumulated spoken text for the call (F10e / 4.1 digest).
+  assistantTranscript?: string | undefined;
 };
 
 let dirEnsured = false;
@@ -111,6 +113,9 @@ export const CallStore = {
       ts: end.endedAt,
       durationMs: end.durationMs,
       outcome: end.outcome,
+      ...(end.assistantTranscript
+        ? { assistantTranscript: end.assistantTranscript }
+        : {}),
     });
   },
 };

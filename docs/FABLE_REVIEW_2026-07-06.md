@@ -23,7 +23,7 @@ Every commit was scanned: no live OpenAI key was ever committed. The two live
 
 ### 1.2 Phorest secret IS committed — in `PLAN.md` (state.md missed this)
 `PLAN.md` is tracked and contains the Phorest Basic-auth credential at
-lines 79 and 914 (`global/richa@richasthreading.com : D9x$...`). That
+lines 79 and 914 (`global/richa@richasthreading.com : <REDACTED>`). That
 credential has full read/write access to the salon's client database.
 - [ ] Rotate the Phorest API secret (owner action — Phorest dashboard/support).
 - [ ] Redact the credential from `PLAN.md` and commit.

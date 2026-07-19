@@ -33,6 +33,12 @@ function getTwilioClient() {
   return _twilioClient;
 }
 
+// F7: WS-endpoint safety limits. A solo salon needs only a handful of concurrent
+// streams; the cap bounds abuse, and the pre-auth window force-closes a socket
+// that never sends an authenticated Twilio "start".
+const MAX_CONCURRENT_STREAMS = 20;
+const PRE_AUTH_TIMEOUT_MS = 10_000;
+
 const CORE_SERVICES = env.PHOREST_PREFERRED_SERVICE_IDS.length
   ? env.PHOREST_PREFERRED_SERVICE_IDS.join(', ')
   : 'Brow Threading, Eyebrow Tinting';
@@ -52,7 +58,7 @@ PERSONALITY: Conversational, warm, efficient. Speak like a real person — not a
 
 VOICE & DELIVERY: Sound like a real, warm front-desk receptionist — relaxed, natural pacing (never rushed or robotic), genuine warmth, and natural intonation that rises and falls like real speech. Use light human touches where they fit: a soft "mm-hm", a small friendly laugh, a reassuring "no worries at all". React naturally — if a caller sounds unsure, slow down and reassure; if they're in a hurry, be brisk and efficient. Vary your rhythm like a person would. Never sound like you're reading a script.
 
-GREETING: Open the call yourself, immediately and warmly, and identify as the virtual receptionist: "Hi, this is Erica, the virtual receptionist at Richa's Threading Salon — how can I help you today?" Then wait for the caller.
+GREETING: Open the call yourself, immediately and warmly. Identify as the virtual receptionist AND include a brief, natural recording notice in the same breath: "Hi, this is Erica, the virtual receptionist at Richa's Threading Salon — just so you know, this call may be recorded. How can I help you today?" Then wait for the caller. (Maryland is a two-party-consent state and we keep a record of the call, so the recording notice is not optional — always include it, kept light and friendly.)
 
 NEVER LEAVE SILENCE: Before you call ANY tool (looking something up, booking, checking availability, etc.), FIRST say a short, natural filler out loud — like "Let me check that for you…", "One sec…", or "Let me pull that up…" — and THEN call the tool. The caller must never hear dead air while you work.
 
@@ -443,6 +449,14 @@ export class TwilioRealtimeCall {
   // Optional: bounded accumulation of Erica's spoken text for a future digest —
   // no per-delta external calls, just an in-memory buffer capped at ~8 KB.
   private assistantTranscript = '';
+  // F8: the caller-ID lookup runs concurrently with the OpenAI handshake, so the
+  // context note it produces is stashed here and injected once the session is
+  // open (injectContext no-ops on a not-yet-open session).
+  private pendingCallerContext: string | null = null;
+  // F7: a WS upgrade bypasses Express, so a socket that never sends a Twilio
+  // "start" is never auth-checked nor closed. Close it after a short window.
+  private started = false;
+  private preAuthTimer: NodeJS.Timeout | undefined = undefined;
 
   constructor(socket: WebSocket) {
     this.socket = socket;
@@ -455,6 +469,23 @@ export class TwilioRealtimeCall {
         err instanceof Error ? err : new Error('Twilio socket error')
       )
     );
+
+    // F7: force-close a socket that never authenticates (no "start" event) so an
+    // idle/abusive connection can't sit open and exhaust file descriptors.
+    this.preAuthTimer = setTimeout(() => {
+      if (!this.started && !this.closed) {
+        logger.warn(
+          'Closing media stream: no authenticated "start" within timeout'
+        );
+        try {
+          this.socket.close(1008);
+        } catch {
+          /* already closing */
+        }
+        this.cleanup();
+      }
+    }, PRE_AUTH_TIMEOUT_MS);
+    this.preAuthTimer.unref?.();
   }
 
   /**
@@ -519,7 +550,12 @@ export class TwilioRealtimeCall {
    * is whatever Phorest returns for that number. Any failure → no prefetch, and
    * Erica falls back to the normal "what's your phone number?" flow.
    */
-  private async warmCallerContext(callerPhone?: string) {
+  /**
+   * F8: caller-ID lookup only — NO session I/O. Runs concurrently with the
+   * OpenAI handshake; stashes the context note in pendingCallerContext for
+   * applyCallerContext() to inject once the session is open.
+   */
+  private async prepareCallerContext(callerPhone?: string) {
     if (!callerPhone) return;
     try {
       // Don't let a cold lookup delay the greeting (normally instant — the phone
@@ -536,9 +572,7 @@ export class TwilioRealtimeCall {
         // We have the caller's number (caller ID) but no Phorest match. Let Erica
         // offer that number later instead of asking cold. (Raw number is NOT
         // logged — only injected into the model's private context.)
-        this.session.injectContext(
-          `We could not match this caller ID, so greet them normally and ask what they need. If you later need a phone number for their file, offer the one they're calling from — "Is the number you're calling from the best one for your file?" — rather than asking cold.`
-        );
+        this.pendingCallerContext = `We could not match this caller ID, so greet them normally and ask what they need. If you later need a phone number for their file, offer the one they're calling from — "Is the number you're calling from the best one for your file?" — rather than asking cold.`;
         return;
       }
       // Prefer the phone Phorest has on the account; fall back to the caller ID
@@ -569,11 +603,17 @@ export class TwilioRealtimeCall {
         .catch(() => {});
       // Tell Erica who's calling (the looked-up name, not a hardcoded one).
       const fullName = `${customer.firstName} ${customer.lastName}`.trim();
-      this.session.injectContext(
-        `The caller is phoning from a number we recognize. Their name is ${customer.firstName} (full name ${fullName}), an existing client — the system already has their account on file. For your VERY FIRST line, use the standard GREETING from your instructions but include their first name right after the salon name (e.g. "...Richa's Threading Salon — hi ${customer.firstName}!"). Do NOT invent a different greeting; just personalize the standard one. Then STOP and WAIT for them to actually tell you what they need. Do NOT pull up their appointments, do NOT call any tools, and do NOT assume why they're calling until they clearly say so. Do NOT ask for their phone number and NEVER read a phone number back to them — the system already knows their account. When you later need their details, call lookup_customer with no arguments. When you book for them, you do NOT need a phone number — just book with their name; the system attaches their account automatically.`
-      );
+      this.pendingCallerContext = `The caller is phoning from a number we recognize. Their name is ${customer.firstName} (full name ${fullName}), an existing client — the system already has their account on file. For your VERY FIRST line, use the standard GREETING from your instructions but include their first name right after the salon name (e.g. "...Richa's Threading Salon — hi ${customer.firstName}!"). Do NOT invent a different greeting; just personalize the standard one. Then STOP and WAIT for them to actually tell you what they need. Do NOT pull up their appointments, do NOT call any tools, and do NOT assume why they're calling until they clearly say so. Do NOT ask for their phone number and NEVER read a phone number back to them — the system already knows their account. When you later need their details, call lookup_customer with no arguments. When you book for them, you do NOT need a phone number — just book with their name; the system attaches their account automatically.`;
     } catch {
       this.prefetch = null; // graceful: behave exactly as today (ask for phone)
+    }
+  }
+
+  /** Inject the caller context prepared by prepareCallerContext (session must be open). */
+  private applyCallerContext() {
+    if (this.pendingCallerContext) {
+      this.session.injectContext(this.pendingCallerContext);
+      this.pendingCallerContext = null;
     }
   }
 
@@ -606,6 +646,12 @@ export class TwilioRealtimeCall {
               break;
             }
           }
+          // Authenticated: cancel the pre-auth close timer (F7).
+          this.started = true;
+          if (this.preAuthTimer) {
+            clearTimeout(this.preAuthTimer);
+            this.preAuthTimer = undefined;
+          }
           logger.info(
             { streamSid: this.streamSid },
             '📞 ========== NEW CALL STARTED =========='
@@ -614,6 +660,14 @@ export class TwilioRealtimeCall {
             { streamSid: this.streamSid },
             '📞 Twilio stream started'
           );
+          // F8 (real concurrency): kick off the caller-ID Phorest lookup NOW,
+          // BEFORE the OpenAI handshake, so the round-trip overlaps connect +
+          // configureSession instead of running after them. prepareCallerContext
+          // does NO session I/O — it only stashes the context note, which we
+          // inject once the session is open (below), just before the greeting.
+          const callerFrom = (event as TwilioStartEvent).start.customParameters
+            ?.from;
+          const warm = this.prepareCallerContext(callerFrom);
           // Build the session now that streamSid is known — RT-9 tags every
           // session log line with the last 8 of the streamSid. Only after the
           // auth gate above, so a rejected stream never spins one up.
@@ -630,16 +684,10 @@ export class TwilioRealtimeCall {
           // RT-8: replay any caller audio that arrived during the handshake so an
           // early "hello?" isn't swallowed.
           this.flushPendingMedia();
-          // Look the caller up by THEIR phone number (caller ID) and, if we
-          // recognize them, tell Erica so she greets by name + skips asking for
-          // the number. If not recognized (or no caller ID), she greets normally.
-          // Kick this off concurrently so the caller-lookup doesn't add pickup
-          // latency — but AWAIT it before requesting the greeting so any injected
-          // context is applied first (the greeting must reflect who's calling).
-          const callerFrom = (event as TwilioStartEvent).start.customParameters
-            ?.from;
-          const warm = this.warmCallerContext(callerFrom);
+          // The lookup was very likely done during the handshake; await it (700ms
+          // cap) then apply its context note now that the session is open.
           await warm;
+          this.applyCallerContext();
           // Persist the call start (append-only JSONL; never throws). Do this
           // after warmCallerContext so recognizedClientId reflects a caller-ID
           // match. Record startedAtMs so cleanup() can compute duration.
@@ -1179,6 +1227,36 @@ export class TwilioRealtimeCall {
             'I need to pull up your appointments first — please call list_appointments.',
         };
       }
+      // F6: slot validation. Reschedule carries no serviceName, so validate the
+      // requested time against every slot we offered for that date (Erica calls
+      // suggest_availability before rescheduling, which populates offeredSlots).
+      // Same fallback-open behavior as booking: if we have no offered slots for
+      // that date, allow but log — otherwise force_selected_time would book a
+      // hallucinated time (the exact hole 2.2 closed for book_appointment).
+      const offeredForDate = this.offeredTimesForDate(payload.date);
+      if (offeredForDate.size > 0 && !offeredForDate.has(payload.time)) {
+        logger.warn(
+          {
+            tool: 'reschedule_appointment',
+            requested: payload.time,
+            offered: [...offeredForDate],
+          },
+          'Reschedule rejected — time not in offered slots'
+        );
+        return {
+          error: `That time isn't available — the open times are: ${[
+            ...offeredForDate,
+          ]
+            .sort()
+            .join(', ')}`,
+        };
+      }
+      if (offeredForDate.size === 0) {
+        logger.warn(
+          { tool: 'reschedule_appointment', date: payload.date },
+          'Reschedule without prior suggest_availability for this date — allowing'
+        );
+      }
       const iso = `${payload.date}T${payload.time}`;
       await phorest.updateAppointment(payload.appointmentId, iso);
       logger.info(
@@ -1663,6 +1741,19 @@ export class TwilioRealtimeCall {
         'Tool called: log_running_late'
       );
 
+      // F10d: ownership guard (the last tool that was missing it) — only note an
+      // appointment this call actually surfaced, never a guessed/invented ID.
+      if (!this.servedAppointmentIds.has(payload.appointmentId)) {
+        logger.warn(
+          { tool: 'log_running_late', appointmentId: payload.appointmentId },
+          'Running-late blocked — appointment not served on this call'
+        );
+        return {
+          error:
+            'I need to pull up your appointments first — please call list_appointments.',
+        };
+      }
+
       await phorest.addAppointmentNote(
         payload.appointmentId,
         'Customer called ahead — running late'
@@ -1778,6 +1869,10 @@ export class TwilioRealtimeCall {
         { tool: 'transfer_to_owner', error: this.formatError(error) },
         'Transfer failed'
       );
+      // F10c: the redirect failed, so this call is NOT being handed off. Clear
+      // the flag so a later fatal error can still failover to the owner instead
+      // of the guard treating a handoff as in-progress (a dead click).
+      this.transferring = false;
       CallStore.recordToolCall(this.callSid, {
         name: 'transfer_to_owner',
         ok: false,
@@ -1795,6 +1890,16 @@ export class TwilioRealtimeCall {
   /** Cache key for offered slots — service+date, normalized so book/suggest agree. */
   private slotKey(serviceName: string, date: string) {
     return `${serviceName.toLowerCase().trim()}|${date}`;
+  }
+
+  /** Union of every slot time we offered for a given date, across services (F6). */
+  private offeredTimesForDate(date: string): Set<string> {
+    const times = new Set<string>();
+    const suffix = `|${date}`;
+    for (const [key, values] of this.offeredSlots) {
+      if (key.endsWith(suffix)) for (const v of values) times.add(v);
+    }
+    return times;
   }
 
   /**
@@ -1926,6 +2031,10 @@ export class TwilioRealtimeCall {
   private cleanup() {
     if (this.closed) return;
     this.closed = true;
+    if (this.preAuthTimer) {
+      clearTimeout(this.preAuthTimer);
+      this.preAuthTimer = undefined;
+    }
     // Persist the call end exactly once, and only if the call actually started
     // (a socket that closed before Twilio's "start" never wrote a start record).
     if (!this.endRecorded && this.startedAtMs !== null) {
@@ -1935,6 +2044,11 @@ export class TwilioRealtimeCall {
         endedAt,
         durationMs: endedAt - this.startedAtMs,
         outcome: this.outcome,
+        // F10e: persist Erica's accumulated spoken text (was a dead buffer) so
+        // the digest/dashboard has transcript turns, per the 4.1 spec.
+        ...(this.assistantTranscript
+          ? { assistantTranscript: this.assistantTranscript }
+          : {}),
       });
     }
     // session may be undefined if the socket errored/closed before Twilio's
@@ -1952,7 +2066,27 @@ export class TwilioRealtimeCall {
 
 export function setupTwilioRealtimeStream(server: http.Server) {
   const wss = new WebSocketServer({ server, path: '/twilio/stream' });
+  // F7: bound concurrent media streams. A single process serves a solo salon;
+  // an unbounded upgrade path (Express middleware doesn't run on WS) is a DoS /
+  // FD-exhaustion vector. Reject over-cap with 1013 (Try Again Later).
+  let active = 0;
   wss.on('connection', (socket: WebSocket) => {
+    if (active >= MAX_CONCURRENT_STREAMS) {
+      logger.warn(
+        { active, cap: MAX_CONCURRENT_STREAMS },
+        'Media stream rejected — concurrent connection cap reached'
+      );
+      try {
+        socket.close(1013);
+      } catch {
+        /* already closing */
+      }
+      return;
+    }
+    active += 1;
+    socket.on('close', () => {
+      active -= 1;
+    });
     new TwilioRealtimeCall(socket);
   });
   wss.on('error', (error: Error) => {

@@ -89,3 +89,23 @@ NEVER "first N" on a time-ordered slot list.
 - Verify against REAL Phorest data with the `scripts/*.ts` diagnostics, not
   assumptions (the "hallucinated appointment" was real data from the camelCase bug).
 - Never stage `.env` / `.env.example` (live keys are in them).
+
+## 🪧 Never claim an optimization the code doesn't perform (F8)
+Phase 3.1 "concurrent prefetch" was reported DONE in state.md + commit while the
+code still ran `warmCallerContext` strictly AFTER `await connect()` — functionally
+serial. An architect review caught it. A false "done" is worse than an open item:
+it burns trust in every OTHER claim in the same handoff. Rule: before writing
+"done/optimized/concurrent/parallel" for a behavior, trace the actual control
+flow (what's awaited before what). If you can't point at the line that makes it
+true, don't claim it. (The real fix: start the lookup BEFORE `await connect()`,
+inject its result only after the session is open.)
+
+## 🧪 Test ABOVE the validation seam, not just below it (F1)
+The defects swarm added `clientId` to the OpenAI TOOL_DEFINITIONS but not to the
+zod `TOOL_SCHEMAS` — zod strip-mode silently DELETED it, re-breaking CT-1. The
+booking-layer contract tests passed because they call `bookAppointment()`
+directly, BELOW `parseToolArgs`. The bug lived in the gap the tests skipped over.
+Rule: when a value crosses a validation/parse boundary (zod, a schema, a
+serializer), put at least one test on the FAR side of it — drive the actual
+handler (`handleBookAppointment(rawArgs)`), not just the function it eventually
+calls. Keep TOOL_DEFINITIONS and TOOL_SCHEMAS mirror-images.

@@ -89,7 +89,9 @@ describe('F2 — prefetch clientId injection respects the given name (shared fam
     // No clientId injected -> getOrCreateClient's name guard runs (not pinned to mom)
     expect(spy.mock.calls[0]![3]).toBeUndefined();
     // Her own phone flows through; mom's prefetch phone is NOT backfilled
-    expect((spy.mock.calls[0]![2] as { phone?: string }).phone).toBe('5559998888');
+    expect((spy.mock.calls[0]![2] as { phone?: string }).phone).toBe(
+      '5559998888'
+    );
   });
 
   it('a matching first name still books under the recognized account', async () => {
@@ -103,5 +105,48 @@ describe('F2 — prefetch clientId injection respects the given name (shared fam
       customer: { name: 'Mom Smith' },
     });
     expect(spy.mock.calls[0]![3]).toBe('mom1');
+  });
+});
+
+describe('F6 — reschedule validates the new time against offered slots', () => {
+  it('rejects a time we never offered for that date', async () => {
+    const spy = vi.spyOn(phorest, 'updateAppointment');
+    const call = buildCall();
+    call.servedAppointmentIds.add('appt1');
+    call.offeredSlots.set('lash lift|2025-10-02', new Set(['10:00', '11:00']));
+    const res = await call.handleReschedule({
+      appointmentId: 'appt1',
+      date: '2025-10-02',
+      time: '16:00', // never offered
+    });
+    expect(res.error).toMatch(/available|open times/i);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('allows a time that WAS offered for that date', async () => {
+    const spy = vi.spyOn(phorest, 'updateAppointment');
+    const call = buildCall();
+    call.servedAppointmentIds.add('appt1');
+    call.offeredSlots.set('lash lift|2025-10-02', new Set(['10:00', '11:00']));
+    const res = await call.handleReschedule({
+      appointmentId: 'appt1',
+      date: '2025-10-02',
+      time: '11:00',
+    });
+    expect(res.error).toBeUndefined();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls open (allows) when no slots were offered for that date', async () => {
+    const spy = vi.spyOn(phorest, 'updateAppointment');
+    const call = buildCall();
+    call.servedAppointmentIds.add('appt1');
+    const res = await call.handleReschedule({
+      appointmentId: 'appt1',
+      date: '2025-10-02',
+      time: '11:00',
+    });
+    expect(res.error).toBeUndefined();
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });

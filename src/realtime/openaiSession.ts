@@ -370,21 +370,8 @@ export class OpenAIRealtimeSession {
     );
   }
 
-  async sendUserText(text: string) {
-    if (!this.isOpen()) {
-      this.log.warn('sendUserText skipped — session not open');
-      return;
-    }
-    this.sendRaw({
-      type: 'conversation.item.create',
-      item: {
-        type: 'message',
-        role: 'user',
-        content: [{ type: 'input_text', text }],
-      },
-    });
-    this.sendRaw({ type: 'response.create' });
-  }
+  // F10k: sendUserText was removed — it had no call site in the live path
+  // (audio is the only caller input) and was an extra response.create surface.
 
   /** Forward a Twilio mu-law frame straight to OpenAI — no transcoding. */
   appendTwilioAudio(base64Mulaw: string) {
