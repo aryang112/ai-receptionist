@@ -279,59 +279,103 @@ let serviceCache: Map<string, ServiceDetailResponse> | null = null;
 let staffCache: StaffRecord[] | null = null;
 let clientPhoneIndex: Map<string, ClientRecord> | null = null;
 let clientPhoneIndexLoading: Promise<Map<string, ClientRecord>> | null = null;
+// When the current index finished loading (epoch ms). Drives the TTL refresh.
+let clientPhoneIndexAt = 0;
+// Guards against firing overlapping background reloads.
+let clientPhoneIndexReloading = false;
+
+// The client list changes slowly, but a long-running process must not serve a
+// stale phone index forever (a client added today would never resolve). After
+// this window we trigger a background reload — never blocking a live call.
+const CLIENT_INDEX_TTL_MS = env.CLIENT_INDEX_TTL_HOURS * 60 * 60 * 1000;
+
+async function buildClientPhoneIndex(): Promise<Map<string, ClientRecord>> {
+  const index = new Map<string, ClientRecord>();
+  const addPage = (clients: ClientRecord[]) => {
+    for (const client of clients) {
+      const phone = normalizePhone(client.mobile ?? '');
+      if (phone && phone.length >= 7) {
+        index.set(phone, client);
+      }
+    }
+  };
+
+  const clientPath = (page: number) =>
+    `api/business/${env.PHOREST_BUSINESS_ID}/client?size=200&page=${page}`;
+
+  const fetchPage = (page: number) =>
+    phorestFetch<ClientResponse>(clientPath(page)).catch((err) => {
+      logger.warn(
+        { page, err: String(err) },
+        'Client index page failed — skipping'
+      );
+      return null;
+    });
+
+  // Fetch page 0 to learn the page count, then fetch the rest with BOUNDED
+  // concurrency. Firing every page at once blows past undici's 6-connections-
+  // per-origin limit, and because each request's abort timer starts when
+  // fetch() is called, the queued requests time out while still waiting. A
+  // small batch keeps every in-flight request actually on the wire.
+  const first = await phorestFetch<ClientResponse>(clientPath(0));
+  addPage(first._embedded?.clients ?? []);
+  const totalPages = first.page?.totalPages ?? 1;
+
+  const CONCURRENCY = 5;
+  for (let start = 1; start < totalPages; start += CONCURRENCY) {
+    const end = Math.min(start + CONCURRENCY, totalPages);
+    const batch = await Promise.all(
+      Array.from({ length: end - start }, (_, i) => fetchPage(start + i))
+    );
+    for (const resp of batch) {
+      if (resp) addPage(resp._embedded?.clients ?? []);
+    }
+  }
+
+  logger.info(
+    { clientCount: index.size, pages: totalPages },
+    'Client phone index loaded'
+  );
+  return index;
+}
+
+// Fire-and-forget refresh: rebuilds the index off the request path and swaps it
+// in atomically once ready. Never awaited by a caller, so a live lookup keeps
+// serving the current (stale) index until the fresh one is ready.
+function refreshClientPhoneIndexInBackground(): void {
+  if (clientPhoneIndexReloading) return;
+  clientPhoneIndexReloading = true;
+  void buildClientPhoneIndex()
+    .then((index) => {
+      clientPhoneIndex = index;
+      clientPhoneIndexAt = Date.now();
+    })
+    .catch((err) => {
+      // Keep serving the existing index; try again on the next stale lookup.
+      logger.warn(
+        { err: String(err) },
+        'Background client index refresh failed — keeping current index'
+      );
+    })
+    .finally(() => {
+      clientPhoneIndexReloading = false;
+    });
+}
 
 async function loadClientPhoneIndex(): Promise<Map<string, ClientRecord>> {
-  if (clientPhoneIndex) return clientPhoneIndex;
+  if (clientPhoneIndex) {
+    // Serve the current index immediately; refresh in the background if stale.
+    if (Date.now() - clientPhoneIndexAt >= CLIENT_INDEX_TTL_MS) {
+      refreshClientPhoneIndexInBackground();
+    }
+    return clientPhoneIndex;
+  }
   if (clientPhoneIndexLoading) return clientPhoneIndexLoading;
 
   clientPhoneIndexLoading = (async () => {
-    const index = new Map<string, ClientRecord>();
-    const addPage = (clients: ClientRecord[]) => {
-      for (const client of clients) {
-        const phone = normalizePhone(client.mobile ?? '');
-        if (phone && phone.length >= 7) {
-          index.set(phone, client);
-        }
-      }
-    };
-
-    const clientPath = (page: number) =>
-      `api/business/${env.PHOREST_BUSINESS_ID}/client?size=200&page=${page}`;
-
-    const fetchPage = (page: number) =>
-      phorestFetch<ClientResponse>(clientPath(page)).catch((err) => {
-        logger.warn(
-          { page, err: String(err) },
-          'Client index page failed — skipping'
-        );
-        return null;
-      });
-
-    // Fetch page 0 to learn the page count, then fetch the rest with BOUNDED
-    // concurrency. Firing every page at once blows past undici's 6-connections-
-    // per-origin limit, and because each request's abort timer starts when
-    // fetch() is called, the queued requests time out while still waiting. A
-    // small batch keeps every in-flight request actually on the wire.
-    const first = await phorestFetch<ClientResponse>(clientPath(0));
-    addPage(first._embedded?.clients ?? []);
-    const totalPages = first.page?.totalPages ?? 1;
-
-    const CONCURRENCY = 5;
-    for (let start = 1; start < totalPages; start += CONCURRENCY) {
-      const end = Math.min(start + CONCURRENCY, totalPages);
-      const batch = await Promise.all(
-        Array.from({ length: end - start }, (_, i) => fetchPage(start + i))
-      );
-      for (const resp of batch) {
-        if (resp) addPage(resp._embedded?.clients ?? []);
-      }
-    }
-
-    logger.info(
-      { clientCount: index.size, pages: totalPages },
-      'Client phone index loaded'
-    );
+    const index = await buildClientPhoneIndex();
     clientPhoneIndex = index;
+    clientPhoneIndexAt = Date.now();
     clientPhoneIndexLoading = null;
     return index;
   })();

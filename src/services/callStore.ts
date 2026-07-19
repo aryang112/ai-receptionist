@@ -1,0 +1,140 @@
+// src/services/callStore.ts
+//
+// Append-only JSONL per-call persistence — the foundation for the owner ROI
+// digest/dashboard. One JSON line per event ({ type, callSid, ts, ...fields }).
+//
+// Design rules:
+//  - Node builtins only (fs, path). No external deps.
+//  - Every method is wrapped so it can NEVER throw into the caller: a persistence
+//    failure must not break a live phone call. fs errors are caught + swallowed
+//    (logged at warn, without the caller's full phone number).
+//  - The FULL from-number IS written to the file (this is the private data store),
+//    but is NOT logged to pino here.
+import fs from 'node:fs';
+import path from 'node:path';
+import { env } from '../config/env.js';
+import { logger } from '../core/logger.js';
+
+type StartMeta = {
+  callSid: string;
+  // These may be genuinely absent on a given call (no caller ID, unrecognized
+  // caller). With exactOptionalPropertyTypes we must allow explicit `undefined`,
+  // not just an absent key, since the call site passes them through directly.
+  streamSid?: string | undefined;
+  from?: string | undefined;
+  recognizedClientId?: string | undefined;
+  startedAt: number;
+};
+
+type ToolCallEntry = {
+  name: string;
+  ok: boolean;
+  error?: string;
+  detail?: Record<string, unknown>;
+};
+
+type BookingEntry = {
+  service: string;
+  price?: number;
+  date: string;
+  time: string;
+};
+
+type EndEntry = {
+  endedAt: number;
+  durationMs: number;
+  // e.g. "booked" | "rescheduled" | "cancelled" | "transferred" | "info" | "none"
+  outcome: string;
+};
+
+let dirEnsured = false;
+
+/** Lazily create the parent dir once, then append one JSONL line. Never throws. */
+function append(record: Record<string, unknown>): void {
+  try {
+    const file = env.CALL_STORE_PATH;
+    if (!dirEnsured) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      dirEnsured = true;
+    }
+    fs.appendFileSync(file, JSON.stringify(record) + '\n');
+  } catch (err) {
+    // Swallow — persistence must never break a live call. Don't log the caller's
+    // phone number (it may be in `record.from`); log only the failure + type.
+    logger.warn(
+      { err, type: record.type },
+      'callStore: failed to persist event'
+    );
+  }
+}
+
+export const CallStore = {
+  startCall(meta: StartMeta): void {
+    append({
+      type: 'start',
+      callSid: meta.callSid,
+      ts: meta.startedAt,
+      streamSid: meta.streamSid,
+      from: meta.from,
+      recognizedClientId: meta.recognizedClientId,
+    });
+  },
+
+  recordToolCall(callSid: string, entry: ToolCallEntry): void {
+    append({
+      type: 'tool',
+      callSid,
+      ts: Date.now(),
+      name: entry.name,
+      ok: entry.ok,
+      error: entry.error,
+      detail: entry.detail,
+    });
+  },
+
+  recordBooking(callSid: string, booking: BookingEntry): void {
+    append({
+      type: 'booking',
+      callSid,
+      ts: Date.now(),
+      service: booking.service,
+      price: booking.price,
+      date: booking.date,
+      time: booking.time,
+    });
+  },
+
+  endCall(callSid: string, end: EndEntry): void {
+    append({
+      type: 'end',
+      callSid,
+      ts: end.endedAt,
+      durationMs: end.durationMs,
+      outcome: end.outcome,
+    });
+  },
+};
+
+/**
+ * Read + parse the JSONL store, skipping malformed lines. Returns [] if the file
+ * doesn't exist yet or can't be read. Never throws. For future digest use.
+ */
+export function readCalls(): any[] {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(env.CALL_STORE_PATH, 'utf8');
+  } catch {
+    return [];
+  }
+  const out: any[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      out.push(JSON.parse(trimmed));
+    } catch {
+      // Skip malformed line — a partial/corrupt write shouldn't poison the read.
+    }
+  }
+  return out;
+}

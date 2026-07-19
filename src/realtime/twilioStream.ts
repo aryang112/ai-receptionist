@@ -2,6 +2,7 @@ import type http from 'http';
 import WebSocket, { WebSocketServer } from 'ws';
 import twilio from 'twilio';
 import { OpenAIRealtimeSession, type ToolDefinition } from './openaiSession.js';
+import { parseToolArgs } from './toolSchemas.js';
 import { logger } from '../core/logger.js';
 import { env } from '../config/env.js';
 import {
@@ -10,11 +11,13 @@ import {
   findServiceByName,
 } from '../services/booking.js';
 import { phorest } from '../services/phorest.js';
+import { CallStore } from '../services/callStore.js';
 import type {
   CustomerResult,
   AppointmentSummary,
 } from '../services/phorest.types.js';
 import { getHoursStatus, getOpenClose } from '../core/hours.js';
+import { verifyStreamToken } from '../security/wsAuth.js';
 import { DateTime } from 'luxon';
 // decodeMuLaw no longer needed here — audio decoding happens in openaiSession
 import businessHours from '../config/business.json';
@@ -47,7 +50,7 @@ PERSONALITY: Conversational, warm, efficient. Speak like a real person — not a
 
 VOICE & DELIVERY: Sound like a real, warm front-desk receptionist — relaxed, natural pacing (never rushed or robotic), genuine warmth, and natural intonation that rises and falls like real speech. Use light human touches where they fit: a soft "mm-hm", a small friendly laugh, a reassuring "no worries at all". React naturally — if a caller sounds unsure, slow down and reassure; if they're in a hurry, be brisk and efficient. Vary your rhythm like a person would. Never sound like you're reading a script.
 
-GREETING: Open the call yourself, immediately and warmly: "Hi, this is Erica from Richa's Threading Salon — how can I help you today?" Then wait for the caller.
+GREETING: Open the call yourself, immediately and warmly, and identify as the virtual receptionist: "Hi, this is Erica, the virtual receptionist at Richa's Threading Salon — how can I help you today?" Then wait for the caller.
 
 NEVER LEAVE SILENCE: Before you call ANY tool (looking something up, booking, checking availability, etc.), FIRST say a short, natural filler out loud — like "Let me check that for you…", "One sec…", or "Let me pull that up…" — and THEN call the tool. The caller must never hear dead air while you work.
 
@@ -56,11 +59,7 @@ BUSINESS HOURS: Always use the get_business_hours tool when asked about hours. N
 ═══ SERVICES & PRICES ═══
 Callers often ask for prices. When they ask the price of a service, say a quick filler ("Let me check that for you…") and call get_prices WITH the serviceName they asked about — it returns that service's exact price and duration. Only omit serviceName if they ask broadly "what services do you offer." Quote ONLY what get_prices returns; NEVER guess or make up a price. Read service names naturally (ignore any leading numbers/codes like "3)").
 
-Some callers use different names for the same service — treat these as the same:
-- "lash lamination" = our "Lash Lift"
-- "brow lamination" / "eyebrow lamination" = "Brow Lamination"
-- "eyebrows" / "brows" (threading) = "Brow Threading"
-For ANY service a caller names, just try to book it (suggest_availability matches it against the live catalog). NEVER tell a caller "we don't offer that," and never transfer just because a service wasn't in a memorised list.
+Callers often use different names for a service (e.g. "lash lamination" for our "Lash Lift"). Don't rely on a memorised list — for ANY service a caller names, just try to book it: suggest_availability matches it against the live catalog. NEVER tell a caller "we don't offer that," and never transfer just because a service wasn't in a memorised list.
 
 ═══ CUSTOMER IDENTIFICATION (always do this first) ═══
 1. Ask: "What's your phone number?"
@@ -378,6 +377,10 @@ class TwilioRealtimeCall {
   private streamSid = '';
   private callSid = '';
   private closed = false;
+  // Set once we've begun handing the live call off to a human (owner) — either a
+  // deliberate transfer_to_owner or the graceful fatal-error redirect. Guards
+  // against a second REST redirect and against handleError re-entering itself.
+  private transferring = false;
   private hasReceivedFirstAudioChunk = false;
   private sessionReady = false;
   // Barge-in bookkeeping (mirrors OpenAI's Twilio sample): track the caller's
@@ -394,6 +397,26 @@ class TwilioRealtimeCall {
     lastName: string;
     appointments: AppointmentSummary[] | null;
   } | null = null;
+  // WRITE-PATH SECURITY: appointment IDs this call has actually surfaced to the
+  // caller (via list_appointments, the caller-ID prefetch, or a booking made on
+  // this call). We refuse to cancel/reschedule any ID not in this set so the
+  // model can never act on an appointment it invented or guessed.
+  private servedAppointmentIds = new Set<string>();
+  // WRITE-PATH SECURITY: the exact 24h "value" times we offered for a given
+  // service+date via suggest_availability, keyed `${service}|${date}`. Booking is
+  // constrained to these when an entry exists, so the model can't book a time we
+  // never offered as available.
+  private offeredSlots = new Map<string, Set<string>>();
+  // PERSISTENCE (callStore): call-start wall clock, the running outcome, and a
+  // one-shot guard so endCall is recorded exactly once. startedAtMs stays null
+  // until the Twilio "start" arrives, so a socket that closes before start never
+  // writes a bogus end record.
+  private startedAtMs: number | null = null;
+  private outcome = 'none';
+  private endRecorded = false;
+  // Optional: bounded accumulation of Erica's spoken text for a future digest —
+  // no per-delta external calls, just an in-memory buffer capped at ~8 KB.
+  private assistantTranscript = '';
 
   constructor(socket: WebSocket) {
     this.socket = socket;
@@ -471,6 +494,12 @@ class TwilioRealtimeCall {
           { tool: 'prefetch' },
           'Caller ID not recognized — normal flow'
         );
+        // We have the caller's number (caller ID) but no Phorest match. Let Erica
+        // offer that number later instead of asking cold. (Raw number is NOT
+        // logged — only injected into the model's private context.)
+        this.session.injectContext(
+          `We could not match this caller ID, so greet them normally and ask what they need. If you later need a phone number for their file, offer the one they're calling from — "Is the number you're calling from the best one for your file?" — rather than asking cold.`
+        );
         return;
       }
       this.prefetch = {
@@ -488,12 +517,15 @@ class TwilioRealtimeCall {
         .listAppointments(customer.clientId)
         .then((appts) => {
           if (this.prefetch) this.prefetch.appointments = appts;
+          // These appointments have now been surfaced to this call — allow
+          // cancel/reschedule against them (ownership guard).
+          for (const a of appts) this.servedAppointmentIds.add(a.appointmentId);
         })
         .catch(() => {});
       // Tell Erica who's calling (the looked-up name, not a hardcoded one).
       const fullName = `${customer.firstName} ${customer.lastName}`.trim();
       this.session.injectContext(
-        `The caller is phoning from a number we recognize. Their name is ${fullName}, an existing client — you already have their account on file. For your VERY FIRST line, introduce yourself AND greet them by first name, exactly like: "Hi, this is Erica from Richa's Threading Salon — hi ${customer.firstName}! How can I help you today?" Then STOP and WAIT for them to actually tell you what they need. Do NOT pull up their appointments, do NOT call any tools, and do NOT assume why they're calling until they clearly say so. Do NOT ask for their phone number — you already have their account; when you later need their details, call lookup_customer with no arguments.`
+        `The caller is phoning from a number we recognize. Their name is ${fullName}, an existing client — you already have their account on file. For your VERY FIRST line, introduce yourself as the virtual receptionist AND greet them by first name, exactly like: "Hi, this is Erica, the virtual receptionist at Richa's Threading Salon — hi ${customer.firstName}! How can I help you today?" Then STOP and WAIT for them to actually tell you what they need. Do NOT pull up their appointments, do NOT call any tools, and do NOT assume why they're calling until they clearly say so. Do NOT ask for their phone number — you already have their account; when you later need their details, call lookup_customer with no arguments.`
       );
     } catch {
       this.prefetch = null; // graceful: behave exactly as today (ask for phone)
@@ -504,9 +536,31 @@ class TwilioRealtimeCall {
     try {
       const event = JSON.parse(data.toString()) as TwilioEvent;
       switch (event.event) {
-        case 'start':
+        case 'start': {
           this.streamSid = (event as TwilioStartEvent).start.streamSid;
           this.callSid = (event as TwilioStartEvent).start.callSid;
+          // Auth gate: verify the short-lived signed token that routes/twilio.ts
+          // bound to this callSid BEFORE we spin up (and get billed for) an
+          // OpenAI Realtime session. When WS_AUTH_SECRET is set, an invalid or
+          // missing token closes the socket (1008 policy violation) and aborts.
+          // In dev/test (no secret) verifyStreamToken is permissive.
+          if (env.WS_AUTH_SECRET) {
+            const token =
+              (event as TwilioStartEvent).start.customParameters?.token ?? '';
+            if (!verifyStreamToken(token, this.callSid)) {
+              logger.warn(
+                { streamSid: this.streamSid },
+                '🚫 Rejected media stream: invalid/missing WS auth token'
+              );
+              this.closed = true;
+              try {
+                this.socket.close(1008);
+              } catch {
+                /* socket may already be closing */
+              }
+              break;
+            }
+          }
           logger.info(
             { streamSid: this.streamSid },
             '📞 ========== NEW CALL STARTED =========='
@@ -527,18 +581,32 @@ class TwilioRealtimeCall {
           // Look the caller up by THEIR phone number (caller ID) and, if we
           // recognize them, tell Erica so she greets by name + skips asking for
           // the number. If not recognized (or no caller ID), she greets normally.
-          await this.warmCallerContext(
-            (event as TwilioStartEvent).start.customParameters?.from
-          );
+          // Kick this off concurrently so the caller-lookup doesn't add pickup
+          // latency — but AWAIT it before requesting the greeting so any injected
+          // context is applied first (the greeting must reflect who's calling).
+          const callerFrom = (event as TwilioStartEvent).start.customParameters
+            ?.from;
+          const warm = this.warmCallerContext(callerFrom);
+          await warm;
+          // Persist the call start (append-only JSONL; never throws). Do this
+          // after warmCallerContext so recognizedClientId reflects a caller-ID
+          // match. Record startedAtMs so cleanup() can compute duration.
+          this.startedAtMs = Date.now();
+          CallStore.startCall({
+            callSid: this.callSid,
+            streamSid: this.streamSid,
+            from: callerFrom,
+            recognizedClientId: this.prefetch?.clientId,
+            startedAt: this.startedAtMs,
+          });
           // Erica greets first, in her own voice (no separate Polly handoff).
           this.session.requestGreeting();
-          // Preload client phone index in background so lookup_customer is instant
-          phorest.preloadClients?.().catch(() => {});
           logger.info(
             { streamSid: this.streamSid },
             '🎙️ Waiting for caller audio...'
           );
           break;
+        }
         case 'media': {
           const media = (event as TwilioMediaEvent).media;
           if (media?.timestamp)
@@ -650,13 +718,26 @@ class TwilioRealtimeCall {
     this.markQueue = [];
   }
 
-  private handleAssistantText(_delta: string) {
-    // Placeholder for future analytics or action parsing.
+  private handleAssistantText(delta: string) {
+    // Accumulate what Erica said (bounded, no per-delta external calls) so a
+    // future digest can store it. Cap the buffer so a long call can't grow it
+    // unbounded.
+    if (this.assistantTranscript.length < 8000) {
+      this.assistantTranscript += delta;
+    }
   }
 
   private async handleSuggestAvailability(args: unknown) {
     try {
-      const payload = args as {
+      const parsed = parseToolArgs('suggest_availability', args);
+      if (!parsed.success) {
+        logger.error(
+          { tool: 'suggest_availability', error: parsed.error },
+          'Tool arg validation failed: suggest_availability'
+        );
+        return { error: parsed.error };
+      }
+      const payload = parsed.data as {
         serviceName: string;
         date: string;
         preferredTime?: string;
@@ -675,7 +756,11 @@ class TwilioRealtimeCall {
       const openClose = getOpenClose(payload.date);
       const durationMin = result.service.durationMin || 0;
       const inHours = result.slots
-        .map((iso) => DateTime.fromISO(iso))
+        // Parse EXPLICITLY in the salon zone. getAvailability returns ISO strings
+        // carrying the salon offset; an unzoned fromISO() renders in the PROCESS
+        // zone, so on a UTC host every spoken/booked time would silently shift
+        // +4/5h. This is the only unzoned parse in src — keep it zone-explicit.
+        .map((iso) => DateTime.fromISO(iso, { zone: env.TIMEZONE }))
         .filter(
           (dt) =>
             dt.isValid &&
@@ -717,6 +802,13 @@ class TwilioRealtimeCall {
         value: dt.toFormat('HH:mm'),
       }));
 
+      // Remember exactly the 24h values we offered for this service+date so
+      // book_appointment can reject any time we never presented as available.
+      this.offeredSlots.set(
+        this.slotKey(result.service.name, result.date),
+        new Set(slots.map((s) => s.value))
+      );
+
       logger.info(
         {
           tool: 'suggest_availability',
@@ -729,6 +821,15 @@ class TwilioRealtimeCall {
         },
         'Availability slots found'
       );
+      CallStore.recordToolCall(this.callSid, {
+        name: 'suggest_availability',
+        ok: true,
+        detail: {
+          service: result.service.name,
+          date: result.date,
+          offered: slots.length,
+        },
+      });
       return {
         service: result.service.name,
         date: result.date,
@@ -743,22 +844,81 @@ class TwilioRealtimeCall {
         { tool: 'suggest_availability', error: this.formatError(error) },
         'Tool error: suggest_availability'
       );
+      CallStore.recordToolCall(this.callSid, {
+        name: 'suggest_availability',
+        ok: false,
+        error: this.formatError(error),
+      });
       return { error: this.formatError(error) };
     }
   }
 
   private async handleBookAppointment(args: unknown) {
     try {
-      const payload = args as {
+      const parsed = parseToolArgs('book_appointment', args);
+      if (!parsed.success) {
+        logger.error(
+          { tool: 'book_appointment', error: parsed.error },
+          'Tool arg validation failed: book_appointment'
+        );
+        return { error: parsed.error };
+      }
+      const payload = parsed.data as {
         serviceName: string;
         date: string;
         time: string;
         customer: { name: string; phone: string; email?: string };
       };
+      // Log only non-PII fields. NEVER log payload.customer (full name, phone,
+      // email) — pino has no redaction configured, so it would write the
+      // caller's full phone number to plaintext stdout logs.
       logger.info(
-        { tool: 'book_appointment', args: payload },
+        {
+          tool: 'book_appointment',
+          service: payload.serviceName,
+          date: payload.date,
+          time: payload.time,
+        },
         'Tool called: book_appointment'
       );
+
+      // Slot guard: if we offered slots for this exact service+date, the caller
+      // may only book one we actually offered. No cache entry → legitimate flow
+      // we didn't gate through suggest_availability, so allow it (just warn).
+      // Resolve to the canonical catalog name so the key matches what
+      // suggest_availability stored (it keys off the RESOLVED service name) —
+      // otherwise an aliased phrasing ("eyebrows" vs "Eyebrow Threading") misses
+      // the cache and the guard silently no-ops.
+      const bookSvc = await findServiceByName(payload.serviceName);
+      const offered = this.offeredSlots.get(
+        this.slotKey(bookSvc?.name ?? payload.serviceName, payload.date)
+      );
+      if (offered) {
+        if (!offered.has(payload.time)) {
+          logger.warn(
+            {
+              tool: 'book_appointment',
+              requested: payload.time,
+              offered: [...offered],
+            },
+            'Booking rejected — time not in offered slots'
+          );
+          const list = [...offered].sort().join(', ');
+          return {
+            error: `That time is not available — the open times are: ${list}`,
+          };
+        }
+      } else {
+        logger.warn(
+          {
+            tool: 'book_appointment',
+            service: payload.serviceName,
+            date: payload.date,
+          },
+          'Booking without prior suggest_availability for this service+date — allowing'
+        );
+      }
+
       const result = await bookAppointment(payload as any);
       logger.info(
         {
@@ -767,7 +927,26 @@ class TwilioRealtimeCall {
         },
         'Appointment booked successfully'
       );
+      // The caller now owns this appointment on this call — allow a later
+      // reschedule/cancel of it without a fresh list_appointments.
+      this.servedAppointmentIds.add(result.appointment.appointmentId);
       if (this.prefetch) this.prefetch.appointments = null; // warmed list is now stale
+      this.outcome = 'booked';
+      CallStore.recordToolCall(this.callSid, {
+        name: 'book_appointment',
+        ok: true,
+        detail: {
+          service: result.service.name,
+          date: payload.date,
+          time: payload.time,
+        },
+      });
+      CallStore.recordBooking(this.callSid, {
+        service: result.service.name,
+        price: result.service.price,
+        date: payload.date,
+        time: payload.time,
+      });
       return {
         appointmentId: result.appointment.appointmentId,
         service: result.service.name,
@@ -780,13 +959,26 @@ class TwilioRealtimeCall {
         { tool: 'book_appointment', error: this.formatError(error) },
         'Tool error: book_appointment'
       );
+      CallStore.recordToolCall(this.callSid, {
+        name: 'book_appointment',
+        ok: false,
+        error: this.formatError(error),
+      });
       return { error: this.formatError(error) };
     }
   }
 
   private async handleReschedule(args: unknown) {
     try {
-      const payload = args as {
+      const parsed = parseToolArgs('reschedule_appointment', args);
+      if (!parsed.success) {
+        logger.error(
+          { tool: 'reschedule_appointment', error: parsed.error },
+          'Tool arg validation failed: reschedule_appointment'
+        );
+        return { error: parsed.error };
+      }
+      const payload = parsed.data as {
         appointmentId: string;
         date: string;
         time: string;
@@ -795,6 +987,21 @@ class TwilioRealtimeCall {
         { tool: 'reschedule_appointment', args: payload },
         'Tool called: reschedule_appointment'
       );
+      // Ownership guard: never reschedule an appointment this call hasn't
+      // actually surfaced (prevents acting on a guessed/invented ID).
+      if (!this.servedAppointmentIds.has(payload.appointmentId)) {
+        logger.warn(
+          {
+            tool: 'reschedule_appointment',
+            appointmentId: payload.appointmentId,
+          },
+          'Reschedule blocked — appointment not served on this call'
+        );
+        return {
+          error:
+            'I need to pull up your appointments first — please call list_appointments.',
+        };
+      }
       const iso = `${payload.date}T${payload.time}`;
       await phorest.updateAppointment(payload.appointmentId, iso);
       logger.info(
@@ -805,6 +1012,12 @@ class TwilioRealtimeCall {
         'Appointment rescheduled successfully'
       );
       if (this.prefetch) this.prefetch.appointments = null; // warmed list is now stale
+      this.outcome = 'rescheduled';
+      CallStore.recordToolCall(this.callSid, {
+        name: 'reschedule_appointment',
+        ok: true,
+        detail: { date: payload.date, time: payload.time },
+      });
       return {
         appointmentId: payload.appointmentId,
         date: payload.date,
@@ -815,29 +1028,65 @@ class TwilioRealtimeCall {
         { tool: 'reschedule_appointment', error: this.formatError(error) },
         'Tool error: reschedule_appointment'
       );
+      CallStore.recordToolCall(this.callSid, {
+        name: 'reschedule_appointment',
+        ok: false,
+        error: this.formatError(error),
+      });
       return { error: this.formatError(error) };
     }
   }
 
   private async handleCancel(args: unknown) {
     try {
-      const payload = args as { appointmentId: string };
+      const parsed = parseToolArgs('cancel_appointment', args);
+      if (!parsed.success) {
+        logger.error(
+          { tool: 'cancel_appointment', error: parsed.error },
+          'Tool arg validation failed: cancel_appointment'
+        );
+        return { error: parsed.error };
+      }
+      const payload = parsed.data as { appointmentId: string };
       logger.info(
         { tool: 'cancel_appointment', args: payload },
         'Tool called: cancel_appointment'
       );
+      // Ownership guard: never cancel an appointment this call hasn't actually
+      // surfaced (prevents acting on a guessed/invented ID).
+      if (!this.servedAppointmentIds.has(payload.appointmentId)) {
+        logger.warn(
+          { tool: 'cancel_appointment', appointmentId: payload.appointmentId },
+          'Cancel blocked — appointment not served on this call'
+        );
+        return {
+          error:
+            'I need to pull up your appointments first — please call list_appointments.',
+        };
+      }
       await phorest.cancelAppointment(payload.appointmentId);
       logger.info(
         { tool: 'cancel_appointment', appointmentId: payload.appointmentId },
         'Appointment cancelled successfully'
       );
       if (this.prefetch) this.prefetch.appointments = null; // warmed list is now stale
+      this.outcome = 'cancelled';
+      CallStore.recordToolCall(this.callSid, {
+        name: 'cancel_appointment',
+        ok: true,
+        detail: { appointmentId: payload.appointmentId },
+      });
       return { appointmentId: payload.appointmentId, cancelled: true };
     } catch (error) {
       logger.error(
         { tool: 'cancel_appointment', error: this.formatError(error) },
         'Tool error: cancel_appointment'
       );
+      CallStore.recordToolCall(this.callSid, {
+        name: 'cancel_appointment',
+        ok: false,
+        error: this.formatError(error),
+      });
       return { error: this.formatError(error) };
     }
   }
@@ -864,19 +1113,37 @@ class TwilioRealtimeCall {
         { tool: 'get_business_hours', hours: formattedHours },
         'Business hours retrieved'
       );
+      this.markInfoOutcome();
+      CallStore.recordToolCall(this.callSid, {
+        name: 'get_business_hours',
+        ok: true,
+      });
       return formattedHours;
     } catch (error) {
       logger.error(
         { tool: 'get_business_hours', error: this.formatError(error) },
         'Tool error: get_business_hours'
       );
+      CallStore.recordToolCall(this.callSid, {
+        name: 'get_business_hours',
+        ok: false,
+        error: this.formatError(error),
+      });
       return { error: this.formatError(error) };
     }
   }
 
   private async handleGetPrices(args: unknown) {
     try {
-      const payload = (args ?? {}) as { serviceName?: string };
+      const parsed = parseToolArgs('get_prices', args ?? {});
+      if (!parsed.success) {
+        logger.error(
+          { tool: 'get_prices', error: parsed.error },
+          'Tool arg validation failed: get_prices'
+        );
+        return { error: parsed.error };
+      }
+      const payload = parsed.data as { serviceName?: string };
       // Targeted lookup = a few tokens back to the model (vs the whole 63-item
       // catalog). Only return the full menu when no specific service was named.
       if (payload.serviceName) {
@@ -886,6 +1153,12 @@ class TwilioRealtimeCall {
             { tool: 'get_prices', match: svc.name },
             'Price lookup (single)'
           );
+          this.markInfoOutcome();
+          CallStore.recordToolCall(this.callSid, {
+            name: 'get_prices',
+            ok: true,
+            detail: { service: svc.name },
+          });
           return {
             service: svc.name,
             price: svc.price,
@@ -902,19 +1175,38 @@ class TwilioRealtimeCall {
         { tool: 'get_prices', count: services.length },
         'Full price menu returned'
       );
+      this.markInfoOutcome();
+      CallStore.recordToolCall(this.callSid, {
+        name: 'get_prices',
+        ok: true,
+        detail: { count: services.length },
+      });
       return { services };
     } catch (error) {
       logger.error(
         { tool: 'get_prices', error: this.formatError(error) },
         'Tool error: get_prices'
       );
+      CallStore.recordToolCall(this.callSid, {
+        name: 'get_prices',
+        ok: false,
+        error: this.formatError(error),
+      });
       return { error: this.formatError(error) };
     }
   }
 
   private async handleLookupCustomer(args: unknown) {
     try {
-      const payload = args as {
+      const parsed = parseToolArgs('lookup_customer', args ?? {});
+      if (!parsed.success) {
+        logger.error(
+          { tool: 'lookup_customer', error: parsed.error },
+          'Tool arg validation failed: lookup_customer'
+        );
+        return { error: parsed.error };
+      }
+      const payload = parsed.data as {
         phone?: string;
         firstName?: string;
         lastName?: string;
@@ -928,6 +1220,12 @@ class TwilioRealtimeCall {
           { tool: 'lookup_customer', clientId: this.prefetch.clientId },
           'Customer served from caller-ID prefetch'
         );
+        this.markInfoOutcome();
+        CallStore.recordToolCall(this.callSid, {
+          name: 'lookup_customer',
+          ok: true,
+          detail: { clientId: this.prefetch.clientId, matchedBy: 'caller-id' },
+        });
         return {
           found: true,
           clientId: this.prefetch.clientId,
@@ -943,6 +1241,12 @@ class TwilioRealtimeCall {
             { tool: 'lookup_customer', clientId: result.clientId },
             'Customer found by phone'
           );
+          this.markInfoOutcome();
+          CallStore.recordToolCall(this.callSid, {
+            name: 'lookup_customer',
+            ok: true,
+            detail: { clientId: result.clientId, matchedBy: 'phone' },
+          });
           return {
             found: true,
             clientId: result.clientId,
@@ -962,6 +1266,12 @@ class TwilioRealtimeCall {
             { tool: 'lookup_customer', clientId: results[0]!.clientId },
             'Customer found by name'
           );
+          this.markInfoOutcome();
+          CallStore.recordToolCall(this.callSid, {
+            name: 'lookup_customer',
+            ok: true,
+            detail: { clientId: results[0]!.clientId, matchedBy: 'name' },
+          });
           return {
             found: true,
             clientId: results[0]!.clientId,
@@ -970,6 +1280,12 @@ class TwilioRealtimeCall {
           };
         }
         if (results.length > 1) {
+          this.markInfoOutcome();
+          CallStore.recordToolCall(this.callSid, {
+            name: 'lookup_customer',
+            ok: true,
+            detail: { multiple: true, count: results.length },
+          });
           return {
             found: true,
             multiple: true,
@@ -981,19 +1297,37 @@ class TwilioRealtimeCall {
       }
 
       logger.info({ tool: 'lookup_customer' }, 'Customer not found');
+      CallStore.recordToolCall(this.callSid, {
+        name: 'lookup_customer',
+        ok: true,
+        detail: { found: false },
+      });
       return { found: false };
     } catch (error) {
       logger.error(
         { tool: 'lookup_customer', error: this.formatError(error) },
         'Tool error: lookup_customer'
       );
+      CallStore.recordToolCall(this.callSid, {
+        name: 'lookup_customer',
+        ok: false,
+        error: this.formatError(error),
+      });
       return { error: this.formatError(error) };
     }
   }
 
   private async handleListAppointments(args: unknown) {
     try {
-      const payload = args as { clientId: string };
+      const parsed = parseToolArgs('list_appointments', args);
+      if (!parsed.success) {
+        logger.error(
+          { tool: 'list_appointments', error: parsed.error },
+          'Tool arg validation failed: list_appointments'
+        );
+        return { error: parsed.error };
+      }
+      const payload = parsed.data as { clientId: string };
       logger.info(
         { tool: 'list_appointments', clientId: payload.clientId },
         'Tool called: list_appointments'
@@ -1006,6 +1340,10 @@ class TwilioRealtimeCall {
         this.prefetch.clientId === payload.clientId
           ? this.prefetch.appointments
           : await phorest.listAppointments(payload.clientId);
+      // These appointments have now been surfaced to this call — allow
+      // cancel/reschedule against them (ownership guard).
+      for (const a of appointments)
+        this.servedAppointmentIds.add(a.appointmentId);
       // Hand the model ONLY clean, unambiguous fields — never the raw HH:mm:ss
       // (which it could mis-read as the spoken time). It must quote `date`/`time`
       // verbatim.
@@ -1019,19 +1357,41 @@ class TwilioRealtimeCall {
         { tool: 'list_appointments', count: clean.length, appointments: clean },
         'Appointments retrieved'
       );
+      this.markInfoOutcome();
+      CallStore.recordToolCall(this.callSid, {
+        name: 'list_appointments',
+        ok: true,
+        detail: { clientId: payload.clientId, count: clean.length },
+      });
       return { appointments: clean };
     } catch (error) {
       logger.error(
         { tool: 'list_appointments', error: this.formatError(error) },
         'Tool error: list_appointments'
       );
+      CallStore.recordToolCall(this.callSid, {
+        name: 'list_appointments',
+        ok: false,
+        error: this.formatError(error),
+      });
       return { error: this.formatError(error) };
     }
   }
 
   private async handleLogRunningLate(args: unknown) {
     try {
-      const payload = args as { clientId: string; appointmentId: string };
+      const parsed = parseToolArgs('log_running_late', args);
+      if (!parsed.success) {
+        logger.error(
+          { tool: 'log_running_late', error: parsed.error },
+          'Tool arg validation failed: log_running_late'
+        );
+        return { error: parsed.error };
+      }
+      const payload = parsed.data as {
+        clientId: string;
+        appointmentId: string;
+      };
       logger.info(
         { tool: 'log_running_late', ...payload },
         'Tool called: log_running_late'
@@ -1064,19 +1424,38 @@ class TwilioRealtimeCall {
         { tool: 'log_running_late', squeezed },
         'Running late logged'
       );
+      this.markInfoOutcome();
+      CallStore.recordToolCall(this.callSid, {
+        name: 'log_running_late',
+        ok: true,
+        detail: { appointmentId: payload.appointmentId, squeezed },
+      });
       return { noted: true, squeezed };
     } catch (error) {
       logger.error(
         { tool: 'log_running_late', error: this.formatError(error) },
         'Tool error: log_running_late'
       );
+      CallStore.recordToolCall(this.callSid, {
+        name: 'log_running_late',
+        ok: false,
+        error: this.formatError(error),
+      });
       return { error: this.formatError(error) };
     }
   }
 
   private async handleTransferToOwner(args: unknown) {
     try {
-      const payload = args as { reason: string };
+      const parsed = parseToolArgs('transfer_to_owner', args);
+      if (!parsed.success) {
+        logger.error(
+          { tool: 'transfer_to_owner', error: parsed.error },
+          'Tool arg validation failed: transfer_to_owner'
+        );
+        return { error: parsed.error };
+      }
+      const payload = parsed.data as { reason: string };
       logger.info(
         {
           tool: 'transfer_to_owner',
@@ -1092,17 +1471,33 @@ class TwilioRealtimeCall {
           { tool: 'transfer_to_owner' },
           'Cannot transfer — missing Twilio client or callSid'
         );
+        CallStore.recordToolCall(this.callSid, {
+          name: 'transfer_to_owner',
+          ok: false,
+          error: 'Transfer unavailable',
+        });
         return { error: 'Transfer unavailable' };
       }
 
+      this.transferring = true;
+      // Erica has already spoken the handoff line in her own voice, so go
+      // straight to <Dial> — no Polly <Say> (a jarring mid-call voice switch).
       await client.calls(this.callSid).update({
-        twiml: `<Response><Say voice="Polly.Joanna-Neural">One moment while I transfer you to Richa.</Say><Dial>${env.OWNER_PHONE}</Dial></Response>`,
+        twiml: `<Response><Dial>${env.OWNER_PHONE}</Dial></Response>`,
       });
 
       logger.info(
         { tool: 'transfer_to_owner', callSid: this.callSid },
         'Call transferred successfully'
       );
+      // Set the outcome + record the tool call BEFORE cleanup() — cleanup writes
+      // the endCall record using this.outcome.
+      this.outcome = 'transferred';
+      CallStore.recordToolCall(this.callSid, {
+        name: 'transfer_to_owner',
+        ok: true,
+        detail: { reason: payload.reason },
+      });
       this.cleanup();
       return { transferred: true };
     } catch (error) {
@@ -1110,6 +1505,11 @@ class TwilioRealtimeCall {
         { tool: 'transfer_to_owner', error: this.formatError(error) },
         'Transfer failed'
       );
+      CallStore.recordToolCall(this.callSid, {
+        name: 'transfer_to_owner',
+        ok: false,
+        error: this.formatError(error),
+      });
       return { error: this.formatError(error) };
     }
   }
@@ -1119,17 +1519,62 @@ class TwilioRealtimeCall {
     return 'Unexpected error occurred';
   }
 
-  private handleError(error: Error) {
+  /** Cache key for offered slots — service+date, normalized so book/suggest agree. */
+  private slotKey(serviceName: string, date: string) {
+    return `${serviceName.toLowerCase().trim()}|${date}`;
+  }
+
+  /**
+   * Mark the call outcome as "info" (a lookup/hours/price/list happened) but only
+   * while it's still the default — never downgrade a write outcome like "booked".
+   */
+  private markInfoOutcome() {
+    if (this.outcome === 'none') this.outcome = 'info';
+  }
+
+  private async handleError(error: Error) {
     logger.error(
       { err: error, streamSid: this.streamSid },
       'Twilio realtime call error'
     );
+    // Don't leave the caller on a dead line: best-effort redirect the live call
+    // to the salon owner before we tear down. Guard so we only try once and a
+    // failure here can NEVER re-enter handleError (mark transferring first).
+    const client = getTwilioClient();
+    if (client && this.callSid && !this.closed && !this.transferring) {
+      this.transferring = true;
+      try {
+        await client.calls(this.callSid).update({
+          twiml: `<Response><Say voice="Polly.Joanna-Neural">I'm so sorry, I'm having a technical problem — let me connect you with the salon.</Say><Dial>${env.OWNER_PHONE}</Dial></Response>`,
+        });
+        logger.info(
+          { streamSid: this.streamSid, callSid: this.callSid },
+          'Fatal error — call redirected to owner'
+        );
+      } catch (redirectErr) {
+        logger.error(
+          { err: redirectErr, streamSid: this.streamSid },
+          'Failed to redirect call to owner after fatal error'
+        );
+      }
+    }
     this.cleanup();
   }
 
   private cleanup() {
     if (this.closed) return;
     this.closed = true;
+    // Persist the call end exactly once, and only if the call actually started
+    // (a socket that closed before Twilio's "start" never wrote a start record).
+    if (!this.endRecorded && this.startedAtMs !== null) {
+      this.endRecorded = true;
+      const endedAt = Date.now();
+      CallStore.endCall(this.callSid, {
+        endedAt,
+        durationMs: endedAt - this.startedAtMs,
+        outcome: this.outcome,
+      });
+    }
     this.session.close();
     try {
       if (this.socket.readyState === WebSocket.OPEN) {
