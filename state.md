@@ -3,6 +3,30 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-07-19 — ROUND-2 FIXUPS (`tasks/fixup_round2_2026-07-19.md`) — DONE, committed, NOT pushed
+All architect-review findings F1–F10 fixed directly (not swarmed). `tsc` clean,
+**98/98 vitest** (was 78), green under `TZ=UTC`. 3 commits (P1 / phorest+booking
+/ orchestration+P3). Exit criteria met: F1–F3 have handler-level regression
+tests; ≥85 tests; lessons.md got the F8 honesty + F1 test-above-validation-layer
+lessons.
+- **P1 (unblocked the smoke test):** F1 book_appointment zod schema mirrors
+  TOOL_DEFINITIONS again (clientId kept, phone optional — was silently stripped);
+  F2 prefetch clientId/phone injected only when the given name matches the
+  recognized account (daughter on mom's phone no longer books under mom); F3 WS
+  auth fails CLOSED in prod (verify + `assertWsAuthConfigured` refuse-boot),
+  `WS_AUTH_SECRET` now set in `.env` (gitignored), placeholder in `.env.example`.
+- **P2/P3:** F4 matcher ("micro blading" resolves, ambiguous≤3, alias-rot warn),
+  F5 no phone-index overwrite, F6 reschedule slot guard, F7 WS conn cap +
+  pre-auth timeout, F8 REAL concurrent prefetch (was falsely claimed), F9
+  stale-cache backoff, F10a-l (endTime-from-duration, USE_MOCK strict, transfer
+  flag reset, running-late ownership guard, transcript persisted, consent line,
+  fixture rot, secret-fragment scrub, sendUserText removed, rate-limit map cap).
+- **✅ Live smoke test is now UNBLOCKED.** Still owner-gated before push/deploy:
+  rotate Phorest secret + OpenAI keys (in git history), raise TPM tier, provide
+  2026 closedDates (CF-1). Approved deviations (do NOT "fix"): Lane B structural
+  error classification, JSONL CallStore, in-house rate limiter, matcher
+  coverage==1 rule, PH-9 deferral.
+
 ## 2026-07-19 — Defects swarm (DONE, committed, NOT pushed) — ⚠️ NEEDS LIVE SMOKE TEST
 13-agent A∥B→C swarm (`tasks/swarm-defects.mjs`) fixed the `docs/DEFECTS_2026-07-19.md`
 functional/correctness audit. `tsc` clean, **78/78 vitest** (was 39), green under
@@ -55,8 +79,8 @@ PLAN.md secret). 3 local commits on `feat/erica-v2`.
   soak. semantic_vad / Spanish / SMS still need live validation.
 
 ## Current status
-- **Branch:** `feat/erica-v2` (NOT merged to main). ~34 commits of fixes.
-- **Build/tests:** `tsc` clean, **78/78 vitest** green (also under `TZ=UTC`). Run `npm test` after every change.
+- **Branch:** `feat/erica-v2` (NOT merged to main). ~38 commits of fixes.
+- **Build/tests:** `tsc` clean, **98/98 vitest** green (also under `TZ=UTC`). Run `npm test` after every change.
 - **Runtime:** `npm run dev` (tsx watch, auto-reloads on save) → server on :5050.
   `USE_MOCK_PHOREST=false` (real Phorest in `.env`). Voice = **cedar**, model = **gpt-realtime**.
 - The core loop WORKS end-to-end on real calls: greet, book, reschedule, cancel,
