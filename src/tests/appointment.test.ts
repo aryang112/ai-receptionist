@@ -1,26 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import request from 'supertest';
-import express from 'express';
-import { appointment } from '../routes/appointment.js';
+import { suggestSlots, bookAppointment } from '../services/booking.js';
 
-const app = express();
-app.use(express.json());
-app.use('/api', appointment);
-
-describe('appointment routes', () => {
-  it('suggest returns slots', async () => {
-    const r = await request(app)
-      .post('/api/suggest')
-      .send({ serviceName: 'Eyebrow', date: '2025-10-01' });
-    expect(r.status).toBe(200);
-    expect(Array.isArray(r.body.slots)).toBe(true);
+// NODE_ENV=test forces the mock Phorest (see services/phorest.ts) — never hits real Phorest.
+describe('booking service', () => {
+  it('suggestSlots returns slots for a known service', async () => {
+    const result = await suggestSlots({ serviceName: 'Eyebrow', date: '2025-10-01' });
+    expect(Array.isArray(result.slots)).toBe(true);
+    expect(result.slots.length).toBeGreaterThan(0);
+    expect(result.service.name).toBe('Eyebrow Threading');
   });
 
-  it('book returns appointmentId', async () => {
-    const r = await request(app)
-      .post('/api/book')
-      .send({ serviceName: 'Eyebrow', date: '2025-10-01', time: '13:20', customer: { name: 'Alice' }});
-    expect(r.status).toBe(200);
-    expect(r.body.appointment?.appointmentId).toBeDefined();
+  it('bookAppointment returns an appointmentId', async () => {
+    const result = await bookAppointment({
+      serviceName: 'Eyebrow',
+      date: '2025-10-01',
+      time: '13:20',
+      customer: { name: 'Alice' },
+    });
+    expect(result.appointment.appointmentId).toBeDefined();
   });
 });

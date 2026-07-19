@@ -19,11 +19,6 @@ export const env = {
   OPENAI_VAD_SILENCE_MS: Number(process.env.OPENAI_VAD_SILENCE_MS || 700),
   OPENAI_VAD_PREFIX_MS: Number(process.env.OPENAI_VAD_PREFIX_MS || 300),
   OPENAI_NOISE_REDUCTION: process.env.OPENAI_NOISE_REDUCTION || 'near_field',
-  // Cap per-response output (default 'inf' = unbounded). Bounds tokens/min and
-  // reinforces 1-2 sentence replies. Raise if you ever hear responses cut off.
-  OPENAI_MAX_RESPONSE_TOKENS: Number(
-    process.env.OPENAI_MAX_RESPONSE_TOKENS || 400
-  ),
   TIMEZONE: process.env.TIMEZONE || 'America/New_York',
   USE_MOCK_PHOREST: process.env.USE_MOCK_PHOREST || 'true',
 
@@ -46,4 +41,22 @@ export const env = {
     .map((id) => id.trim())
     .filter(Boolean),
   OWNER_PHONE: process.env.OWNER_PHONE || '+14433706471',
+
+  // WebSocket auth — signed token for the Twilio media stream <-> server WS.
+  // Empty secret = dev-permissive: consumers must treat "" as "skip verification
+  // but warn" (never silently accept in production). TTL bounds token lifetime.
+  WS_AUTH_SECRET: process.env.WS_AUTH_SECRET || '',
+  WS_TOKEN_TTL_SECONDS: Number(process.env.WS_TOKEN_TTL_SECONDS || 300),
+
+  // Rate limiting (per-IP, sliding window). /twilio/* is voice traffic (looser);
+  // /api/* is the admin/data surface (stricter).
+  RATE_LIMIT_WINDOW_MS: Number(process.env.RATE_LIMIT_WINDOW_MS || 60000),
+  RATE_LIMIT_MAX: Number(process.env.RATE_LIMIT_MAX || 120),
+  API_RATE_LIMIT_MAX: Number(process.env.API_RATE_LIMIT_MAX || 30),
+
+  // Caller lookup cache: how long the phone->client index stays warm.
+  CLIENT_INDEX_TTL_HOURS: Number(process.env.CLIENT_INDEX_TTL_HOURS || 1),
+
+  // Append-only call log (JSONL) for the admin surface / auditing.
+  CALL_STORE_PATH: process.env.CALL_STORE_PATH || './data/calls.jsonl',
 };

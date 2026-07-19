@@ -2,10 +2,11 @@ import http from 'http';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { appointment } from './routes/appointment.js';
 import { metadata } from './routes/metadata.js';
 import { twilioVoice } from './routes/twilio.js';
 import { setupTwilioRealtimeStream } from './realtime/twilioStream.js';
+import { rateLimiter } from './middleware/rateLimit.js';
+import { env } from './config/env.js';
 import { logger } from './core/logger.js';
 import { phorest } from './services/phorest.js';
 
@@ -30,10 +31,21 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 // log incoming requests so we see traffic
 app.use((req, _res, next) => {
-  console.log('REQ', req.method, req.url);
+  logger.info({ method: req.method, url: req.url }, 'REQ');
   next();
 });
-app.use('/api', appointment);
+// Per-IP rate limiting, mounted before the routers.
+app.use(
+  '/twilio',
+  rateLimiter({ windowMs: env.RATE_LIMIT_WINDOW_MS, max: env.RATE_LIMIT_MAX })
+);
+app.use(
+  '/api',
+  rateLimiter({
+    windowMs: env.RATE_LIMIT_WINDOW_MS,
+    max: env.API_RATE_LIMIT_MAX,
+  })
+);
 app.use('/api', metadata);
 app.use('/twilio', twilioVoice);
 
@@ -55,7 +67,7 @@ const server = http.createServer(app);
 setupTwilioRealtimeStream(server);
 
 server.listen(PORT, () => {
-  console.log('Server up on', PORT);
+  logger.info({ port: PORT }, 'Server up');
   // Warm the client phone index now so the first caller's lookup is instant
   // instead of paying a full client-list scan mid-call. No-op in mock mode.
   phorest.preloadClients?.().catch((err) => {

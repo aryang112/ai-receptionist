@@ -1,6 +1,9 @@
 // src/routes/twilio.ts
 import express from 'express';
 import twilio from 'twilio';
+import { twilioSignature } from '../middleware/twilioSignature.js';
+import { issueStreamToken } from '../security/wsAuth.js';
+import { logger } from '../core/logger.js';
 
 const { VoiceResponse } = twilio.twiml;
 export const twilioVoice = express.Router();
@@ -20,12 +23,16 @@ function deriveStreamUrl(req: express.Request) {
  * Primary webhook: greet caller and open a Twilio media stream that routes
  * real-time audio through OpenAI Realtime.
  */
-twilioVoice.post('/voice', (req, res) => {
+twilioVoice.post('/voice', twilioSignature(), (req, res) => {
   const streamUrl = deriveStreamUrl(req);
-  console.log('📞 Twilio /voice called');
-  console.log('   Protocol from req.protocol:', req.protocol);
-  console.log('   X-Forwarded-Proto header:', req.headers['x-forwarded-proto']);
-  console.log('   Generated Stream URL:', streamUrl);
+  logger.info(
+    {
+      protocol: req.protocol,
+      forwardedProto: req.headers['x-forwarded-proto'],
+      streamUrl,
+    },
+    'Twilio /voice called'
+  );
 
   // No Polly <Say> greeting here: Erica greets the caller herself over the
   // media stream (one consistent voice). The stream connects immediately;
@@ -39,14 +46,14 @@ twilioVoice.post('/voice', (req, res) => {
   const from = (req.body?.From || '').toString();
   if (from) stream.parameter({ name: 'from', value: from });
 
-  res.type('text/xml').send(twiml.toString());
-});
+  // Bind the media-stream WebSocket to this call with a short-lived signed
+  // token (verified when the stream connects). Skipped in dev/test where no
+  // secret is configured and issueStreamToken() returns "".
+  const callSid = (req.body?.CallSid || '').toString();
+  if (callSid) {
+    const token = issueStreamToken(callSid);
+    if (token) stream.parameter({ name: 'token', value: token });
+  }
 
-/**
- * Legacy endpoint retained to avoid 404s if Twilio replays the gather URL.
- */
-twilioVoice.post('/gather', (_req, res) => {
-  const twiml = new VoiceResponse();
-  twiml.say({ voice: 'Polly.Joanna' }, 'One moment while I connect you.');
   res.type('text/xml').send(twiml.toString());
 });
