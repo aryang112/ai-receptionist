@@ -4,3 +4,6 @@ dist/
 .env.bak.*
 .env.local
 .DS_Store
+logs.md
+data/
+*.jsonl

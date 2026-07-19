@@ -76,7 +76,7 @@ To change voice later: update `OPENAI_REALTIME_VOICE` env var.
 
 ## Phorest API Reference
 - **Base URL (US):** `http://api-gateway-us.phorest.com/third-party-api-server/`
-- **Auth:** Basic `global/richa@richasthreading.com:D9x$zcbh0h1t`
+- **Auth:** Basic `global/richa@richasthreading.com:<REDACTED-ROTATE-THIS>`
 - **Business ID:** `JGTSCf8nrWhIoBauSzm5wQ`
 - **Branch ID:** `BhmcJWTC1BWLuHLwzzZR6w`
 - **Timezone:** `America/New_York` (Phorest stores UTC internally; always convert)
@@ -911,7 +911,7 @@ TWILIO_AUTH_TOKEN=...
 TWILIO_NUMBER=+14109429100
 PHOREST_BASE_URL=http://api-gateway-us.phorest.com/third-party-api-server
 PHOREST_API_USERNAME=global/richa@richasthreading.com
-PHOREST_API_SECRET=D9x$zcbh0h1t
+PHOREST_API_SECRET=<REDACTED-ROTATE-THIS>
 PHOREST_BUSINESS_ID=JGTSCf8nrWhIoBauSzm5wQ
 PHOREST_BRANCH_ID=BhmcJWTC1BWLuHLwzzZR6w
 PHOREST_PRIMARY_STAFF_ID=...
