@@ -16,9 +16,16 @@ export const TOOL_SCHEMAS = {
     serviceName: z.string(),
     date: z.string(),
     time: z.string(),
+    // Optional: when a recognized/known caller is booked we pass their real
+    // clientId and skip phone-based resolution (CT-1). MUST mirror
+    // TOOL_DEFINITIONS — zod strip-mode silently DELETES unlisted keys, which
+    // previously dropped clientId at the validation seam and re-broke CT-1.
+    clientId: z.string().optional(),
     customer: z.object({
       name: z.string(),
-      phone: z.string(),
+      // Optional: a name-identified caller can be booked without a phone
+      // (their clientId carries identity). Required-phone forced fabrication.
+      phone: z.string().optional(),
       email: z.string().optional(),
     }),
   }),
@@ -61,7 +68,10 @@ export type ParseToolArgsResult =
  * Validate a tool's arguments against its schema. Returns the parsed data on
  * success, or a short human-readable error joining the zod issues on failure.
  */
-export function parseToolArgs(name: string, args: unknown): ParseToolArgsResult {
+export function parseToolArgs(
+  name: string,
+  args: unknown
+): ParseToolArgsResult {
   const schema = TOOL_SCHEMAS[name as ToolName];
   if (!schema) return { success: false, error: `Unknown tool: ${name}` };
 

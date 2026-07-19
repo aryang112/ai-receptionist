@@ -6,9 +6,14 @@ import { metadata } from './routes/metadata.js';
 import { twilioVoice } from './routes/twilio.js';
 import { setupTwilioRealtimeStream } from './realtime/twilioStream.js';
 import { rateLimiter } from './middleware/rateLimit.js';
+import { assertWsAuthConfigured } from './security/wsAuth.js';
 import { env } from './config/env.js';
 import { logger } from './core/logger.js';
 import { phorest } from './services/phorest.js';
+
+// Fail fast in production if the WS auth secret is missing — never boot with an
+// unauthenticated /twilio/stream (see wsAuth.assertWsAuthConfigured / F3).
+assertWsAuthConfigured();
 
 // A single call's error must NEVER take down the server and drop every other
 // live call (this is exactly how a mid-call transfer used to crash the process).

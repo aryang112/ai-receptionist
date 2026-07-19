@@ -1061,13 +1061,26 @@ export class TwilioRealtimeCall {
         );
       }
 
-      // CT-1: thread the recognized caller's real identity. If the model didn't
-      // pass a clientId but we matched this caller by caller ID, inject the
-      // prefetch clientId deterministically so we book against their existing
-      // record (skips getOrCreateClient) instead of fabricating/duplicating one.
-      // Also backfill their real phone from prefetch when the model has none, so
-      // a brand-new-looking booking still ties to the right account.
-      const clientId = payload.clientId ?? this.prefetch?.clientId;
+      // CT-1 + F2: thread the recognized caller's identity ONLY when the name
+      // they give matches the caller-ID-recognized account. A daughter calling
+      // from mom's recognized phone and giving her OWN name must NOT book under
+      // mom — so when the names don't match we omit both clientId and the
+      // prefetch phone, letting getOrCreateClient's shared-phone name guard
+      // resolve (or create) the right person instead of deterministically
+      // pinning the booking to the phone owner.
+      const nameFirst = payload.customer.name
+        ?.trim()
+        .split(/\s+/)[0]
+        ?.toLowerCase();
+      const prefetchFirst = this.prefetch?.firstName?.trim().toLowerCase();
+      const recognized = Boolean(
+        this.prefetch &&
+          nameFirst &&
+          prefetchFirst &&
+          nameFirst === prefetchFirst
+      );
+      const clientId =
+        payload.clientId ?? (recognized ? this.prefetch!.clientId : undefined);
       const bookInput = {
         serviceName: payload.serviceName,
         date: payload.date,
@@ -1077,7 +1090,7 @@ export class TwilioRealtimeCall {
           name: payload.customer.name,
           ...(payload.customer.phone
             ? { phone: payload.customer.phone }
-            : this.prefetch?.phone
+            : recognized && this.prefetch?.phone
               ? { phone: this.prefetch.phone }
               : {}),
           ...(payload.customer.email ? { email: payload.customer.email } : {}),
