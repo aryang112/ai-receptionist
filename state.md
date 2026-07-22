@@ -3,6 +3,44 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-07-21 — 🎧 FIRST LIVE TEST CALL + 3 fixes (committed, NOT pushed)
+Aryan ran the first live smoke call (ngrok → real number). Core loop worked;
+3 issues found and fixed the same session. `tsc` clean, **103/103 vitest** (was
+98), green under `TZ=UTC`.
+- **Voice → female:** `OPENAI_REALTIME_VOICE=marin` in `.env` (was cedar). Marin
+  is OpenAI's natural female Realtime voice — right fit for a women's salon.
+  ⚠️ `.env` change needs a **dev-server restart** (dotenv loads at boot; tsx
+  watch won't pick it up).
+- **Greeting no longer says the caller's name in the cold open** (felt creepy).
+  Recognition stays in the BACKGROUND — standard greeting, no name; Erica may use
+  the first name naturally later. Still no re-lookup (`warmCallerContext`
+  injection rewritten, `twilioStream.ts` ~605).
+- **Odd availability times fixed** (the "2:43 / 5:28 pm" bug). ROOT CAUSE: Phorest
+  availability re-anchors its grid to each appointment's END, so free starts come
+  back at odd minutes — NOT a hallucination (verified live vs raw Phorest). New
+  `src/core/slots.ts` `snapSlotsToGrid` snaps starts UP to a clean grid
+  (`SLOT_GRID_MIN`=15), proven-safe (successor-runway rule; drops lone tail
+  slots). Wired into `handleSuggestAvailability`. Unit test uses the exact live
+  dataset from the call. Lessons + CODEMAP updated.
+- **Follow-up (not done, minor):** "what's available AFTER 2pm" still centers
+  results on 2pm (offers some earlier times too) — `preferredTime` has no
+  "at-or-after" qualifier. Low priority; the model can filter.
+
+## 2026-07-19 — ✅ ARCHITECT SIGN-OFF on round-2 fixups
+Independent re-review of all 3 fix commits (8145f00, 17ddfd5, 0468060): every
+F1–F10 item verified implemented as specified — diffs read line-by-line, gates
+re-run by the architect (98/98, tsc, TZ=UTC, no new deps, tree clean,
+WS_AUTH_SECRET confirmed set, secret-fragment scrubbed). Handler-level tests
+sit ABOVE the zod seam as required; F8 is now genuinely concurrent
+(stash-and-apply pattern); no approved deviation was touched; both mandated
+lessons landed. **APPROVED — live smoke test is GO.** Residual watch items for
+the smoke test (non-blocking): reschedule slot guard is date-wide across
+services (documented tradeoff); collapsed-compound matcher retry uses substring
+inclusion (watch for over-match on new catalog entries); only Erica's side of
+the transcript persists so far. Owner gates before push/deploy unchanged:
+rotate Phorest secret + OpenAI keys (still in git history), TPM tier, 2026
+closedDates.
+
 ## 2026-07-19 — ROUND-2 FIXUPS (`tasks/fixup_round2_2026-07-19.md`) — DONE, committed, NOT pushed
 All architect-review findings F1–F10 fixed directly (not swarmed). `tsc` clean,
 **98/98 vitest** (was 78), green under `TZ=UTC`. 3 commits (P1 / phorest+booking

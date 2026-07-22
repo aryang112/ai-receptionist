@@ -51,6 +51,9 @@ Caller dials Twilio number
 ## src/core/
 - **hours.ts** — `getHoursStatus(date)` (open/closed/closedRightNow/nextOpen),
   `getOpenClose(date)`. Reads `config/business.json` (the hours source of truth).
+- **slots.ts** — `snapSlotsToGrid(slots, gridMin)` / `ceilToGrid`. Snaps Phorest's
+  re-anchored odd-minute availability starts UP to a clean clock grid before Erica
+  offers them (see lessons.md). Called in `handleSuggestAvailability`.
 - **logger.ts** — pino logger.
 
 ## src/routes/
@@ -62,9 +65,11 @@ Caller dials Twilio number
   `SERVICE_CACHE_TTL_HOURS`, Phorest creds, `OWNER_PHONE`). Defaults are sensible.
 - **business.json** — salon hours per weekday + closedDates. **Do not change casually.**
 
-## src/tests/  (vitest, 32 tests)
+## src/tests/  (vitest, 103 tests)
 phorest.client.test.ts (URL/range/client_id/timezone/retry regressions),
-hours.test.ts, booking.alias.test.ts, phorest.mock/selector, appointment(.validation), twilio.route.
+hours.test.ts, booking.alias/match.test.ts, slots.test.ts (clean-grid snapping),
+wsAuth, middleware, twilioStream.bargein/contracts, phorest.mock/selector,
+appointment(.validation), twilio.route.
 
 ## scripts/  (read-only diagnostics + ops)
 inspect-appointment.ts, list-services.ts, check-availability.ts, test-appt-filter.ts,

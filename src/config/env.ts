@@ -22,6 +22,11 @@ export const env = {
   TIMEZONE: process.env.TIMEZONE || 'America/New_York',
   USE_MOCK_PHOREST: process.env.USE_MOCK_PHOREST || 'true',
 
+  // Phorest availability re-anchors its grid to each appointment's END, so free
+  // starts come back at odd minutes (2:43, 2:58…). We snap offered times UP to
+  // this clean clock grid (minutes). 15 = quarter-hours; set 30 for half-hours.
+  SLOT_GRID_MIN: Number(process.env.SLOT_GRID_MIN || 15),
+
   // Twilio
   TWILIO_NUMBER: process.env.TWILIO_NUMBER || '',
   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID || '',

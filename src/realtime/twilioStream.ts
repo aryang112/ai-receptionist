@@ -19,6 +19,7 @@ import type {
   AppointmentSummary,
 } from '../services/phorest.types.js';
 import { getHoursStatus, getOpenClose } from '../core/hours.js';
+import { snapSlotsToGrid } from '../core/slots.js';
 import { verifyStreamToken } from '../security/wsAuth.js';
 import { DateTime } from 'luxon';
 // decodeMuLaw no longer needed here — audio decoding happens in openaiSession
@@ -603,7 +604,7 @@ export class TwilioRealtimeCall {
         .catch(() => {});
       // Tell Erica who's calling (the looked-up name, not a hardcoded one).
       const fullName = `${customer.firstName} ${customer.lastName}`.trim();
-      this.pendingCallerContext = `The caller is phoning from a number we recognize. Their name is ${customer.firstName} (full name ${fullName}), an existing client — the system already has their account on file. For your VERY FIRST line, use the standard GREETING from your instructions but include their first name right after the salon name (e.g. "...Richa's Threading Salon — hi ${customer.firstName}!"). Do NOT invent a different greeting; just personalize the standard one. Then STOP and WAIT for them to actually tell you what they need. Do NOT pull up their appointments, do NOT call any tools, and do NOT assume why they're calling until they clearly say so. Do NOT ask for their phone number and NEVER read a phone number back to them — the system already knows their account. When you later need their details, call lookup_customer with no arguments. When you book for them, you do NOT need a phone number — just book with their name; the system attaches their account automatically.`;
+      this.pendingCallerContext = `BACKGROUND (do not read aloud): this caller is phoning from a number we recognize — ${customer.firstName} (full name ${fullName}), an existing client already on file. Keep this to yourself. Open with your STANDARD greeting EXACTLY as written (salon name + the recording notice + "How can I help you today?") — do NOT say their name, do NOT say "I see you're calling from…", and do NOT announce that you recognize them. Greeting someone by name before they've said a word feels surveillant, so don't. Then STOP and WAIT for them to say what they need. You MAY use their first name naturally LATER once the conversation is underway if it genuinely fits (e.g. confirming a booking: "You're all set, ${customer.firstName}!") — but never lead with it. Do NOT pull up their appointments, do NOT call any tools, and do NOT assume why they're calling until they clearly say so. Do NOT ask for their phone number and NEVER read a phone number back — the system already has their account. When you later need their details, call lookup_customer with NO arguments (it returns this account instantly — no second lookup). When you book for them you do NOT need a phone number — just book with their name; the system attaches their account (clientId) automatically.`;
     } catch {
       this.prefetch = null; // graceful: behave exactly as today (ask for phone)
     }
@@ -941,18 +942,21 @@ export class TwilioRealtimeCall {
       // hours, and we must never offer a time that ends after close.
       const openClose = getOpenClose(payload.date);
       const durationMin = result.service.durationMin || 0;
-      const inHours = result.slots
-        // Parse EXPLICITLY in the salon zone. getAvailability returns ISO strings
-        // carrying the salon offset; an unzoned fromISO() renders in the PROCESS
-        // zone, so on a UTC host every spoken/booked time would silently shift
-        // +4/5h. This is the only unzoned parse in src — keep it zone-explicit.
-        .map((iso) => DateTime.fromISO(iso, { zone: env.TIMEZONE }))
-        .filter(
-          (dt) =>
-            dt.isValid &&
-            (!openClose || dt >= openClose.open) &&
-            (!openClose || dt.plus({ minutes: durationMin }) <= openClose.close)
-        );
+      // Parse EXPLICITLY in the salon zone. getAvailability returns ISO strings
+      // carrying the salon offset; an unzoned fromISO() renders in the PROCESS
+      // zone, so on a UTC host every spoken/booked time would silently shift
+      // +4/5h. This is the only unzoned-risk parse in src — keep it zone-explicit.
+      const parsedSlots = result.slots.map((iso) =>
+        DateTime.fromISO(iso, { zone: env.TIMEZONE })
+      );
+      // Phorest re-anchors its availability grid to each appointment's end, so
+      // free starts arrive at odd minutes (2:43, 2:58…). Snap to clean clock
+      // times BEFORE the hours filter so we never speak "2:43 pm". (snapSlotsToGrid)
+      const inHours = snapSlotsToGrid(parsedSlots, env.SLOT_GRID_MIN).filter(
+        (dt) =>
+          (!openClose || dt >= openClose.open) &&
+          (!openClose || dt.plus({ minutes: durationMin }) <= openClose.close)
+      );
 
       // CRITICAL: don't just take the earliest N (that hid afternoon/evening
       // slots). If the caller asked for a time, return the slots CLOSEST to it;

@@ -37,4 +37,4 @@ If interrupted mid-task:
 - Run `npm test` after every change — keep all green
 - USE_MOCK_PHOREST=false (real Phorest creds are in .env)
 - Owner phone: +14433706471
-- Erica's voice: cedar (OpenAI's most natural Realtime voice; marin is the alt — env-tunable via OPENAI_REALTIME_VOICE)
+- Erica's voice: marin (natural FEMALE Realtime voice — chosen for a women's salon; cedar is the male alt — env-tunable via OPENAI_REALTIME_VOICE; change needs a dev-server restart, not just tsx reload)

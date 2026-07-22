@@ -74,6 +74,27 @@ full day is ~29 slots). Fixed properly: return slots **nearest to the caller's
 `preferredTime`**, or an **even spread across the whole day** if no time given.
 NEVER "first N" on a time-ordered slot list.
 
+## 🕒 Phorest availability comes back at ODD minutes (re-anchored grid)
+`/appointments/availability` is NOT a clean :00/:15/:30 grid. Phorest computes it
+as a rolling grid that **re-anchors to the END of every existing appointment**, so
+after an appt that ends at 2:43 the free starts return as 2:43, 2:58, 3:13, 3:28…
+(verified live: Brow Threading 2026-07-22). Erica faithfully offered "2:43 pm" and
+"5:28 pm" — sounded like hallucinated/random numbers, but it was real data.
+**RULE:** never offer raw availability starts. Snap them UP to a clean clock grid
+(`src/core/slots.ts` `snapSlotsToGrid`, `SLOT_GRID_MIN`=15). Snap **up, never to
+nearest/down** — staff is free FROM the raw start onward, so a later in-block time
+is safe but an earlier one may be unbookable. Only snap a slot when a successor
+raw start within the grid proves the runway; drop lone tail slots (they sit right
+against the next appointment). Do this BEFORE the hours filter.
+
+## 🗣️ Don't greet a recognized caller by name in the cold open (feels creepy)
+Caller-ID prefetch recognizes the caller, but leading the very first line with
+their name ("...Richa's Threading Salon — hi Priya!") before they've said a word
+felt surveillant to the owner. Keep recognition in the BACKGROUND: greet with the
+standard line, no name; use the first name naturally LATER if it fits (e.g.
+confirming a booking). The prefetch still avoids a second lookup — `lookup_customer`
+with no args returns the warmed account. (Injection lives in `warmCallerContext`.)
+
 ## 🗣️ Conversation behavior lessons
 - **Don't assume intent.** Erica was greeting then immediately running tools and
   driving the flow ("let me pull up your appointments…") unprompted. Greet → STOP
