@@ -54,7 +54,10 @@ Caller dials Twilio number
 - **slots.ts** — `snapSlotsToGrid(slots, gridMin)` / `ceilToGrid`. Snaps Phorest's
   re-anchored odd-minute availability starts UP to a clean clock grid before Erica
   offers them (see lessons.md). Called in `handleSuggestAvailability`.
-- **logger.ts** — pino logger.
+- **logger.ts** — pino logger. In dev it tees stdout → `data/dev.log`
+  (truncated on every boot, gitignored) so any call can be inspected after the
+  fact. `LOG_FILE=off` disables; skipped in production/test. `npm run logs`
+  pretty-prints/follows it (`scripts/tail-log.mjs`).
 
 ## src/routes/
 - **twilio.ts** — `/voice` (returns the Stream TwiML + caller-# param), `/gather` (legacy).
@@ -73,7 +76,7 @@ appointment(.validation), twilio.route.
 
 ## scripts/  (read-only diagnostics + ops)
 inspect-appointment.ts, list-services.ts, check-availability.ts, test-appt-filter.ts,
-set-twilio-webhook.sh.
+set-twilio-webhook.sh, tail-log.mjs (pretty live view of data/dev.log — `npm run logs`).
 
 ## Tools the model can call
 `suggest_availability(serviceName, date, preferredTime?)`, `book_appointment`,

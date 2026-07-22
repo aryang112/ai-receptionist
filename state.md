@@ -22,6 +22,16 @@ Aryan ran the first live smoke call (ngrok → real number). Core loop worked;
   (`SLOT_GRID_MIN`=15), proven-safe (successor-runway rule; drops lone tail
   slots). Wired into `handleSuggestAvailability`. Unit test uses the exact live
   dataset from the call. Lessons + CODEMAP updated.
+- **Observability (NEW):** `logger.ts` now tees stdout → `data/dev.log`
+  (truncated each boot, gitignored, dev-only) so calls can be inspected after the
+  fact — the pane-only stdout was un-diagnosable. `npm run logs` pretty-follows
+  it. Structured audit trail is still `data/calls.jsonl` (append-only, CallStore).
+- **⚠️ OPEN — call-2 greeting anomaly (needs the log):** on a 2nd back-to-back
+  call Erica skipped the greeting and jumped to "what would you like to book" —
+  felt like it resumed the prior call. Verified NOT possible via shared state
+  (fresh instance + fresh OpenAI session + fresh requestGreeting per call; no
+  conversation_id reuse). Leading hypothesis: spurious VAD/echo truncating the
+  greeting (see lessons telephony-echo). Diagnose from `data/dev.log` next call.
 - **Follow-up (not done, minor):** "what's available AFTER 2pm" still centers
   results on 2pm (offers some earlier times too) — `preferredTime` has no
   "at-or-after" qualifier. Low priority; the model can filter.
