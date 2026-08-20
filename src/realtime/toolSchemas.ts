@@ -56,6 +56,8 @@ export const TOOL_SCHEMAS = {
   transfer_to_owner: z.object({
     reason: z.string(),
   }),
+  // Argless by design — a hangup must never fail on argument validation.
+  end_call: z.object({}),
 } as const;
 
 export type ToolName = keyof typeof TOOL_SCHEMAS;

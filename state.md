@@ -3,6 +3,66 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-19 — 📞 Live test round 2: barge-in ✅ + two UX changes shipped
+Live call (ngrok, real Phorest): barge-in/interrupt confirmed smooth by Aryan.
+Two behavior changes implemented same session (tsc clean, 103/103 vitest):
+- **Recognized-caller confirmation**: injected caller-ID background note rewritten
+  (`twilioStream.ts` prepareCallerContext) — Erica now, on the caller's FIRST
+  request, acknowledges it and asks "just to confirm — is this [First]?" once.
+  YES → continue their stated request by name, no phone asked. NO (shared
+  phone) → ask THEIR name, never book under the recognized account (CT-1 guard
+  still enforces name-match server-side). Prompt IDENTIFICATION step 0 added.
+- **`end_call` tool (NEW)**: Erica can now hang up. Prompt "ENDING THE CALL"
+  section: after each task ask "Anything else?"; on "no, I'm good" → one goodbye
+  line then end_call same turn. Handler mirrors transfer_to_owner: sets
+  `transferring` (blocks failover), `waitForPlaybackToDrain(6000)` so the goodbye
+  isn't cut off, then Twilio REST `status: 'completed'`; outcome 'completed' only
+  if none set. **Barge-in abort guard**: new `bargeInEpoch` counter — if the
+  caller interrupts mid-goodbye ("oh wait—"), the hangup aborts and the tool
+  returns a note telling the model to keep helping. Zod schema `end_call: {}`.
+- Prior call's log showed silent recognition worked (lookup 4ms prefetch,
+  booked under Aryan) but never confirmed identity, and Erica couldn't hang up
+  ("Hi again! Just let me know…" after goodbye) — both now addressed.
+- NOT yet live-verified: end_call + confirm flow need a live call. Session
+  config risk is minimal (end_call shape identical to get_business_hours) but
+  per lessons.md, first call should verify session.update was accepted (greeting
+  plays = accepted).
+
+## 2026-08-07 — 🔍 Pre-production functional edge-case audit (analysis only, no code changes)
+Full read of twilioStream / openaiSession / phorest.client / booking / hours /
+slots / toolSchemas / env / routes / callStore, deduped against DEFECTS doc +
+todo.md + fixup_round2. 103/103 tests green. NEW findings (reported to Aryan):
+1. **Greeting race** — likely root cause of the OPEN call-2 anomaly: RT-8
+   `flushPendingMedia()` runs BEFORE `requestGreeting()`; server_vad has
+   `create_response:true` (GA default), so buffered pre-greeting caller speech
+   auto-creates a response that collides with (or is interrupted by) the
+   greeting `response.create` → greeting skipped, Erica answers the utterance.
+   `requestGreeting()` also never checks `activeResponse`.
+2. **No booking-time availability re-check** — `/booking?force_selected_time=true`
+   means Phorest force-books; concurrent callers offered the same slot, stale
+   offeredSlots (caller dawdles / walk-in takes it), and the warn-allow
+   no-prior-suggest paths can all silently double-book. No past-date/time guard
+   either. Fix: re-validate availability server-side right before createAppointment.
+3. **lookupCustomerByName has NO client-side re-filter** — trusts Phorest
+   `?firstName=&lastName=` filtering (the same API whose `?mobile=` and
+   `?clientId=` are silently ignored). If ignored/fuzzy → strangers offered as
+   candidates or "Priya"→"Priyanka" wrong single match. Needs 5-min live probe.
+4. **PH-10 still live** — updateAppointment recomputes endTime from CATALOG
+   duration; front-desk-extended appts shrink on reschedule (never fixed in any
+   lane, despite being easy to believe done).
+5. Duplicate-profile accumulation (exact-first-name F2 guard + `sanitisePhone`
+   accepts any digit count + placeholder emails); booked slot stays in
+   offeredSlots (self-overlap possible); `nextOpen` is now-relative not
+   request-relative; getTodayAppointments end fallback `?? startTime` + squeeze
+   checks ALL staff; split-hours ranges not honored by availability filter
+   (latent); 0-duration services bookable; ws keepalive has no pong deadline;
+   RT-5 retries loop (not once) under sustained TPM freeze; bare `<Dial>` on
+   transfer → rings out to Richa's personal voicemail.
+Deploy gotchas: Twilio signature + stream URL depend on x-forwarded-* matching
+the exact public webhook URL; first call after deploy races the client-index
+warm (lookup awaits full build). Owner gates unchanged (keys, TPM, 2026
+closedDates). NOT fixed yet — awaiting Aryan's go-ahead on priority order.
+
 ## 2026-07-21 — 🎧 FIRST LIVE TEST CALL + 3 fixes (committed, NOT pushed)
 Aryan ran the first live smoke call (ngrok → real number). Core loop worked;
 3 issues found and fixed the same session. `tsc` clean, **103/103 vitest** (was

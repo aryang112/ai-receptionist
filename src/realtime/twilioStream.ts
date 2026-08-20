@@ -71,6 +71,7 @@ Callers often ask for prices. When they ask the price of a service, say a quick 
 Callers often use different names for a service (e.g. "lash lamination" for our "Lash Lift"). Don't rely on a memorised list — for ANY service a caller names, just try to book it: suggest_availability matches it against the live catalog. NEVER tell a caller "we don't offer that," and never transfer just because a service wasn't in a memorised list.
 
 ═══ CUSTOMER IDENTIFICATION (always do this first) ═══
+0. If a background note says this caller was already recognized by caller ID, SKIP steps 1–2: never ask for their phone number. Instead, when they state their first request, acknowledge it and confirm identity in the same breath — "Of course! And just to confirm — is this [First Name]?" — then follow the background note.
 1. Ask: "What's your phone number?"
 2. Call lookup_customer with the phone number
 3. If found: greet them by name — "Got it, hi [First Name]!" Then:
@@ -150,6 +151,12 @@ Transferring is a LAST RESORT. You — Erica — handle booking, rescheduling, c
 Do NOT transfer just because: a service isn't in the memorised price list (try to book it — the catalog is bigger than that list); the caller wants a second or third service (book each one); or a tool errors a single time (say "one sec, let me try that again" and retry first). One hiccup is never a reason to transfer.
 
 When you do transfer, say first: "Of course, let me get Richa for you — one moment!" then call transfer_to_owner.
+
+═══ ENDING THE CALL ═══
+After you finish helping with something (booking confirmed, question answered, cancellation done), ask: "Anything else I can help you with?"
+- If they bring up something else → keep helping, and ask again when that's done too.
+- If they say no / "I'm good" / "that's all" / "thanks, bye" → say ONE warm goodbye (e.g. "Perfect — thanks for calling, have a great day!") and then IMMEDIATELY call end_call in that SAME turn. Don't keep chatting after the goodbye, and don't wait for them to hang up.
+- Only call end_call when the caller has CLEARLY indicated they're done or clearly said goodbye. If you're not sure, ask "Anything else I can help you with?" and wait. NEVER call end_call mid-task or just because the line went quiet.
 
 ═══ GENERAL RULES ═══
 - LET THE CALLER LEAD. After greeting, wait for them to say what they need. Never assume why they're calling, and never pull up appointments, prices, or availability until they've actually asked. If you didn't clearly hear a request, ask "Sorry, what can I help you with today?" and WAIT — do not guess and proceed.
@@ -354,6 +361,17 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ['reason'],
     },
   },
+  {
+    type: 'function',
+    name: 'end_call',
+    description:
+      'Hang up the call. Use ONLY after the caller has clearly confirmed they\'re done (e.g. they answered "no, I\'m good" to "Anything else I can help with?", or clearly said goodbye). Say ONE warm goodbye line FIRST, then call this in the same turn. Never call it mid-task or when the caller might still need something.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
 ];
 
 interface TwilioEventBase {
@@ -418,6 +436,9 @@ export class TwilioRealtimeCall {
   private latestMediaTimestamp = 0;
   private responseStartTimestamp: number | null = null;
   private markQueue: string[] = [];
+  // Bumped on every barge-in; lets a pending end_call detect that the caller
+  // spoke during the goodbye and abort the hangup.
+  private bargeInEpoch = 0;
   // Caller looked up by their phone number (caller ID) at call start, so tools
   // answer instantly and Erica can greet them by name. null = not recognized.
   private prefetch: {
@@ -539,8 +560,9 @@ export class TwilioRealtimeCall {
     this.session.registerTool('transfer_to_owner', (args) =>
       this.handleTransferToOwner(args)
     );
+    this.session.registerTool('end_call', (args) => this.handleEndCall(args));
     logger.debug(
-      'OpenAI tools registered: suggest_availability, book_appointment, reschedule_appointment, cancel_appointment, get_business_hours, lookup_customer, list_appointments, log_running_late, transfer_to_owner'
+      'OpenAI tools registered: suggest_availability, book_appointment, reschedule_appointment, cancel_appointment, get_business_hours, lookup_customer, list_appointments, log_running_late, transfer_to_owner, end_call'
     );
   }
 
@@ -604,7 +626,10 @@ export class TwilioRealtimeCall {
         .catch(() => {});
       // Tell Erica who's calling (the looked-up name, not a hardcoded one).
       const fullName = `${customer.firstName} ${customer.lastName}`.trim();
-      this.pendingCallerContext = `BACKGROUND (do not read aloud): this caller is phoning from a number we recognize — ${customer.firstName} (full name ${fullName}), an existing client already on file. Keep this to yourself. Open with your STANDARD greeting EXACTLY as written (salon name + the recording notice + "How can I help you today?") — do NOT say their name, do NOT say "I see you're calling from…", and do NOT announce that you recognize them. Greeting someone by name before they've said a word feels surveillant, so don't. Then STOP and WAIT for them to say what they need. You MAY use their first name naturally LATER once the conversation is underway if it genuinely fits (e.g. confirming a booking: "You're all set, ${customer.firstName}!") — but never lead with it. Do NOT pull up their appointments, do NOT call any tools, and do NOT assume why they're calling until they clearly say so. Do NOT ask for their phone number and NEVER read a phone number back — the system already has their account. When you later need their details, call lookup_customer with NO arguments (it returns this account instantly — no second lookup). When you book for them you do NOT need a phone number — just book with their name; the system attaches their account (clientId) automatically.`;
+      this.pendingCallerContext = `BACKGROUND (do not read aloud): the number this caller is phoning from matches an existing client on file — ${customer.firstName} (full name ${fullName}). Open with your STANDARD greeting EXACTLY as written (salon name + the recording notice + "How can I help you today?") — do NOT say their name in the greeting, do NOT say "I see you're calling from…", and do NOT announce that you recognize the number. Greeting someone by name before they've said a word feels surveillant, so don't. Then STOP and WAIT for them to say what they need. When they state their FIRST request, acknowledge it and confirm who you're talking to in the same breath — e.g. "Of course! And just to confirm — is this ${customer.firstName}?" Confirm identity ONCE only, at that moment — never re-ask, and never confirm before they've said what they need.
+- If they say YES: greet them warmly by name and continue straight into the request they already stated — do NOT make them repeat it (e.g. "Hi ${customer.firstName}! What service were you thinking?"). Do NOT ask for their phone number and NEVER read a phone number aloud — the system already has their account. When you need their details, call lookup_customer with NO arguments (it returns this account instantly — no second lookup). When you book for them you do NOT need a phone number — just book with their name; the system attaches their account (clientId) automatically. Use their first name naturally where it fits (e.g. "You're all set, ${customer.firstName}!").
+- If they say NO (someone else is calling from this number): keep it light — "Oh, no problem!" — ask for THEIR name, and help them as their own person. Do NOT book them under ${customer.firstName}'s account, and do NOT mention ${customer.firstName}'s name again or any of their details.
+Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assume why they're calling until they clearly say so.`;
     } catch {
       this.prefetch = null; // graceful: behave exactly as today (ask for phone)
     }
@@ -833,6 +858,10 @@ export class TwilioRealtimeCall {
   private handleBargeIn() {
     if (this.markQueue.length === 0 || this.responseStartTimestamp === null)
       return;
+    // Any real interruption bumps the epoch — a pending end_call hangup checks
+    // it after draining and aborts instead of hanging up on a caller who just
+    // remembered "oh wait, one more thing!" mid-goodbye.
+    this.bargeInEpoch += 1;
     const elapsed = Math.max(
       0,
       this.latestMediaTimestamp - this.responseStartTimestamp
@@ -1879,6 +1908,78 @@ export class TwilioRealtimeCall {
       this.transferring = false;
       CallStore.recordToolCall(this.callSid, {
         name: 'transfer_to_owner',
+        ok: false,
+        error: this.formatError(error),
+      });
+      return { error: this.formatError(error) };
+    }
+  }
+
+  /**
+   * Gracefully hang up once the caller confirms they're done. The model speaks
+   * its goodbye BEFORE this tool call arrives, but that audio is still draining
+   * through Twilio's outbound buffer — wait for the mark queue to empty (same
+   * RT-6 race as the transfer handoff line) so the goodbye isn't cut off.
+   */
+  private async handleEndCall(_args: unknown) {
+    const client = getTwilioClient();
+    if (!client || !this.callSid) {
+      // No REST client (misconfig): tear down our side; Twilio ends the call
+      // when the <Connect><Stream> socket closes.
+      logger.warn(
+        { tool: 'end_call' },
+        'Cannot hang up via REST — closing stream only'
+      );
+      if (this.outcome === 'none') this.outcome = 'completed';
+      CallStore.recordToolCall(this.callSid, { name: 'end_call', ok: true });
+      this.cleanup();
+      return { ended: true };
+    }
+    logger.info(
+      { tool: 'end_call', callSid: this.callSid },
+      'Caller confirmed done — ending call'
+    );
+    // Block the fatal-error failover path: tearing down a deliberately-ended
+    // call must never redirect the (already gone) caller to the owner.
+    this.transferring = true;
+    // Goodbye lines run longer than the transfer handoff line — cap higher.
+    const epochAtRequest = this.bargeInEpoch;
+    await this.waitForPlaybackToDrain(6000);
+    // Caller interrupted the goodbye ("oh wait—") → the barge-in cleared the
+    // mark queue, which is why the drain resolved. Don't hang up on them.
+    if (this.bargeInEpoch !== epochAtRequest && !this.closed) {
+      this.transferring = false;
+      logger.info(
+        { tool: 'end_call', callSid: this.callSid },
+        'Hangup aborted — caller spoke during the goodbye'
+      );
+      CallStore.recordToolCall(this.callSid, {
+        name: 'end_call',
+        ok: false,
+        error: 'aborted — caller spoke during goodbye',
+      });
+      return {
+        aborted: true,
+        note: 'The caller started speaking again — do NOT hang up. Listen and help with whatever they need, then ask "Anything else?" before trying end_call again.',
+      };
+    }
+    try {
+      await client.calls(this.callSid).update({ status: 'completed' });
+      // Keep a real outcome (booked/cancelled/…) — 'completed' only fills none.
+      if (this.outcome === 'none') this.outcome = 'completed';
+      CallStore.recordToolCall(this.callSid, { name: 'end_call', ok: true });
+      this.cleanup();
+      return { ended: true };
+    } catch (error) {
+      logger.error(
+        { tool: 'end_call', error: this.formatError(error) },
+        'Hangup failed'
+      );
+      // Mirror F10c: the hangup didn't happen, so a later fatal error must
+      // still be able to failover to the owner.
+      this.transferring = false;
+      CallStore.recordToolCall(this.callSid, {
+        name: 'end_call',
         ok: false,
         error: this.formatError(error),
       });

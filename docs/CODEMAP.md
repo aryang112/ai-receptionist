@@ -82,7 +82,8 @@ set-twilio-webhook.sh, tail-log.mjs (pretty live view of data/dev.log — `npm r
 `suggest_availability(serviceName, date, preferredTime?)`, `book_appointment`,
 `reschedule_appointment`, `cancel_appointment`, `get_business_hours`, `get_prices(serviceName?)`,
 `lookup_customer(phone?/name?)`, `list_appointments(clientId)`, `log_running_late`,
-`transfer_to_owner(reason)`.
+`transfer_to_owner(reason)`, `end_call()` (graceful hangup after caller confirms done;
+drains goodbye audio, aborts if the caller barges in mid-goodbye).
 
 ## Log markers to grep
 `⏱` per-turn latency + tool durations · `📊` token usage + cache-hit% · `⚖️` TPM remaining
