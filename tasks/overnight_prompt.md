@@ -37,7 +37,12 @@ session) wrote your specs and will review in the morning.
 - **NEVER add or rename a field in the OpenAI `session.update` payload.** A bad
   field kills every call at pickup. All queued tasks are prompt-TEXT or
   app-code only; if a spec seems to require a session-config shape change,
-  STOP and write a blocker instead of guessing.
+  STOP and write a blocker instead of guessing. In particular do NOT add
+  `create_response` to `turn_detection` — server_vad defaults it to true, and
+  that default is exactly what makes B2's fix safe.
+  Adding a normal METHOD to the `OpenAIRealtimeSession` class is app code, not
+  a config-shape change — that IS allowed, and G2 explicitly requires one
+  (`requestResponse()`; the spec has the exact body).
 - Do not touch `.env`, `.env.example`, `business.json`, or any Phorest write
   path beyond what a spec names. Do not place phone calls. Do not restart or
   kill the dev server or ngrok. Do not push. Stay on branch `feat/erica-v2`.
@@ -63,7 +68,9 @@ leave a red tree between tasks.
      request without re-asking it
   3. Ask to reschedule → she gets an explicit "yes" before writing; switching
      to "cancel" mid-flow abandons the reschedule
-  4. Go silent ~40s → one "are you still there?", then a clean goodbye + hangup
+  4. Go silent → expect "are you still there?" at ~20s and, if you stay quiet,
+     a goodbye + hangup at ~35s (20s check-in + 15s grace, both env-tunable).
+     Hanging up before you reach 40s is CORRECT, not a bug.
   5. Finish a booking, say "no, I'm good" → goodbye + Erica hangs up
   6. Barge-in still snappy; normal booking unaffected
   7. OWNER: raise the OpenAI TPM tier (platform.openai.com → Limits) — B3's

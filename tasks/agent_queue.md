@@ -11,8 +11,10 @@
 1. FIRST: read `state.md`, `docs/CODEMAP.md`, `tasks/lessons.md` (Phorest/OpenAI
    gotchas live there — do not skip).
 2. Claim your task here (`[~]` + agent name), do ONLY that task.
-3. `npm test` after every change — keep 103/103 green (also run once with
-   `TZ=UTC npm test`). `npx tsc --noEmit` must be clean.
+3. `npm test` after every change — all **103 existing tests stay green, PLUS**
+   the new tests your task adds, so the final count is **>103, never ==103**.
+   Never delete or `.skip` an existing test to make the suite pass. Also run
+   once with `TZ=UTC npm test`. `npx tsc --noEmit` must be clean.
 4. Commit per task: `feat:`/`fix:` + what changed. **NEVER `git add -A`**
    (live secrets + PII in the working tree) — add files by name.
 5. LAST: update `state.md` (what/why/how verified) and mark the task `[x]` here.
@@ -21,6 +23,12 @@
 - NEVER add/rename a field in OpenAI `session.update` without validating against
   the live API first — a bad field kills every call at pickup (see lessons.md).
   Prompt TEXT changes are safe; session config SHAPE changes are not.
+  ⚠️ Specifically: do NOT add `create_response` to `turn_detection`. server_vad
+  already defaults it to true — that default is exactly what makes B2 safe.
+  Adding the field to "make it explicit" risks rejecting the whole
+  session.update and killing every call at pickup.
+  Adding a normal METHOD to the `OpenAIRealtimeSession` class is app code, not
+  a session-config shape change — that is allowed (G2 requires it).
 - Do not touch `business.json`, `.env`, or the Phorest write paths unless the
   task says so. PhorestPort contract: mock and real must match exactly.
 - Do not break barge-in (`handleBargeIn`, `markQueue`, `bargeInEpoch`) — it is
@@ -51,8 +59,9 @@ is the security boundary):
 - Persistent abuse or clear misuse → polite wrap-up (`end_call`) or transfer.
 **Constraints:** prompt text ONLY — no session.update shape changes. Do not
 delete or weaken any existing bug-fix rule. Keep total prompt growth ≤ 130 tokens.
-**Accept:** tsc clean; 103/103 (+ TZ=UTC); diff shows one new section only;
-paste the new block in your state.md entry for Fable's review.
+**Accept:** tsc clean; 103/103 (+ TZ=UTC) — G1 is prompt-only, so the count
+stays 103 here; diff shows one new section only; paste the new block in your
+state.md entry for Fable's review.
 
 ## G2 — [ ] Silence watchdog: check-in, then hang up (P1, code)
 **Why:** same call — after Erica went quiet the line sat in open-ended silence.
@@ -64,6 +73,9 @@ check in once, then end the call.
   callback path; Erica speaking = `markQueue.length > 0` (audio still playing).
   Do NOT use raw `media` frames as "activity" — they flow continuously
   (background noise) even when nobody speaks.
+  Stamp the timestamp **in the `onSpeechStarted: () => …` wiring**
+  (`twilioStream.ts` ~line 524), NOT inside `handleBargeIn()` — that method's
+  logic stays byte-identical (see the barge-in hard constraint).
 - `setInterval` (~5s, started on Twilio `start`, cleared in `cleanup()`):
   - Mutual silence ≥ `SILENCE_CHECKIN_MS` (default 20000) → have Erica ask
     "Are you still there?" (max ONCE per call).
@@ -75,15 +87,32 @@ check in once, then end the call.
   goodbye cancels the hangup and resets the silence clock).
 - Guards: never fire before `sessionReady`/greeting, while a tool call is in
   flight, while `transferring`, or while `markQueue` is non-empty.
-- ⚠️ Triggering Erica's check-in means creating a response — reuse the existing
-  safe pattern (`requestGreeting`/`injectContext` + response, with the
-  `activeResponse` guard). Creating a response while one is active is the
-  RT-2/RT-3 call-killer — read lessons.md first.
+- ⚠️ Triggering the check-in means CREATING A RESPONSE — doing that while one
+  is already active is the RT-2/RT-3 call-killer. Read lessons.md first, and
+  note what the code actually gives you today:
+  - `injectContext()` (openaiSession.ts:326) only appends a conversation item.
+    It does **NOT** create a response.
+  - `requestGreeting()` (:339) is the only public method that creates one, but
+    it is **UNGUARDED** (bare `response.create`) and stamps greeting-latency
+    telemetry. Do NOT reuse it here.
+  - `activeResponse` (:56) is **private** — `twilioStream.ts` cannot read it.
+  So add ONE small public method to `OpenAIRealtimeSession` (app code, allowed):
+  ```ts
+  /** Create a response only when it's safe to — no response in flight. */
+  requestResponse(): void {
+    if (!this.isOpen() || this.activeResponse) return;
+    this.sendRaw({ type: 'response.create' });
+  }
+  ```
+  (mirrors the guard already inside `scheduleFailedRetry`, :690–696.)
+  The check-in is then `injectContext('<steer text>')` + `requestResponse()`.
+  G3 reuses the same pair. Do not expose `activeResponse` or `sendRaw`.
 - Both timeouts env-tunable with the defaults above; log markers
   (`🤫 silence check-in`, `🤫 silence hangup`) for `npm run logs`.
-**Accept:** tsc + 103/103 (+ TZ=UTC); NEW unit test(s) with fake timers proving
-check-in fires once, hangup follows, and caller speech resets the clock;
-existing barge-in tests untouched and green.
+**Accept:** tsc clean; all 103 existing tests green + your new ones, also with
+`TZ=UTC`; NEW unit test(s) with fake timers proving check-in fires once, hangup
+follows, and caller speech resets the clock; existing barge-in tests untouched
+and green.
 
 ## G3 — [ ] Max call duration cap (P1, code)
 **Why:** nothing bounds call length — a chatty/malicious caller burns Realtime
@@ -103,8 +132,9 @@ systems hard-cap session length.
   (`booked`/`cancelled`/…) — same rule as `end_call`.
 - Log markers: `⏳ duration warning`, `⏳ duration cap hangup`.
 **Depends on:** G2's `endCallNow()` refactor (do G2 first, or coordinate).
-**Accept:** tsc + 103/103 (+ TZ=UTC); unit test with fake timers: warning fires,
-cap hangs up, in-flight tool grace works, outcome preserved.
+**Accept:** tsc clean; all 103 existing tests green + your new ones, also with
+`TZ=UTC`; unit test with fake timers: warning fires, cap hangs up, in-flight
+tool grace works, outcome preserved.
 
 ---
 
@@ -124,8 +154,9 @@ note (YES branch).
 stated — ask only for whatever detail is still missing (day/time, etc.), never
 re-ask something they already told you (service, intent)." No other changes to
 the note.
-**Accept:** tsc + 103/103 (+ TZ=UTC); no literal example sentence containing a
-re-askable question remains in the note; paste new note text in state.md.
+**Accept:** tsc clean; 103/103 (+ TZ=UTC) — B1 is prompt-only, so the count
+stays 103 here; no literal example sentence containing a re-askable question
+remains in the note; paste new note text in state.md.
 
 ## B2 — [ ] Stale RT-5 retry executes writes against switched intent (P0, code + prompt)
 **Why (observed):** caller asked to reschedule to 4:30 → response FAILED (TPM).
@@ -151,7 +182,8 @@ the caller has spoken again, resuming the OLD task with tool access.
   caller hasn't clearly chosen. If the caller changes their mind mid-flow
   (e.g. asks to cancel instead), ABANDON the reschedule immediately and follow
   the new request."
-**Accept:** tsc + 103/103 (+ TZ=UTC); NEW unit test in openaiSession.test.ts:
+**Accept:** tsc clean; all 103 existing tests green + your new one (104+),
+also with `TZ=UTC`; NEW unit test in `src/tests/openaiSession.test.ts`:
 schedule a failed retry, fire speech_started, assert no `response.create` is
 sent when the timer would have elapsed. Prompt diff shows the consent gate.
 
@@ -167,11 +199,17 @@ Every turn re-bills the whole session context, so long calls starve fast.
   consecutive failure, STOP retrying (log `⚖️ retry budget exhausted`) and let
   the next caller-speech turn drive a fresh response — continuous
   failed→retry→failed loops burn the very TPM budget the call is starved of.
-  Reset the consecutive counter on any successful response.
+- Reset the consecutive counter on any successful response **AND on
+  `input_audio_buffer.speech_started`** (same handler B2 touches — a new caller
+  turn is a fresh attempt, so it gets a fresh budget). The speech_started reset
+  is REQUIRED, not optional: under TPM starvation responses keep failing, so
+  "reset on success" alone may never fire, and two early failures would disarm
+  retries for the entire rest of the call.
 - Keep `⚖️` warn logging; no session.update shape changes.
 **Note:** prompt-trim (todo.md 3.4) also reduces per-turn spend — separate task.
-**Accept:** tsc + 103/103 (+ TZ=UTC); unit test: two failures → no third
-retry scheduled; success resets the cap.
+**Accept:** tsc clean; all 103 existing tests green + your new ones (105+),
+also with `TZ=UTC`; unit tests: two failures → no third retry scheduled;
+success resets the cap; speech_started also resets it.
 
 ---
 
