@@ -35,6 +35,12 @@ Two behavior changes implemented same session (tsc clean, 103/103 vitest):
 - Guardrails discussion opened (caller said "don't interrupt me" → Erica went
   mute until told otherwise; prompt-injection hardening requested). Assessment
   delivered; implementation pending Aryan's pick.
+- **NEW: `tasks/agent_queue.md`** — executable queue for Opus worker agents
+  (Fable = advisor/leader, workers implement). Seeded with G1 conversation-
+  policy prompt block, G2 silence watchdog, G3 max-call-duration cap — full
+  specs + acceptance criteria + orchestration notes (all three touch
+  twilioStream.ts → run ONE worker sequentially, not parallel). New requests
+  get spec'd there before any worker codes.
 
 ## 2026-08-07 — 🔍 Pre-production functional edge-case audit (analysis only, no code changes)
 Full read of twilioStream / openaiSession / phorest.client / booking / hours /
