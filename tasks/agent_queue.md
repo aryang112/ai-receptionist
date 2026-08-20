@@ -108,11 +108,78 @@ cap hangs up, in-flight tool grace works, outcome preserved.
 
 ---
 
+## B-series — bugs from live call #3 (2026-08-19, call 9a7b0447; diagnosed by Fable from data/dev.log)
+
+## B1 — [ ] Recognized-caller note: model parrots the example line (P1, prompt-only)
+**Why:** caller opened with "I want to book a brow lamination" → after the
+"is this Aryan?" confirm, Erica said **verbatim** "Hi Aryan! What service were
+you thinking?" — the literal example embedded in the injected background note —
+making the caller repeat themselves (she then apologized: "You're right, sorry
+about that!"). Classic example-parroting: the sample line contradicts the very
+instruction it illustrates ("do NOT make them repeat it").
+**File:** `src/realtime/twilioStream.ts` → `prepareCallerContext()` background
+note (YES branch).
+**Spec:** remove the quotable example sentence entirely. Replace with:
+"greet them by first name and continue DIRECTLY with the request they already
+stated — ask only for whatever detail is still missing (day/time, etc.), never
+re-ask something they already told you (service, intent)." No other changes to
+the note.
+**Accept:** tsc + 103/103 (+ TZ=UTC); no literal example sentence containing a
+re-askable question remains in the note; paste new note text in state.md.
+
+## B2 — [ ] Stale RT-5 retry executes writes against switched intent (P0, code + prompt)
+**Why (observed):** caller asked to reschedule to 4:30 → response FAILED (TPM).
+While retries churned, caller said "why don't you just cancel it". A pending
+RT-5 retry fired at 394s and the resumed response called
+`reschedule_appointment` → moved the appt to 4:00 PM — a time the caller never
+picked, an action they had just replaced with "cancel". Erica even said:
+"rescheduled to 4:00 PM. If you'd still prefer to cancel, just let me know."
+Server guards (ownership + offered-slot) both passed — 4:00 WAS offered — so
+only the retry-timing hole let stale intent commit a write.
+**Root cause:** `openaiSession.ts` — `clearFailedRetry()` is called on
+close/cleanup only. `input_audio_buffer.speech_started` (case ~line 458) does
+NOT clear it, so a bare retry `response.create` can fire up to 10s later, after
+the caller has spoken again, resuming the OLD task with tool access.
+**Spec:**
+- (a) CODE: in the `input_audio_buffer.speech_started` handler, call
+  `this.clearFailedRetry()` — new caller speech makes the pending retry stale;
+  server_vad will create a fresh response for the new turn anyway. Keep the
+  retry behavior everywhere else.
+- (b) PROMPT: RESCHEDULING flow — add the same explicit-consent gate cancel
+  already has: "Get an explicit yes — 'so moving it to [day] at [time], correct?'
+  — BEFORE calling reschedule_appointment. Never reschedule to a time the
+  caller hasn't clearly chosen. If the caller changes their mind mid-flow
+  (e.g. asks to cancel instead), ABANDON the reschedule immediately and follow
+  the new request."
+**Accept:** tsc + 103/103 (+ TZ=UTC); NEW unit test in openaiSession.test.ts:
+schedule a failed retry, fire speech_started, assert no `response.create` is
+sent when the timer would have elapsed. Prompt diff shows the consent gate.
+
+## B3 — [ ] TPM starvation freezes calls (P0 — OWNER action + code mitigation)
+**Why (observed):** the "froze and said nothing" moments were OpenAI responses
+FAILING on the 40k tokens/min cap — remaining sank to **935/40000** mid-call;
+6 response failures in ~45s, each retry waiting up to 10s = repeated dead air.
+Every turn re-bills the whole session context, so long calls starve fast.
+**OWNER (Aryan, structural fix):** raise the OpenAI tier / TPM limit
+(platform.openai.com → Settings → Limits). No code change fixes this properly.
+**Worker mitigation spec (`openaiSession.ts`):**
+- Bound the retry churn: cap consecutive RT-5 retries at 2. After the 2nd
+  consecutive failure, STOP retrying (log `⚖️ retry budget exhausted`) and let
+  the next caller-speech turn drive a fresh response — continuous
+  failed→retry→failed loops burn the very TPM budget the call is starved of.
+  Reset the consecutive counter on any successful response.
+- Keep `⚖️` warn logging; no session.update shape changes.
+**Note:** prompt-trim (todo.md 3.4) also reduces per-turn spend — separate task.
+**Accept:** tsc + 103/103 (+ TZ=UTC); unit test: two failures → no third
+retry scheduled; success resets the cap.
+
+---
+
 ## Orchestration notes (for the session leader)
-- ALL THREE tasks touch `src/realtime/twilioStream.ts` → do NOT run three
-  agents in parallel on them. Recommended: ONE worker, sequential G1 → G2 → G3
-  (G1 is prompt-only and trivial; G2 before G3 for the shared refactor),
-  one commit per task. Parallelism only for future tasks in disjoint files.
+- G1–G3 all touch `src/realtime/twilioStream.ts`; B1/B2b also touch it, and
+  B2a/B3 both touch `openaiSession.ts` → do NOT parallelize within a file.
+  Recommended: ONE worker, sequential — B2 → B3 → B1 → G1 → G2 → G3 (B-series
+  first: B2 is a P0 data-write bug), one commit per task.
 - After all three: Fable reviews diffs, then Aryan live-tests: (a) say "don't
   interrupt me" — Erica stays responsive; (b) go silent 40s — check-in then
   clean hangup; (c) normal booking unaffected; (d) barge-in still snappy.

@@ -35,6 +35,20 @@ Two behavior changes implemented same session (tsc clean, 103/103 vitest):
 - Guardrails discussion opened (caller said "don't interrupt me" → Erica went
   mute until told otherwise; prompt-injection hardening requested). Assessment
   delivered; implementation pending Aryan's pick.
+- **Live call #3 (9a7b0447) diagnosed — 3 bugs → queue B1–B3.** (1) B1: Erica
+  parroted the literal example line from the recognized-caller note ("Hi Aryan!
+  What service were you thinking?") after the caller had already named the
+  service. (2) B3: the "freezes" were TPM starvation — remaining hit 935/40000,
+  6 response failures in ~45s, each RT-5 retry = up to 10s dead air; OWNER
+  action (raise OpenAI tier) is the structural fix + retry-churn cap as
+  mitigation. (3) B2 (P0): a stale RT-5 retry fired AFTER the caller switched
+  intent to "cancel" and executed reschedule_appointment → appt moved to Aug 20
+  **4:00 PM** without consent (guards passed: 4:00 was in offeredSlots).
+  clearFailedRetry() is never called on speech_started — that's the hole.
+  ⚠️ Aryan's real appt now sits at Aug 20 4:00 PM (not 5:30). No failover
+  misfire at hangup (clean CALL ENDED). Also noticed: NO "USER SAID" input
+  transcripts in this call's log — diagnosis relied on Erica's lines only;
+  worth a look when convenient.
 - **NEW: `tasks/agent_queue.md`** — executable queue for Opus worker agents
   (Fable = advisor/leader, workers implement). Seeded with G1 conversation-
   policy prompt block, G2 silence watchdog, G3 max-call-duration cap — full
