@@ -130,3 +130,15 @@ Rule: when a value crosses a validation/parse boundary (zod, a schema, a
 serializer), put at least one test on the FAR side of it — drive the actual
 handler (`handleBookAppointment(rawArgs)`), not just the function it eventually
 calls. Keep TOOL_DEFINITIONS and TOOL_SCHEMAS mirror-images.
+
+## 📝 Phorest appointment-note field is `serviceNote`, not `text` (2026-08-19)
+POST `/appointment/{id}/note` 400s with "serviceNote must not be empty" if the
+body uses `{text: ...}` — the field must be `{serviceNote: ...}`. Verified live
+(200 + noteId; note lands in the appointment's `notes` field on GET). The
+sneaky part: `addAppointmentNote` swallows failures by design (a note blip must
+not kill the squeeze-check), so log_running_late returned `noted: true` and
+Erica told the caller "logged!" for a note that never existed. Rule: when a
+best-effort side effect backs a SPOKEN claim, grep dev.log for its warn line
+("Failed to add appointment note") during every live test — a swallowed error
+is invisible on the phone. And per the standing lesson: validate ANY new/renamed
+Phorest field against the live API, not the docs.

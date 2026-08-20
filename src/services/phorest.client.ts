@@ -1131,11 +1131,13 @@ export const realPhorest: PhorestPort = {
 
   async addAppointmentNote(appointmentId: string, note: string): Promise<void> {
     try {
+      // Phorest's note endpoint takes `serviceNote` — `text` 400s
+      // ("serviceNote must not be empty"), verified live 2026-08-19.
       await phorestFetch(
         businessBranchPath(`/appointment/${appointmentId}/note`),
         {
           method: 'POST',
-          body: JSON.stringify({ text: note }),
+          body: JSON.stringify({ serviceNote: note }),
           expectEmpty: true,
         }
       );

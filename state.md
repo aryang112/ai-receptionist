@@ -27,6 +27,14 @@ Two behavior changes implemented same session (tsc clean, 103/103 vitest):
   config risk is minimal (end_call shape identical to get_business_hours) but
   per lessons.md, first call should verify session.update was accepted (greeting
   plays = accepted).
+- **PH-11 FIXED: running-late note never reached Phorest.** Aryan's live call
+  logged running-late → Erica said "logged!" but the POST 400'd
+  ("serviceNote must not be empty") and addAppointmentNote swallowed it.
+  Fix: body field `text` → `serviceNote` (phorest.client.ts). Verified live:
+  200 + noteId, note visible on the appointment (`notes` field). Lesson added.
+- Guardrails discussion opened (caller said "don't interrupt me" → Erica went
+  mute until told otherwise; prompt-injection hardening requested). Assessment
+  delivered; implementation pending Aryan's pick.
 
 ## 2026-08-07 — 🔍 Pre-production functional edge-case audit (analysis only, no code changes)
 Full read of twilioStream / openaiSession / phorest.client / booking / hours /
