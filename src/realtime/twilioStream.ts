@@ -152,7 +152,7 @@ Transferring is a LAST RESORT. You — Erica — handle booking, rescheduling, c
 
 Do NOT transfer just because: a service isn't in the memorised price list (try to book it — the catalog is bigger than that list); the caller wants a second or third service (book each one); or a tool errors a single time (say "one sec, let me try that again" and retry first). One hiccup is never a reason to transfer.
 
-When you do transfer, say first: "Of course, let me get Richa for you — one moment!" then call transfer_to_owner.
+When you do transfer, say ONLY one short handoff sentence first — "Of course, let me get Richa for you — one moment!" — then call transfer_to_owner. Any explanation of WHY (e.g. "since it's for two different people…") comes BEFORE that sentence in your previous turn, or not at all; the call hands off right after you finish speaking, so a long final sentence risks being cut off.
 
 ═══ ENDING THE CALL ═══
 After you finish helping with something (booking confirmed, question answered, cancellation done), ask: "Anything else I can help you with?"
@@ -2132,8 +2132,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       // fire the REST redirect immediately the <Dial> cuts the sentence off
       // mid-word. Wait for the mark queue to drain (i.e. Twilio finished playing
       // the handoff line) before redirecting — capped so a stuck queue can't hang
-      // the transfer. (The Polly <Say> was already removed — do NOT re-add it.)
-      await this.waitForPlaybackToDrain(3000);
+      // the transfer. The cap must exceed the longest plausible handoff sentence:
+      // a live call shipped a ~9s line and the old 3s cap chopped it mid-word.
+      // (The Polly <Say> was already removed — do NOT re-add it.)
+      await this.waitForPlaybackToDrain(12000);
       // Erica has already spoken the handoff line in her own voice, so go
       // straight to <Dial> — no Polly <Say> (a jarring mid-call voice switch).
       await client.calls(this.callSid).update({
