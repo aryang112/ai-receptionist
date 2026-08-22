@@ -24,6 +24,9 @@ type StartMeta = {
   from?: string | undefined;
   recognizedClientId?: string | undefined;
   startedAt: number;
+  // S2: STIR/SHAKEN attestation as reported by Twilio (log-only this round —
+  // collected for a future tuning pass, no blocking decisions made on it).
+  stirVerstat?: string | undefined;
 };
 
 type ToolCallEntry = {
@@ -79,6 +82,21 @@ export const CallStore = {
       streamSid: meta.streamSid,
       from: meta.from,
       recognizedClientId: meta.recognizedClientId,
+      stirVerstat: meta.stirVerstat,
+    });
+  },
+
+  // S2: a caller rejected at the webhook for being a repeat spam number — the
+  // call never opens an OpenAI session, so this is the only record of it.
+  // Full number is written to the file (private data store) same as
+  // startCall's `from`; never logged to pino elsewhere.
+  recordBlocked(callSid: string, from: string, stirVerstat?: string): void {
+    append({
+      type: 'blocked',
+      callSid,
+      ts: Date.now(),
+      from,
+      stirVerstat,
     });
   },
 

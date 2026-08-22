@@ -82,4 +82,10 @@ export const env = {
 
   // Append-only call log (JSONL) for the admin surface / auditing.
   CALL_STORE_PATH: process.env.CALL_STORE_PATH || './data/calls.jsonl',
+
+  // S2: repeat-spam blocklist. A number tagged 'spam' (S1) this many times
+  // gets rejected at the /voice webhook before an OpenAI session opens —
+  // manually editing the file (object keyed by number) is the unblock path.
+  BLOCKLIST_PATH: process.env.BLOCKLIST_PATH || './data/blocklist.json',
+  SPAM_BLOCK_THRESHOLD: Number(process.env.SPAM_BLOCK_THRESHOLD || 2),
 };

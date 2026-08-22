@@ -14,6 +14,7 @@ import {
 import type { Service } from '../services/phorest.types.js';
 import { phorest } from '../services/phorest.js';
 import { CallStore } from '../services/callStore.js';
+import { recordSpamOutcome } from '../services/blocklist.js';
 import type {
   CustomerResult,
   AppointmentSummary,
@@ -570,6 +571,10 @@ export class TwilioRealtimeCall {
   private startedAtMs: number | null = null;
   private outcome = 'none';
   private endRecorded = false;
+  // S2: the caller-ID number this call started with (Twilio's <Parameter
+  // name="from">), kept for cleanup() — a 'spam'-tagged call with a known
+  // number gets recorded toward the repeat-offender blocklist there.
+  private callerFrom: string | undefined = undefined;
   // Optional: bounded accumulation of Erica's spoken text for a future digest —
   // no per-delta external calls, just an in-memory buffer capped at ~8 KB.
   private assistantTranscript = '';
@@ -811,6 +816,32 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     }
   }
 
+  /**
+   * S2: record a spam outcome toward the repeat-offender blocklist — but
+   * ABSOLUTELY never for a number that resolves to a real Phorest client
+   * (a real client must never be blocklisted, even if a call was mis-tagged
+   * 'spam'). Uses the SAME phone lookup `prepareCallerContext` uses above.
+   * Called fire-and-forget from cleanup() — must never throw or delay call
+   * teardown, so every failure path here just logs and returns.
+   */
+  private async recordSpamOutcomeIfNotClient(from: string): Promise<void> {
+    try {
+      const client = await phorest
+        .lookupCustomerByPhone(from)
+        .catch(() => null);
+      if (client) {
+        logger.warn(
+          { last4: from.slice(-4) },
+          'spam outcome for a known client — NOT blocklisting'
+        );
+        return;
+      }
+      recordSpamOutcome(from);
+    } catch {
+      // Fire-and-forget guard — never throw into call cleanup.
+    }
+  }
+
   private async handleMessage(data: WebSocket.RawData) {
     try {
       const event = JSON.parse(data.toString()) as TwilioEvent;
@@ -861,6 +892,11 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           // inject once the session is open (below), just before the greeting.
           const callerFrom = (event as TwilioStartEvent).start.customParameters
             ?.from;
+          // S2: STIR/SHAKEN attestation, passed through from routes/twilio.ts
+          // as a stream parameter. Log-only — no blocking decisions on it.
+          const callerStir = (event as TwilioStartEvent).start.customParameters
+            ?.stir;
+          this.callerFrom = callerFrom;
           const warm = this.prepareCallerContext(callerFrom);
           // Build the session now that streamSid is known — RT-9 tags every
           // session log line with the last 8 of the streamSid. Only after the
@@ -892,6 +928,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
             from: callerFrom,
             recognizedClientId: this.prefetch?.clientId,
             startedAt: this.startedAtMs,
+            stirVerstat: callerStir,
           });
           // Erica greets first, in her own voice (no separate Polly handoff).
           this.session.requestGreeting();
@@ -2709,6 +2746,12 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           ? { assistantTranscript: this.assistantTranscript }
           : {}),
       });
+      // S2: a spam-tagged call whose caller-ID number we know gets counted
+      // toward the repeat-offender blocklist. Fire-and-forget (void) — the
+      // guard above never throws and must never delay call teardown.
+      if (this.outcome === 'spam' && this.callerFrom) {
+        void this.recordSpamOutcomeIfNotClient(this.callerFrom);
+      }
     }
     // session may be undefined if the socket errored/closed before Twilio's
     // "start" event ever built it — guard so cleanup never throws.

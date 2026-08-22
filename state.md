@@ -3,6 +3,182 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-22 — S2 IMPLEMENTED (worker agent)
+**Task:** Round 3 S2 — repeat-spam blocklist at the webhook + STIR/SHAKEN
+logging. Depends on S1's `outcome === 'spam'` tag. Once a number is
+known-spam, the next call must cost ~$0: rejected at the Twilio `/voice`
+webhook, never opening an OpenAI Realtime session. Implemented exactly per
+queue spec, nothing more.
+
+**NEW `src/services/blocklist.ts`** — follows `callStore.ts`'s design rules
+verbatim (node builtins only — `fs`/`path`; every public function wrapped so
+it can NEVER throw into a caller; in-memory cache + write-through JSON file at
+env `BLOCKLIST_PATH`, parent dir created lazily):
+- `recordSpamOutcome(phone: string): void` — normalizes to 10 digits (strip a
+  leading 1, same convention as the rest of the codebase), increments
+  `{count, lastTs}` keyed by the normalized number.
+- `isBlocked(phone: string): boolean` — `count >= env.SPAM_BLOCK_THRESHOLD`
+  (default 2): one spam verdict is a warning, two blocks.
+- JSON shape is a plain object keyed by the 10-digit number, e.g.
+  `{"4105551234": {"count": 2, "lastTs": 1735000000000}}` — a human edits this
+  file directly to unblock (delete the key, or drop `count` below threshold);
+  there is no code-level unblock function, by design.
+- `__resetBlocklistCacheForTests()` — test-only, drops the in-memory cache so
+  a test can point `env.BLOCKLIST_PATH` at a fresh tmp file and force a real
+  disk re-read (proves persistence, not just an in-memory illusion).
+- Both `recordSpamOutcome`/`isBlocked` wrap all fs/JSON work in try/catch;
+  `loadCache()` treats a missing/corrupt file as empty (`{}`); `persist()`
+  swallows a failed `mkdirSync`/`writeFileSync` at `logger.warn` — verified by
+  a dedicated "unwritable path" test (same trick as `callStore.test.ts`:
+  point the path at a nested dir under an existing plain file → `ENOTDIR`,
+  caught, no throw).
+
+**Client guard (absolute) — lives in `twilioStream.ts`, not `blocklist.ts`:**
+`blocklist.ts` stays pure (no Phorest import, matching `callStore.ts`'s "node
+builtins only" rule), so the guard is a new private method,
+`recordSpamOutcomeIfNotClient(from)` (twilioStream.ts, right after
+`applyCallerContext()`), that calls `phorest.lookupCustomerByPhone(from)` —
+**the exact same lookup `prepareCallerContext` uses** (verified by reading
+`prepareCallerContext` first: `phorest.lookupCustomerByPhone(callerPhone)`).
+If it resolves to a client → logs `logger.warn({last4}, 'spam outcome for a
+known client — NOT blocklisting')` and returns WITHOUT calling
+`recordSpamOutcome`. Only when the lookup resolves `null` (or itself
+fails/throws — fails open to "not a known client", matching
+`prepareCallerContext`'s own catch-and-fall-back pattern) does it call
+`recordSpamOutcome(from)`. The whole method is wrapped in try/catch so it can
+never throw into its caller.
+
+**Wired at the recording site (`cleanup()`, `twilioStream.ts` ~:2749):**
+inside the existing `if (!this.endRecorded && this.startedAtMs !== null)`
+block, right after `CallStore.endCall(...)`:
+```ts
+if (this.outcome === 'spam' && this.callerFrom) {
+  void this.recordSpamOutcomeIfNotClient(this.callerFrom);
+}
+```
+`void` = fire-and-forget, exactly per spec ("must never delay or throw into
+call cleanup"). `this.callerFrom` is a NEW private field — traced where
+`startCall` gets `from`: the 'start' handler already computes
+`const callerFrom = ... customParameters?.from` for `prepareCallerContext`
+and `CallStore.startCall`, but never stored it on the instance for later use
+by `cleanup()`. Added `private callerFrom: string | undefined = undefined;`
+and one line, `this.callerFrom = callerFrom;`, right where the const is
+already computed — no other line in that handler touched.
+
+**STIR/SHAKEN (log-only, per spec — no blocking decisions on it):**
+- `routes/twilio.ts` `/voice`: reads `req.body.StirVerstat`, adds it to the
+  existing `'Twilio /voice called'` pino log line (`stirVerstat:
+  stirVerstat || undefined`), and — only on the non-blocked path — passes it
+  as a stream `<Parameter name="stir" value="...">` next to the existing
+  `"from"` parameter (verified the twilio lib's exact output via a scratch
+  script: `<Parameter name="stir" value="TN-Validation-Passed-A"/>`).
+- `twilioStream.ts` 'start' handler: reads
+  `customParameters?.stir` into a local `callerStir`, passes it into
+  `CallStore.startCall({..., stirVerstat: callerStir})`.
+- `callStore.ts`: `StartMeta` gains optional `stirVerstat?: string |
+  undefined`; `startCall()`'s appended record includes it.
+
+**`/voice` webhook blocking (`routes/twilio.ts`, AFTER `twilioSignature()`
+passes — unchanged middleware ordering):** reads `from`/`callSid`/
+`stirVerstat` up front (used by both the log line and the blocked branch);
+`if (from && isBlocked(from))` →
+`logger.warn({last4: from.slice(-4)}, '🚫 blocked spam caller (…last4
+only)')` + `CallStore.recordBlocked(callSid, from, stirVerstat ||
+undefined)` (**NEW** `CallStore` method, append type `'blocked'`, full number
+written to the file — same "private data store, never pino" rule as
+`startCall`'s `from`) + `res.type('text/xml').send(rejectTwiml.toString())`
+where `rejectTwiml` is a **fresh** `VoiceResponse` with `.reject({reason:
+'rejected'})` called — verified via the twilio lib directly:
+`<Response><Reject reason="rejected"/></Response>`, no `<Connect>`, no
+`<Stream>`. Unblocked calls fall through to the pre-existing
+connect/stream/token logic completely unchanged (only addition there is the
+`stir` parameter line).
+
+**`.gitignore` finding:** already fully covers `data/blocklist.json` — line 8
+is a bare `data/` rule (not scoped to `*.jsonl` or any subpath), and there are
+no `!`-negation lines anywhere in the file. Verified with `git check-ignore -v
+data/blocklist.json` → matched `data/` at line 8. **No `.gitignore` change was
+needed or made.**
+
+**`src/config/env.ts`:** added, following the existing pattern/comment style,
+right after `CALL_STORE_PATH`:
+- `BLOCKLIST_PATH` (default `'./data/blocklist.json'`)
+- `SPAM_BLOCK_THRESHOLD` (default `2`)
+
+**Tests added (all new, +16 net):**
+- `src/tests/blocklist.test.ts` (7) — tmp-dir `BLOCKLIST_PATH` (same
+  dynamic-import-after-env-set pattern as `callStore.test.ts`): unknown number
+  never blocked; 1 spam outcome → not blocked; 2nd outcome (incl. an
+  11-digit/leading-1 variant, proving normalization) → blocked; a different
+  number unaffected; **persistence** — reset the in-memory cache, re-read from
+  disk, still blocked, and the raw JSON file matches the human-editable shape
+  (`{count, lastTs}` keyed by number); **never-throws** on an unwritable path
+  (nested dir under an existing file → `ENOTDIR`) for both `recordSpamOutcome`
+  and `isBlocked`, degrading gracefully to `false`; a too-short/garbage number
+  never throws and never blocks.
+- `src/tests/twilioStream.blocklist.test.ts` (6, same `buildCall()`
+  mock-socket scaffolding as `twilioStream.vacation.test.ts`) — **client
+  guard**: mocks `phorest.lookupCustomerByPhone` directly (`vi.spyOn(phorest,
+  ...)`, the real shared `phorest` selector object, same pattern already used
+  elsewhere in the codebase): (a) unrecognized number → 1st call not blocked,
+  2nd call blocked (proves `recordSpamOutcomeIfNotClient` actually calls
+  `recordSpamOutcome`); (b) a number that resolves to a KNOWN client → called
+  3× and NEVER lands in the blocklist file at all (`raw[...] ===
+  undefined`) — the literal "prove a known client's number never lands in the
+  blocklist file" acceptance criterion; (c) a Phorest lookup that itself
+  throws → resolves cleanly (never throws) and fails open to recording.
+  **cleanup() wiring** (3 tests, `CallStore.endCall` spied/no-op'd so no test
+  touches the real `./data/calls.jsonl`): spam outcome + known `callerFrom` →
+  `recordSpamOutcomeIfNotClient` called once with that number; non-spam
+  outcome → never called; spam outcome but no known `callerFrom` → never
+  called.
+- `src/tests/twilio.route.test.ts` (+3, existing test untouched) — added
+  `express.urlencoded()` to the test app (mirrors `src/index.ts`'s real setup)
+  so `req.body.From`/`StirVerstat`/`CallSid` actually populate;
+  `vi.mock('../services/blocklist.js', () => ({isBlocked: vi.fn()}))` (a bare
+  function export, not an object method like `phorest`/`CallStore`, so a full
+  module mock is used instead of `vi.spyOn` on a namespace object — more
+  robust against ESM export-mutability quirks): (a) blocked number → TwiML
+  contains `<Reject` and **NOT** `<Connect>`/`<Stream>`, `CallStore
+  .recordBlocked` called with the right args; (b) unblocked number → normal
+  `<Connect><Stream>`, `from` + `stir` parameters both present with the
+  correct values; (c) no `StirVerstat` sent → connects normally, no `stir`
+  parameter emitted at all (proves it's conditional, not always-on).
+
+**Verified:**
+- `npx tsc --noEmit` → clean.
+- `npm test` → **165/165 passed** (floor was >149; net +16: 7
+  `blocklist.test.ts` + 6 `twilioStream.blocklist.test.ts` + 3 new in
+  `twilio.route.test.ts`). Before this task: 149/149.
+- `TZ=UTC npm test` → **165/165 passed**, same file/test count (25 files).
+- No existing test deleted or `.skip`ped.
+- `git diff --stat`: `env.ts` (+6), `callStore.ts` (+18), `routes/twilio.ts`
+  (+28/−4), `twilioStream.ts` (+43), `twilio.route.test.ts` (+88) + this
+  `state.md`/`agent_queue.md` claim, plus 3 NEW files
+  (`blocklist.ts`, `blocklist.test.ts`, `twilioStream.blocklist.test.ts`).
+  `.env` and `business.json` **not in the diff at all**. `openaiSession.ts`
+  **not in the diff at all** — no `session.update` shape changes, no tool
+  schema changes (S2 needed neither). Grepped the `twilioStream.ts` diff for
+  `handleBargeIn`/`markQueue`/`bargeInEpoch` — **zero hits**; barge-in
+  untouched. Every `logger.warn`/`logger.info` this task adds logs `last4:
+  from.slice(-4)` only — grepped for any full-number log call, none found;
+  full numbers are written only into `data/blocklist.json` and
+  `data/calls.jsonl` (the private stores), matching the hard rule.
+
+**Deviations from spec:** none in substance. One naming/placement judgment
+call not spelled out verbatim: the client-guard method
+(`recordSpamOutcomeIfNotClient`) was placed on `TwilioRealtimeCall` in
+`twilioStream.ts` rather than inside `blocklist.ts`, so that `blocklist.ts`
+could stay dependency-free (no Phorest import) per its own explicit design
+rule ("node builtins only") mirrored from `callStore.ts` — this is the direct,
+minimal-footprint reading of "find the exact lookup prepareCallerContext uses
+... and use the same one," since that lookup (`phorest.lookupCustomerByPhone`)
+already lives in `twilioStream.ts`'s own module scope, not `blocklist.ts`'s.
+
+**Queue status:** S2 marked `[x]` below — implemented, awaiting Fable
+review/commit. Not committed by this worker (per ritual — no
+`git add`/commit).
+
 ## 2026-08-22 — S1 IMPLEMENTED (worker agent)
 **Task:** Round 3 S1 — spam & telemarketer handling. Richa gets frequent
 scam/telemarketing calls (Google-listing scams, loan/solar/warranty pitches,

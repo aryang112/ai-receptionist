@@ -331,7 +331,7 @@ zod seam, per lessons.md): `handleEndCall({reason:'spam'})` → outcome 'spam' +
 call ends; `handleEndCall({})` → unchanged 'completed' default. Prompt diff
 shows one new section only.
 
-## S2 — [ ] Repeat-spam blocklist at the webhook + STIR/SHAKEN logging (P1, code) — depends on S1
+## S2 — [x] Repeat-spam blocklist at the webhook + STIR/SHAKEN logging (P1, code) — depends on S1 (implemented, awaiting Fable review/commit)
 **Why:** robocallers redial. Once a number is known-spam, the next call should
 cost ~$0: reject at the Twilio webhook, never open an OpenAI session.
 **Files:** NEW `src/services/blocklist.ts`, `src/routes/twilio.ts`,
