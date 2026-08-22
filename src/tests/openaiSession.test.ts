@@ -188,6 +188,174 @@ describe('B2 stale RT-5 retry cleared on new caller speech', () => {
   });
 });
 
+describe('B3 TPM retry-budget cap', () => {
+  beforeEach(() => vi.useFakeTimers());
+
+  it('caps consecutive retries at 2 — a third consecutive failure schedules no retry', async () => {
+    const { session, sent } = buildSession();
+
+    // Failure #1 -> retry #1 scheduled and fires (within the cap).
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_1' },
+    });
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_1', status: 'failed' },
+    });
+    vi.advanceTimersByTime(2100);
+    expect(types(sent)).toEqual(['response.create']);
+
+    // Failure #2 (the retry's own response also fails) -> retry #2 scheduled
+    // and fires (still within the cap of 2).
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_2' },
+    });
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_2', status: 'failed' },
+    });
+    vi.advanceTimersByTime(2100);
+    expect(types(sent)).toEqual(['response.create', 'response.create']);
+
+    // Failure #3 — the 3rd consecutive failure — exceeds the cap: budget
+    // exhausted, no third retry scheduled.
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_3' },
+    });
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_3', status: 'failed' },
+    });
+    vi.advanceTimersByTime(11000);
+    expect(types(sent)).toEqual(['response.create', 'response.create']);
+    vi.useRealTimers();
+  });
+
+  it('a successful response resets the cap — failures after a success retry again', async () => {
+    const { session, sent } = buildSession();
+
+    // Two consecutive failures, right at the cap boundary — both retry. Each
+    // retry is allowed to actually fire (advance past its delay) before the
+    // next failure, since scheduleFailedRetry supersedes any still-pending
+    // timer rather than stacking them.
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_1' },
+    });
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_1', status: 'failed' },
+    });
+    vi.advanceTimersByTime(2100);
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_2' },
+    });
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_2', status: 'failed' },
+    });
+    vi.advanceTimersByTime(2100);
+    expect(types(sent)).toEqual(['response.create', 'response.create']);
+    sent.length = 0;
+
+    // A successful response resets the streak.
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_3' },
+    });
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_3', status: 'completed' },
+    });
+
+    // Two MORE consecutive failures after the success both retry again — if
+    // the cap hadn't reset, the second of these would be the streak's 4th
+    // consecutive failure and would be blocked.
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_4' },
+    });
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_4', status: 'failed' },
+    });
+    vi.advanceTimersByTime(2100);
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_5' },
+    });
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_5', status: 'failed' },
+    });
+    vi.advanceTimersByTime(11000);
+    expect(types(sent)).toEqual(['response.create', 'response.create']);
+    vi.useRealTimers();
+  });
+
+  it('speech_started also resets the cap', async () => {
+    const { session, sent } = buildSession();
+
+    // Two consecutive failures, right at the cap boundary — both retry. Each
+    // retry is allowed to actually fire before the next failure (see the
+    // "success resets the cap" test above for why).
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_1' },
+    });
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_1', status: 'failed' },
+    });
+    vi.advanceTimersByTime(2100);
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_2' },
+    });
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_2', status: 'failed' },
+    });
+    vi.advanceTimersByTime(2100);
+    expect(types(sent)).toEqual(['response.create', 'response.create']);
+    sent.length = 0;
+
+    // New caller speech resets the streak (it also clears any pending
+    // retry timer — B2 — but that's not what's under test here).
+    await fire(session, {
+      type: 'input_audio_buffer.speech_started',
+      item_id: 'item_new',
+    });
+
+    // Two more consecutive failures after speech_started both retry again —
+    // if the cap hadn't reset, the second would be blocked.
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_3' },
+    });
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_3', status: 'failed' },
+    });
+    vi.advanceTimersByTime(2100);
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_4' },
+    });
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_4', status: 'failed' },
+    });
+    vi.advanceTimersByTime(11000);
+    expect(types(sent)).toEqual(['response.create', 'response.create']);
+    vi.useRealTimers();
+  });
+});
+
 describe('RT-7 stray-delta gating after barge-in', () => {
   it('drops audio deltas carrying the cancelled response id, then re-arms on next response.created', async () => {
     const onAudioChunk = vi.fn();

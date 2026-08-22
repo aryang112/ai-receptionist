@@ -187,7 +187,7 @@ also with `TZ=UTC`; NEW unit test in `src/tests/openaiSession.test.ts`:
 schedule a failed retry, fire speech_started, assert no `response.create` is
 sent when the timer would have elapsed. Prompt diff shows the consent gate.
 
-## B3 — [ ] TPM starvation freezes calls (P0 — OWNER action + code mitigation)
+## B3 — [x] TPM starvation freezes calls (P0 — OWNER action + code mitigation) (code mitigation implemented, awaiting Fable review/commit; OWNER action — raise OpenAI TPM tier — still open)
 **Why (observed):** the "froze and said nothing" moments were OpenAI responses
 FAILING on the 40k tokens/min cap — remaining sank to **935/40000** mid-call;
 6 response failures in ~45s, each retry waiting up to 10s = repeated dead air.

@@ -66,6 +66,9 @@ export class OpenAIRealtimeSession {
   /** Latest reset window (ms) from rate_limits.updated; used to space a retry. */
   private lastResetMs: number | undefined = undefined;
   private failedRetryTimer: NodeJS.Timeout | undefined = undefined;
+  // --- B3: bound RT-5 retry churn under TPM starvation -----------------------
+  /** Consecutive failed-response streak; retries stop once this exceeds 2. */
+  private consecutiveResponseFailures = 0;
   // --- RT-7: stray-delta gating ---------------------------------------------
   /** id of the response currently being generated (from response.created). */
   private currentResponseId: string | null = null;
@@ -466,6 +469,11 @@ export class OpenAIRealtimeSession {
         // caller has said since. server_vad already creates a fresh response
         // for this new turn, so dropping the stale retry is safe.
         this.clearFailedRetry();
+        // B3: a new caller turn is a fresh attempt, so it gets a fresh retry
+        // budget. Required (not just "reset on success"): under sustained TPM
+        // starvation responses may keep failing, so success alone might never
+        // fire, permanently disarming retries for the rest of the call.
+        this.consecutiveResponseFailures = 0;
         this.handlers.onSpeechStarted?.();
         break;
       }
@@ -575,11 +583,27 @@ export class OpenAIRealtimeSession {
         // (spaced by the last known rate-limit reset window) instead of hanging.
         // 'cancelled' is a normal barge-in — ignore it.
         if (status === 'failed') {
-          this.log.warn(
-            { status, response: event.response?.status_details },
-            'OpenAI response FAILED — scheduling one retry'
-          );
-          this.scheduleFailedRetry();
+          this.consecutiveResponseFailures++;
+          // B3: under TPM starvation, failed→retry→failed can loop and burn
+          // the very token budget the call is starved of. Cap consecutive
+          // retries at 2 — beyond that, stop scheduling and let the next
+          // caller-speech turn drive a fresh response instead.
+          if (this.consecutiveResponseFailures > 2) {
+            this.log.warn(
+              { consecutiveFailures: this.consecutiveResponseFailures },
+              '⚖️  retry budget exhausted — no more RT-5 retries this streak'
+            );
+          } else {
+            this.log.warn(
+              { status, response: event.response?.status_details },
+              'OpenAI response FAILED — scheduling one retry'
+            );
+            this.scheduleFailedRetry();
+          }
+        } else {
+          // B3: any non-failed completion (success, or a barge-in cancel)
+          // clears the failure streak — a fresh attempt earns a fresh budget.
+          this.consecutiveResponseFailures = 0;
         }
 
         // RT-2: if a tool result arrived while this response was active, its

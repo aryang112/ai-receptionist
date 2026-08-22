@@ -3,6 +3,56 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-21 — B3 IMPLEMENTED (worker agent): bound RT-5 retry churn under TPM starvation
+Implemented `tasks/agent_queue.md` B3 code mitigation exactly (P0). Built on top
+of B2 (commit 4795acc) without undoing its `clearFailedRetry()` call in
+`input_audio_buffer.speech_started`. OWNER action (raise the OpenAI TPM tier)
+is the real structural fix and is NOT something this worker can do — left open.
+- **CODE** — `src/realtime/openaiSession.ts`:
+  - New field: `private consecutiveResponseFailures = 0;` (declared next to
+    the existing RT-5 fields, under a new `--- B3 ---` comment block).
+  - `response.done`/`response.completed` handler: on `status === 'failed'`,
+    increment the counter BEFORE deciding whether to retry. If it exceeds 2,
+    log `⚖️  retry budget exhausted — no more RT-5 retries this streak` and do
+    NOT call `scheduleFailedRetry()`. Otherwise (counter ≤ 2) behave exactly as
+    before — log the existing warn and call `scheduleFailedRetry()`. On any
+    non-`'failed'` completion (success, or a barge-in `'cancelled'`), reset
+    `consecutiveResponseFailures = 0` (new `else` branch).
+  - `input_audio_buffer.speech_started` handler (same case B2 touches): added
+    `this.consecutiveResponseFailures = 0;` right after the existing
+    `this.clearFailedRetry();` call — a new caller turn gets a fresh retry
+    budget. Required per spec (not just "reset on success"): under sustained
+    TPM starvation, responses may keep failing, so success alone might never
+    fire and would permanently disarm retries for the rest of the call.
+  - No `session.update` shape changes — this is all plain app-code state on
+    the class, same pattern as B2's `clearFailedRetry()` call.
+- **NEW tests** — `src/tests/openaiSession.test.ts`, describe block "B3 TPM
+  retry-budget cap" (3 tests, using the existing `RT-5 failed-response retry`
+  and `B2 stale RT-5 retry` fake-timer harness):
+  1. "caps consecutive retries at 2 — a third consecutive failure schedules no
+     retry" — 3 consecutive failed responses (each retry allowed to actually
+     fire via `vi.advanceTimersByTime` before the next failure, since
+     `scheduleFailedRetry` supersedes rather than stacks pending timers);
+     asserts exactly 2 `response.create`s total, none for the 3rd failure.
+  2. "a successful response resets the cap" — 2 failures (both retry, at the
+     cap boundary), then a `status: 'completed'` response, then 2 more
+     failures — asserts both post-success failures retry again (would fail if
+     the streak carried over, since the 2nd would be the 4th consecutive).
+  3. "speech_started also resets the cap" — same shape, but the reset trigger
+     is `input_audio_buffer.speech_started` instead of a success.
+  Existing `RT-5 failed-response retry` (single failure → one retry) and `B2
+  stale RT-5 retry` tests are untouched and still pass unmodified — the cap
+  permits the single-failure case they exercise (1 ≤ 2).
+- **Verified:** `npx tsc --noEmit` clean. `npm test` → **107/107** (was 104,
+  +3 new). `TZ=UTC npm test` → **107/107**. Barge-in tests
+  (`twilioStream.bargein.test.ts`) untouched and green;
+  `handleBargeIn`/`markQueue`/`bargeInEpoch` not touched. `twilioStream.ts`,
+  `.env`, `business.json`, and Phorest write paths not touched (B3 is
+  `openaiSession.ts` + its tests only, per the task's hard rules).
+- Marked `[x]` in `tasks/agent_queue.md` with "(code mitigation implemented,
+  awaiting Fable review/commit; OWNER action — raise OpenAI TPM tier — still
+  open)" — this worker did not commit or push per instructions.
+
 ## 2026-08-21 — B2 FIXED (worker agent): stale RT-5 retry executes writes against switched intent
 Implemented `tasks/agent_queue.md` B2 exactly (P0, code + prompt). Root cause:
 `clearFailedRetry()` was only called on close/cleanup, so a scheduled RT-5 retry
