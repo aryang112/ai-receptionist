@@ -3,6 +3,282 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-22 — A1 IMPLEMENTED (worker agent)
+**Task:** Round 3 A1 — re-validate availability server-side immediately before
+every booking/reschedule write. Phorest `/booking` with `force_selected_time`
+books whatever we send; the `offeredSlots` cache only proves we ONCE offered a
+time, not that it's still free (caller dawdled, a walk-in took it, a
+concurrent call grabbed it) — a stale offer could silently double-book.
+Implemented exactly per queue spec, nothing more.
+
+**Files changed:** `src/realtime/twilioStream.ts` only (+ 1 new test file, +
+edits to an existing test file that were a required consequence — see below).
+`business.json`, `.env`, `phorest.client.ts`, `phorest.types.ts`
+(PhorestPort), and `openaiSession.ts` are **not in the diff at all**
+(`git diff --stat` on each is empty — verified). No barge-in symbol
+(`handleBargeIn`/`markQueue`/`bargeInEpoch`) appears anywhere in the
+`twilioStream.ts` diff (grepped, zero hits).
+
+**1. Extracted helper — `private async fetchOpenSlots(serviceName, dateISO)`
+(twilioStream.ts:1324, right above `handleSuggestAvailability`):**
+Pulled the fetch→snap→hours-filter pipeline out of `handleSuggestAvailability`
+verbatim: `suggestSlots({serviceName, date})` → (on a `notOffered`/`ambiguous`
+non-match, return that discriminated-union member UNCHANGED, pass-through) →
+on a match, `getOpenClose(dateISO)` + `durationMin` → `DateTime.fromISO(iso,
+{zone: env.TIMEZONE})` per raw slot → `snapSlotsToGrid(parsedSlots,
+env.SLOT_GRID_MIN)` → the same in-hours filter
+(`dt >= openClose.open && dt.plus({minutes:durationMin}) <= openClose.close`,
+short-circuited when `openClose` is null). Returns
+`{ service, date, slots: DateTime[], rawCount }` on a match — `slots` is the
+**full in-hours, snapped list** (every genuinely-open time), not the top-10
+selected/spread subset — or the pass-through `{notOffered}`/`{ambiguous}`
+union member.
+
+**Boundary decision (why `slots` is the full in-hours list, not the "offered"
+top-10):** the spec explicitly says preferredTime/MAX-10/even-spread
+"selection" logic (which of the open times to OFFER) must stay OUTSIDE the
+helper — the helper's job is only "which times are genuinely open." If the
+helper returned the narrowed offered subset instead, a re-check could
+falsely reject a still-open time that simply wasn't in that call's top-10
+selection (selection depends on `preferredTime`, which book/reschedule never
+receive) — the opposite of A1's goal. `rawCount` (the pre-snap/pre-filter
+Phorest slot count) is threaded through separately so the pre-existing
+`suggest_availability` log line (`rawCount: result.slots.length` before this
+diff) keeps reporting exactly what it always did — see the "byte-identical"
+proof below.
+
+**2. `handleSuggestAvailability` (twilioStream.ts:1373) now calls the
+helper** (`const result = await this.fetchOpenSlots(payload.serviceName,
+payload.date);` at :1392) instead of running the pipeline inline. Everything
+below that call is **unchanged code, just reading from the helper's result**:
+the `'notOffered' in result` / `'ambiguous' in result` branches are
+byte-identical (the helper passes those through untouched); `const inHours =
+result.slots;` (was previously the local `snapSlotsToGrid(...).filter(...)`
+expression — now just a variable read since the helper already computed it);
+the `MAX=10` nearest-to-`preferredTime`/even-spread `picked` logic, the
+`slots` `{time,value}` mapping, the `offeredSlots.set(...)` cache write, and
+the final returned object are **not touched at all** (confirmed by reading the
+diff — no lines changed below `const inHours = result.slots;` except the one
+`rawCount` field, addressed next).
+
+**Proof `handleSuggestAvailability` is byte-identical (the one subtlety
+found and fixed):** the pre-existing log line at (was) `rawCount:
+result.slots.length` — before this diff, `result` was `suggestSlots`'s raw
+return, so `.slots.length` was the RAW pre-snap/pre-filter Phorest count.
+After the refactor, `result` is the helper's return, whose own `.slots` is
+now the POST-filter `inHours` array — so `result.slots.length` would have
+silently started reporting the filtered count instead, a real (if log-only)
+behavior drift. Fixed by having the helper compute and return `rawCount`
+(captured right after the match branch, before snap/filter) and changing the
+log line to `rawCount: result.rawCount` (twilioStream.ts, in the `logger.info`
+call under `'Availability slots found'`) — this restores the EXACT original
+value/meaning. No test asserts on this field (grepped — zero hits) so nothing
+would have caught the drift; documenting it here per lessons.md's "don't
+claim byte-identical without tracing it" rule. Order-of-calls note: the
+helper now computes `getOpenClose`/`durationMin` (previously done in the
+handler, after `getHoursStatus`) BEFORE the handler's own `getHoursStatus`
+call — both are pure synchronous reads of `business.json`/env with no shared
+state and no dependency on each other, so this reordering has zero observable
+effect (confirmed by the full green suite, incl. `hours.test.ts` and
+`twilioStream.prompt.test.ts` unmodified and passing).
+
+**3. `handleBookAppointment` (twilioStream.ts:1538) — fresh re-check inserted
+immediately before `const result = await bookAppointment(bookInput);`
+(:1692), right after `bookInput` is fully assembled** (twilioStream.ts
+~:1650-1691): calls `this.fetchOpenSlots(bookSvc?.name ?? payload.serviceName,
+payload.date)` (`bookSvc` is the already-resolved `Service` from the
+PRE-EXISTING `findServiceByName` call a few lines above, used for the OLD
+offered-slot gate too — reused, not re-resolved a third time). On a match, if
+`payload.time` isn't in the fresh snapped/hours-filtered set: log
+`logger.warn` (`'Booking rejected — time no longer available on fresh
+re-check'`), **refresh** `this.offeredSlots` for that service+date key to the
+fresh set (so the model's very next attempt validates against reality, not
+the stale offer), and `return { error: "That time was just taken — the open
+times now are: <fresh, sorted, comma-joined>" }` — `bookAppointment()` is
+never reached. On a still-fresh match, or on `notOffered`/`ambiguous`
+(treated as equivalent to "couldn't get a definitive fresh reading" — see
+Deviations) the code falls through unchanged. A `catch` around the whole
+re-check logs `logger.warn` (`'Fresh availability re-check failed —
+proceeding with booking (fail-open)'`) and falls through to the write
+regardless — the pre-existing offered-slot gate already approved this
+booking, so an availability-fetch outage must not block it.
+
+**4. `handleReschedule` (twilioStream.ts:1745) — fresh re-check inserted
+immediately after the pre-existing F6 offered-slot-for-date gate, immediately
+before `await phorest.updateAppointment(payload.appointmentId, iso)`
+(:1874).** Problem solved first: `reschedule_appointment`'s own tool schema
+carries no `serviceName` (verified in `toolSchemas.ts` — only `appointmentId`,
+`date`, `time`), so the re-check can't call `fetchOpenSlots` without first
+knowing which service the appointment being moved is for, and the hard
+constraint against extra availability calls ("exactly one fetch per write
+attempt") rules out probing every service. **Solution: new per-call field
+`private servedAppointmentServices = new Map<string, string>()`**
+(twilioStream.ts, declared right after `servedAppointmentIds`, its existing
+write-path-security sibling), populated in parallel at **every one of the 4
+call sites** that already add to `servedAppointmentIds` (grepped the whole
+file for `.servedAppointmentIds.add(` to confirm there are exactly 4, all
+now paired 1:1 with a `.servedAppointmentServices.set(...)`):
+`adoptRecognizedCaller`'s prefetch warm (appointments have `.serviceName`
+directly), `handleBookAppointment` (uses `result.service.name` from the
+booking result), the `lookup_customer` multi-candidate path (via
+`nextAppointmentFor`, extended — see below), and `handleListAppointments`.
+In `handleReschedule`, `const svcForRecheck =
+this.servedAppointmentServices.get(payload.appointmentId);` — if present,
+runs the identical fetch/reject/refresh-cache/fail-open pattern as booking
+(`this.fetchOpenSlots(svcForRecheck, payload.date)`); if the fresh time isn't
+found, logs `logger.warn` with `fresh: [...freshValues]` **on every
+reschedule rejection specifically** (per spec, to help live tests spot the
+documented false-reject edge — see below) and returns the same `"That time
+was just taken — the open times now are: ..."` shape; a `catch` fails open
+identically to booking. **If `svcForRecheck` is `undefined`** (defensive —
+should not happen given the 4 sites are now in parity with
+`servedAppointmentIds`, but the ownership guard only proves the ID was
+served, not that this particular code path recorded its service) — logs
+`logger.warn` (`'Fresh re-check skipped — service unknown for this
+appointment (fail-open)'`) and proceeds straight to the write, same fail-open
+philosophy as a fetch throwing.
+
+**`nextAppointmentFor` (twilioStream.ts ~:2670) extended, additively:**
+its return type gained one field, `serviceName: string`, sourced from the
+`AppointmentSummary` it already fetches internally (`soonest.serviceName` —
+was already in scope, just not returned). **Verified safe:** grepped
+`src/tests/` for `nextAppointment` — zero hits, so no existing test asserts
+on this object's shape; and the ONE place that consumes it
+(`lookup_customer`'s multi-candidate branch, twilioStream.ts ~:2088) builds
+its model-facing response by explicitly picking `{date, time}` only — the new
+`serviceName` field is used solely to populate `servedAppointmentServices`
+and is never sent to the model, so `lookup_customer`'s tool-result shape is
+unchanged.
+
+**Known false-reject edge (documented per spec, NOT fixed):** rescheduling to
+a time adjacent to the caller's OWN current appointment can be rejected by
+the fresh re-check, because their existing (not-yet-moved) appointment still
+occupies that window in Phorest's live availability response. Comment left
+in `handleReschedule` at the rejection branch; the `logger.warn` on every
+reschedule rejection includes `appointmentId` + the fresh list specifically
+so a live test can confirm whether an observed rejection is this pattern.
+
+**Latency / call-count constraints (verified by reading the diff, not just
+asserting it):** `handleSuggestAvailability` still calls `fetchOpenSlots`
+exactly once (was: `suggestSlots` once) — **zero extra calls on the suggest
+path**, confirmed. `handleBookAppointment`/`handleReschedule` each add
+exactly one `fetchOpenSlots` call (which itself is exactly one
+`phorest.getAvailability` call) — **one extra round-trip per write attempt**,
+matching the spec's explicit latency budget.
+
+**Tests — `src/tests/twilioStream.freshCheck.test.ts` (NEW, 7 tests),** same
+`buildCall()` mock-socket scaffolding as `twilioStream.booking.test.ts`,
+driving `handleBookAppointment`/`handleReschedule` directly (above the zod
+seam) against `vi.spyOn(phorest, 'getAvailability')`:
+- book: **stale** offered slot (offered `13:15`, fresh availability mock only
+  returns `14:00`) → `error` matches `/just taken|open times/i` AND contains
+  `14:00`; `phorest.createAppointment` **NOT called**; `offeredSlots` cache
+  for that key is refreshed to `{14:00}` (asserted directly).
+- book: **still-free** slot (offered `13:15`, fresh mock returns `13:15` +
+  `14:00`) → `error` undefined, `createAppointment` called once.
+- book: fresh fetch **throws** (`mockRejectedValue`) → `error` undefined,
+  `createAppointment` called once (fail-open proven).
+- reschedule: **stale** slot, WITH `servedAppointmentServices` populated
+  (`'Lash Lift'`) → same rejected/contains-fresh-list/no-write proof as
+  booking, via `phorest.updateAppointment` not called.
+- reschedule: **still-free** slot, service known → succeeds,
+  `updateAppointment` called once.
+- reschedule: fresh fetch **throws**, service known → `updateAppointment`
+  still called once (fail-open).
+- reschedule: service **unknown** to this call (`servedAppointmentServices`
+  never populated for that ID, only `servedAppointmentIds`) → proceeds
+  straight to the write, `phorest.getAvailability` **never called** at all
+  (asserted directly) — proves the defensive fail-open branch short-circuits
+  before attempting a fetch, not after one somehow succeeds vacuously.
+  (Business-hours note: reschedule tests use `13:00`/`14:00`, not `10:00`/
+  `11:00` like the pre-existing F6 tests reuse for the OLD gate only — Thursday
+  business hours are 12:00-19:00, so 10/11 AM would be filtered out by the
+  REAL hours check regardless of mocked availability; the pre-existing F6
+  tests never hit that filter because they don't populate
+  `servedAppointmentServices`, so their fresh re-check always fail-opens.)
+
+**Pre-existing test file required a fix — `src/tests/
+twilioStream.booking.test.ts` (4 tests edited, 0 added/removed, all 7 in the
+file still pass):** the 4 F1/F2 clientId-injection tests (about clientId
+resolution, nothing to do with availability) called `handleBookAppointment`
+directly at `time: '13:20'` for `'Lash Lift'`/`'2025-10-01'` with NO
+`offeredSlots` entry — pre-A1 this bypassed all availability logic entirely.
+Post-A1, the new unconditional fresh re-check called the REAL
+`phorest.mock.ts` default `getAvailability` (`13:20:00, 13:50:00, 14:20:00`)
+and ran it through the REAL `snapSlotsToGrid` — which dropped **all three**
+raw times (none sits on the 15-min grid, and each is 30 min from its
+neighbor, past the `gridMin`-runway threshold that would earn a snap-up), so
+the fresh set was empty and all 4 tests failed with "That time was just
+taken." **This is not a bug in the re-check** — verified with a scratch
+script (`snapSlotsToGrid` on the exact mock output → `[]`) — the mock's
+default 3 slots were never actually "snap-valid" to begin with; these tests
+just never exercised the snap pipeline before A1 existed. Fix: each of the 4
+tests now adds `vi.spyOn(phorest, 'getAvailability').mockResolvedValue([
+'2025-10-01T13:15:00'])` (a single, already-grid-aligned slot, `:15`, so
+`ceilToGrid` keeps it unconditionally) and books `time: '13:15'` instead of
+`'13:20'` — same clientId-injection assertions, now with real backing
+availability instead of accidentally tripping the new gate. Comment added
+above both `describe` blocks explaining why. The 3 pre-existing F6 reschedule
+tests in this same file needed **no changes** — they never populate
+`servedAppointmentServices`, so A1's re-check fail-opens for them by design
+(same branch as `twilioStream.freshCheck.test.ts`'s "service unknown" test).
+
+**Verified:**
+- `npx tsc --noEmit` → clean.
+- `npm test` → **172/172 passed** (26 test files; was 165/165 before this
+  task — net +7, all new in `twilioStream.freshCheck.test.ts`; the 4 edited
+  tests in `twilioStream.booking.test.ts` are modified, not added/removed, so
+  that file's count stays 7). Floor was 165 (per the last S2 entry) — 172 >
+  165, satisfied.
+- `TZ=UTC npm test` → **172/172 passed**, same 26 files.
+- No existing test deleted or `.skip`ped.
+- `git diff --stat`: `twilioStream.ts` (+258/−34 give or take formatting),
+  `twilioStream.booking.test.ts` (+33/−~9), `tasks/agent_queue.md` (claim
+  line only), + 1 new file `twilioStream.freshCheck.test.ts`.
+  `business.json`, `.env`, `phorest.client.ts`, `phorest.types.ts`
+  (PhorestPort contract), `openaiSession.ts` — all **empty diffs**, confirmed
+  via `git diff --stat -- <each file>`. No `handleBargeIn`/`markQueue`/
+  `bargeInEpoch` in the `twilioStream.ts` diff (grepped, zero hits). No
+  `session.update`/`configureSession` string anywhere in the full diff
+  (grepped, zero hits) — this task never touched session config, only app
+  code + prompt-adjacent handler logic (no prompt text was changed at all,
+  actually — A1 is pure code).
+
+**Deviations from spec (judgment calls, reasoned above/inline in code
+comments too):**
+1. **`servedAppointmentServices` map + `nextAppointmentFor` extension** — not
+   spelled out verbatim in the spec (which only names
+   `handleSuggestAvailability`/`handleBookAppointment`/`handleReschedule` as
+   the files-of-interest), but a direct, minimal-footprint necessity: without
+   it, `handleReschedule`'s re-check would have no way to know which service
+   to ask `fetchOpenSlots` about, since `reschedule_appointment`'s own args
+   never carried one and the hard constraint forbids adding a PhorestPort
+   method (no `getAppointmentById`) or probing multiple services (violates
+   the "exactly one fetch per write attempt" budget). All 4 sites were
+   already computing an `AppointmentSummary`-shaped value with a service name
+   in scope; this just captures the field they were discarding.
+2. **`fetchOpenSlots`'s `notOffered`/`ambiguous` branches, when hit from
+   book/reschedule's re-check, are treated as fail-open** (same as a thrown
+   error) rather than as a rejection. Not explicitly addressed in the spec
+   (which only describes the "chosen time not in fresh list" rejection path).
+   Reasoning: by the time book/reschedule calls the helper, the service name
+   was JUST resolved moments earlier in the same handler invocation (via
+   `findServiceByName`/`servedAppointmentServices`) — re-resolving the exact
+   same string via `resolveService`'s priority-1 exact-match should be
+   deterministic and should always re-match. If it somehow doesn't (e.g. a
+   catalog change mid-call), there's no "fresh list of times" to reject
+   against, so failing open (matching the fetch-failure branch) was the
+   closest fit to the spec's own fail-open philosophy — the earlier
+   offered-slot gate already approved this write.
+3. **`rawCount` threading** — a one-field addition to the helper's return
+   type that the spec didn't mention, added specifically to keep
+   `handleSuggestAvailability` **truly** byte-identical (see the "Proof"
+   section above) rather than silently changing a log field's meaning.
+
+**Queue status:** A1 marked `[x]` below — implemented, awaiting Fable
+review/commit. Not committed by this worker (per ritual — no
+`git add`/commit).
+
 ## 2026-08-22 — S2 IMPLEMENTED (worker agent)
 **Task:** Round 3 S2 — repeat-spam blocklist at the webhook + STIR/SHAKEN
 logging. Depends on S1's `outcome === 'spam'` tag. Once a number is

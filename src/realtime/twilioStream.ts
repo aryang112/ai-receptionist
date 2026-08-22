@@ -559,6 +559,12 @@ export class TwilioRealtimeCall {
   // this call). We refuse to cancel/reschedule any ID not in this set so the
   // model can never act on an appointment it invented or guessed.
   private servedAppointmentIds = new Set<string>();
+  // A1: appointmentId -> serviceName for every appointment this call has
+  // served (populated in parallel with servedAppointmentIds, everywhere an
+  // AppointmentSummary/service is known). reschedule_appointment carries no
+  // serviceName of its own, so this is how its fresh-availability re-check
+  // (fetchOpenSlots) knows WHICH service to re-check before writing.
+  private servedAppointmentServices = new Map<string, string>();
   // WRITE-PATH SECURITY: the exact 24h "value" times we offered for a given
   // service+date via suggest_availability, keyed `${service}|${date}`. Booking is
   // constrained to these when an entry exists, so the model can't book a time we
@@ -793,7 +799,10 @@ export class TwilioRealtimeCall {
         if (this.prefetch) this.prefetch.appointments = appts;
         // These appointments have now been surfaced to this call — allow
         // cancel/reschedule against them (ownership guard).
-        for (const a of appts) this.servedAppointmentIds.add(a.appointmentId);
+        for (const a of appts) {
+          this.servedAppointmentIds.add(a.appointmentId);
+          this.servedAppointmentServices.set(a.appointmentId, a.serviceName);
+        }
       })
       .catch(() => {});
     // Tell Erica who's calling (the looked-up name, not a hardcoded one).
@@ -1290,6 +1299,77 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     }
   }
 
+  /**
+   * A1: the reusable "which times are genuinely open" truth for one
+   * service+date — availability fetch (UTC->local conversion happens inside
+   * phorest.client), snap to a clean clock grid (snapSlotsToGrid), then filter
+   * to business hours. This is EXACTLY the pipeline handleSuggestAvailability
+   * used to run inline; extracted so book_appointment/reschedule_appointment
+   * can re-validate a chosen time immediately before writing — stale offered
+   * slots (caller dawdled, a walk-in took it, a concurrent call grabbed it)
+   * can otherwise double-book via force_selected_time (see A1,
+   * tasks/agent_queue.md).
+   *
+   * Deliberately does NOT do preferredTime-nearest / MAX-10 / even-spread
+   * SELECTION — picking which open times to OFFER is a display concern for
+   * suggest_availability only, not part of "is this time real". That
+   * selection logic stays in handleSuggestAvailability, applied to this
+   * helper's full result.
+   *
+   * Returns the discriminated union unchanged for notOffered/ambiguous (no
+   * single service resolved) so callers can decide how to handle that; on a
+   * match, `slots` is the full in-hours, snapped DateTime[] (same salon-zone
+   * DateTime type handleSuggestAvailability already worked with).
+   */
+  private async fetchOpenSlots(
+    serviceName: string,
+    dateISO: string
+  ): Promise<
+    | {
+        service: Service;
+        date: string;
+        slots: DateTime[];
+        // Pre-snap/pre-hours-filter count straight from Phorest — kept so
+        // callers can log the same "raw vs offered" comparison
+        // handleSuggestAvailability always has (see rawCount below).
+        rawCount: number;
+      }
+    | { notOffered: true; closest: Service[] }
+    | { ambiguous: Service[] }
+  > {
+    const result = await suggestSlots({ serviceName, date: dateISO });
+    if ('notOffered' in result) return result;
+    if ('ambiguous' in result) return result;
+
+    const rawCount = result.slots.length;
+    // Keep only slots that START within open hours AND let the service FINISH
+    // before closing — Phorest/staff schedules can run past the salon's stated
+    // hours, and we must never offer a time that ends after close.
+    const openClose = getOpenClose(dateISO);
+    const durationMin = result.service.durationMin || 0;
+    // Parse EXPLICITLY in the salon zone. getAvailability returns ISO strings
+    // carrying the salon offset; an unzoned fromISO() renders in the PROCESS
+    // zone, so on a UTC host every spoken/booked time would silently shift
+    // +4/5h. This is the only unzoned-risk parse in src — keep it zone-explicit.
+    const parsedSlots = result.slots.map((iso) =>
+      DateTime.fromISO(iso, { zone: env.TIMEZONE })
+    );
+    // Phorest re-anchors its availability grid to each appointment's end, so
+    // free starts arrive at odd minutes (2:43, 2:58…). Snap to clean clock
+    // times BEFORE the hours filter so we never speak "2:43 pm". (snapSlotsToGrid)
+    const inHours = snapSlotsToGrid(parsedSlots, env.SLOT_GRID_MIN).filter(
+      (dt) =>
+        (!openClose || dt >= openClose.open) &&
+        (!openClose || dt.plus({ minutes: durationMin }) <= openClose.close)
+    );
+    return {
+      service: result.service,
+      date: result.date,
+      slots: inHours,
+      rawCount,
+    };
+  }
+
   private async handleSuggestAvailability(args: unknown) {
     try {
       const parsed = parseToolArgs('suggest_availability', args);
@@ -1309,9 +1389,12 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         { tool: 'suggest_availability', args: payload },
         'Tool called: suggest_availability'
       );
-      const result = await suggestSlots(payload);
+      const result = await this.fetchOpenSlots(
+        payload.serviceName,
+        payload.date
+      );
 
-      // suggestSlots returns a discriminated union — narrow it before reading
+      // fetchOpenSlots returns a discriminated union — narrow it before reading
       // slot fields. If the phrase didn't resolve to a single service, hand the
       // model the alternatives (never crash on a missing .service/.slots).
       if ('notOffered' in result) {
@@ -1361,26 +1444,11 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       // Hours context so Erica can tell "we're closed" apart from "fully booked".
       const hours = getHoursStatus(payload.date);
 
-      // Keep only slots that START within open hours AND let the service FINISH
-      // before closing — Phorest/staff schedules can run past the salon's stated
-      // hours, and we must never offer a time that ends after close.
-      const openClose = getOpenClose(payload.date);
-      const durationMin = result.service.durationMin || 0;
-      // Parse EXPLICITLY in the salon zone. getAvailability returns ISO strings
-      // carrying the salon offset; an unzoned fromISO() renders in the PROCESS
-      // zone, so on a UTC host every spoken/booked time would silently shift
-      // +4/5h. This is the only unzoned-risk parse in src — keep it zone-explicit.
-      const parsedSlots = result.slots.map((iso) =>
-        DateTime.fromISO(iso, { zone: env.TIMEZONE })
-      );
-      // Phorest re-anchors its availability grid to each appointment's end, so
-      // free starts arrive at odd minutes (2:43, 2:58…). Snap to clean clock
-      // times BEFORE the hours filter so we never speak "2:43 pm". (snapSlotsToGrid)
-      const inHours = snapSlotsToGrid(parsedSlots, env.SLOT_GRID_MIN).filter(
-        (dt) =>
-          (!openClose || dt >= openClose.open) &&
-          (!openClose || dt.plus({ minutes: durationMin }) <= openClose.close)
-      );
+      // fetchOpenSlots already did the availability fetch, snap-to-grid, and
+      // hours filter (see its doc comment) — this IS the "which times are
+      // genuinely open" list, in the same salon-zone DateTime[] shape the code
+      // below has always worked with.
+      const inHours = result.slots;
 
       // CRITICAL: don't just take the earliest N (that hid afternoon/evening
       // slots). If the caller asked for a time, return the slots CLOSEST to it;
@@ -1427,7 +1495,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         {
           tool: 'suggest_availability',
           date: payload.date,
-          rawCount: result.slots.length,
+          rawCount: result.rawCount,
           offeredCount: slots.length,
           salonOpenThatDay: hours.salonOpenThatDay,
           closedRightNow: hours.closedRightNow,
@@ -1572,6 +1640,55 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           ...(payload.customer.email ? { email: payload.customer.email } : {}),
         },
       };
+
+      // A1: the offered-slot gate above only proves we ONCE offered this time —
+      // not that it's still free right now. Re-validate fresh, immediately
+      // before the write, so Phorest's force_selected_time never books over a
+      // slot a walk-in/concurrent caller/dawdle already took (silent
+      // double-book). Fail OPEN on a Phorest error/timeout — an availability
+      // outage must not block a booking the offered-slot gate already passed.
+      const freshBookKey = this.slotKey(
+        bookSvc?.name ?? payload.serviceName,
+        payload.date
+      );
+      try {
+        const fresh = await this.fetchOpenSlots(
+          bookSvc?.name ?? payload.serviceName,
+          payload.date
+        );
+        if (!('notOffered' in fresh) && !('ambiguous' in fresh)) {
+          const freshValues = new Set(
+            fresh.slots.map((dt) => dt.toFormat('HH:mm'))
+          );
+          if (!freshValues.has(payload.time)) {
+            logger.warn(
+              {
+                tool: 'book_appointment',
+                requested: payload.time,
+                fresh: [...freshValues],
+              },
+              'Booking rejected — time no longer available on fresh re-check'
+            );
+            // Refresh the cache so the model's next attempt validates against
+            // reality instead of the now-stale offered set.
+            this.offeredSlots.set(freshBookKey, freshValues);
+            const list = [...freshValues].sort().join(', ');
+            return {
+              error: `That time was just taken — the open times now are: ${list}`,
+            };
+          }
+        }
+        // notOffered/ambiguous on re-resolve is not expected here (the same
+        // name just resolved moments ago via findServiceByName above) — treat
+        // it the same as a fetch failure: fail open rather than block a write
+        // the offered-slot gate already approved.
+      } catch (error) {
+        logger.warn(
+          { tool: 'book_appointment', error: this.formatError(error) },
+          'Fresh availability re-check failed — proceeding with booking (fail-open)'
+        );
+      }
+
       const result = await bookAppointment(bookInput);
       logger.info(
         {
@@ -1583,6 +1700,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       // The caller now owns this appointment on this call — allow a later
       // reschedule/cancel of it without a fresh list_appointments.
       this.servedAppointmentIds.add(result.appointment.appointmentId);
+      this.servedAppointmentServices.set(
+        result.appointment.appointmentId,
+        result.service.name
+      );
       if (this.prefetch) this.prefetch.appointments = null; // warmed list is now stale
       this.outcome = 'booked';
       CallStore.recordToolCall(this.callSid, {
@@ -1685,6 +1806,70 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           'Reschedule without prior suggest_availability for this date — allowing'
         );
       }
+
+      // A1: same fresh re-check as book_appointment — the offered-slot gate
+      // above only proves we ONCE offered this time, not that it's still free.
+      // reschedule_appointment carries no serviceName, so resolve it from
+      // whatever THIS call already served for this appointmentId
+      // (servedAppointmentServices, populated everywhere servedAppointmentIds
+      // is — see its declaration). Fail OPEN (proceed) when that's unknown or
+      // the fetch itself fails — an availability outage/tracking gap must not
+      // block a write the ownership + offered-slot gates already passed.
+      const svcForRecheck = this.servedAppointmentServices.get(
+        payload.appointmentId
+      );
+      if (svcForRecheck) {
+        try {
+          const fresh = await this.fetchOpenSlots(svcForRecheck, payload.date);
+          if (!('notOffered' in fresh) && !('ambiguous' in fresh)) {
+            const freshValues = new Set(
+              fresh.slots.map((dt) => dt.toFormat('HH:mm'))
+            );
+            if (!freshValues.has(payload.time)) {
+              // Known false-reject edge (documented in A1's spec, not fixed):
+              // rescheduling to a time adjacent to the caller's OWN current
+              // appointment can be rejected here because their existing
+              // appointment is still occupying that slot in Phorest's
+              // availability response. Warn-log the fresh list on every
+              // rejection specifically so live tests can spot this pattern.
+              logger.warn(
+                {
+                  tool: 'reschedule_appointment',
+                  appointmentId: payload.appointmentId,
+                  requested: payload.time,
+                  fresh: [...freshValues],
+                },
+                'Reschedule rejected — time no longer available on fresh re-check (may be the adjacent-own-appointment false-reject edge)'
+              );
+              this.offeredSlots.set(
+                this.slotKey(svcForRecheck, payload.date),
+                freshValues
+              );
+              const list = [...freshValues].sort().join(', ');
+              return {
+                error: `That time was just taken — the open times now are: ${list}`,
+              };
+            }
+          }
+          // notOffered/ambiguous here would mean the service name we recorded
+          // earlier no longer resolves — unexpected; fail open like a fetch
+          // failure rather than block a write the earlier gates approved.
+        } catch (error) {
+          logger.warn(
+            { tool: 'reschedule_appointment', error: this.formatError(error) },
+            'Fresh availability re-check failed — proceeding with reschedule (fail-open)'
+          );
+        }
+      } else {
+        logger.warn(
+          {
+            tool: 'reschedule_appointment',
+            appointmentId: payload.appointmentId,
+          },
+          'Fresh re-check skipped — service unknown for this appointment (fail-open)'
+        );
+      }
+
       const iso = `${payload.date}T${payload.time}`;
       await phorest.updateAppointment(payload.appointmentId, iso);
       logger.info(
@@ -2046,8 +2231,13 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           // The candidates' appts are now surfaced to this call — allow acting on
           // them once the caller picks (ownership guard).
           for (const c of candidates) {
-            if (c.nextAppointment)
+            if (c.nextAppointment) {
               this.servedAppointmentIds.add(c.nextAppointment.appointmentId);
+              this.servedAppointmentServices.set(
+                c.nextAppointment.appointmentId,
+                c.nextAppointment.serviceName
+              );
+            }
             this.clientNames.set(
               c.clientId,
               `${c.firstName} ${c.lastName}`.trim()
@@ -2126,8 +2316,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           : await phorest.listAppointments(payload.clientId);
       // These appointments have now been surfaced to this call — allow
       // cancel/reschedule against them (ownership guard).
-      for (const a of appointments)
+      for (const a of appointments) {
         this.servedAppointmentIds.add(a.appointmentId);
+        this.servedAppointmentServices.set(a.appointmentId, a.serviceName);
+      }
       // Hand the model ONLY clean, unambiguous fields — never the raw HH:mm:ss
       // (which it could mis-read as the spoken time). It must quote `date`/`time`
       // verbatim.
@@ -2609,9 +2801,16 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
    * first, so we take [0]. Best-effort — any failure returns null so one bad
    * candidate never breaks the whole multi-match response.
    */
-  private async nextAppointmentFor(
-    clientId: string
-  ): Promise<{ appointmentId: string; date: string; time: string } | null> {
+  private async nextAppointmentFor(clientId: string): Promise<{
+    appointmentId: string;
+    date: string;
+    time: string;
+    // A1: carried alongside the spoken fields (not spoken itself) so the
+    // caller of nextAppointmentFor can populate servedAppointmentServices —
+    // the fresh-availability re-check needs to know WHICH service an
+    // appointment is for, and reschedule_appointment's own args don't say.
+    serviceName: string;
+  } | null> {
     try {
       const appts = await phorest.listAppointments(clientId);
       const soonest = appts[0];
@@ -2620,6 +2819,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         appointmentId: soonest.appointmentId,
         date: soonest.date,
         time: soonest.timeDisplay,
+        serviceName: soonest.serviceName,
       };
     } catch {
       return null;

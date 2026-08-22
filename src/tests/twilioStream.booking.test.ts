@@ -42,14 +42,30 @@ const MOM = {
   phone: '5551112222',
 };
 
+// A1 added a fresh-availability re-check immediately before every booking
+// write (see tasks/agent_queue.md A1) — it calls phorest.getAvailability for
+// the service+date and rejects a write whose time isn't in the freshly
+// snapped/hours-filtered result. The F1/F2 tests below are about clientId
+// injection, not availability, so they mock getAvailability to return a
+// single grid-aligned slot ("13:15", a multiple of the 15-min SLOT_GRID_MIN
+// default) that legitimately survives snapSlotsToGrid, and book that exact
+// time — giving the new re-check real data to pass instead of accidentally
+// exercising it. (The mock module's own default getAvailability — 13:20/
+// 13:50/14:20 — deliberately does NOT survive snapping: none of those raw
+// times sit on the 15-min grid and none has a same-grid successor to earn a
+// snap-up, so every plain handleBookAppointment call needs its own override
+// here rather than relying on the shared default.)
 describe('F1 — book_appointment schema keeps clientId + allows name-only booking', () => {
   it('an explicit clientId survives zod validation and reaches createAppointment', async () => {
+    vi.spyOn(phorest, 'getAvailability').mockResolvedValue([
+      '2025-10-01T13:15:00',
+    ]);
     const spy = vi.spyOn(phorest, 'createAppointment');
     const call = buildCall();
     const res = await call.handleBookAppointment({
       serviceName: 'Lash Lift',
       date: '2025-10-01',
-      time: '13:20',
+      time: '13:15',
       clientId: 'c_explicit', // previously stripped by zod strip-mode
       customer: { name: 'Jane Smith' }, // no phone
     });
@@ -59,13 +75,16 @@ describe('F1 — book_appointment schema keeps clientId + allows name-only booki
   });
 
   it('a recognized caller books name-only (no phone) without a validation error', async () => {
+    vi.spyOn(phorest, 'getAvailability').mockResolvedValue([
+      '2025-10-01T13:15:00',
+    ]);
     const spy = vi.spyOn(phorest, 'createAppointment');
     const call = buildCall();
     call.prefetch = { ...MOM };
     const res = await call.handleBookAppointment({
       serviceName: 'Lash Lift',
       date: '2025-10-01',
-      time: '13:20',
+      time: '13:15',
       customer: { name: 'Mom Smith' }, // no phone, no clientId
     });
     expect(res.error).toBeUndefined();
@@ -76,13 +95,16 @@ describe('F1 — book_appointment schema keeps clientId + allows name-only booki
 
 describe('F2 — prefetch clientId injection respects the given name (shared family phone)', () => {
   it('daughter on mom’s recognized phone giving her OWN name does NOT book under mom', async () => {
+    vi.spyOn(phorest, 'getAvailability').mockResolvedValue([
+      '2025-10-01T13:15:00',
+    ]);
     const spy = vi.spyOn(phorest, 'createAppointment');
     const call = buildCall();
     call.prefetch = { ...MOM };
     const res = await call.handleBookAppointment({
       serviceName: 'Lash Lift',
       date: '2025-10-01',
-      time: '13:20',
+      time: '13:15',
       customer: { name: 'Daughter Smith', phone: '5559998888' },
     });
     expect(res.error).toBeUndefined();
@@ -95,13 +117,16 @@ describe('F2 — prefetch clientId injection respects the given name (shared fam
   });
 
   it('a matching first name still books under the recognized account', async () => {
+    vi.spyOn(phorest, 'getAvailability').mockResolvedValue([
+      '2025-10-01T13:15:00',
+    ]);
     const spy = vi.spyOn(phorest, 'createAppointment');
     const call = buildCall();
     call.prefetch = { ...MOM };
     await call.handleBookAppointment({
       serviceName: 'Lash Lift',
       date: '2025-10-01',
-      time: '13:20',
+      time: '13:15',
       customer: { name: 'Mom Smith' },
     });
     expect(spy.mock.calls[0]![3]).toBe('mom1');

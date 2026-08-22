@@ -369,7 +369,7 @@ unwritable path); route test (twilio.route.test.ts pattern): blocked number →
 Reject TwiML + no `<Connect>`; unknown number → normal `<Connect><Stream>`.
 Never log a full phone number (last-4 only).
 
-## A1 — [ ] Re-validate availability server-side before every booking/reschedule write (P1, code)
+## A1 — [x] Re-validate availability server-side before every booking/reschedule write (P1, code) (implemented, awaiting Fable review/commit)
 **Why (2026-08-07 audit, still open — grep-verified):** Phorest `/booking` with
 `force_selected_time=true` books whatever we send. Stale offered slots (caller
 dawdled, a walk-in took it, a concurrent call offered the same slot) and the
