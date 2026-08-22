@@ -3,6 +3,146 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-21 — G2 IMPLEMENTED (worker agent): silence watchdog — check in once, then hang up
+Implemented `tasks/agent_queue.md` G2 exactly (P1, code). Root cause: live call
+2026-08-19 — after Erica went quiet the line sat in open-ended silence (dead air
+= zombie-call cost + bad UX). Standard voice-IVR fix: check in once, then end
+the call if still silent.
+- **Last-activity tracking** — new `handleCallerSpeechStarted()` private
+  method wraps the `onSpeechStarted` wiring in `createSession()`: stamps
+  `this.lastActivityAt = Date.now()` THEN calls the existing `handleBargeIn()`
+  unmodified (verified via diff — 0 lines touched inside `handleBargeIn()`
+  itself, only its call site moved). Erica-speaking activity is read from
+  `markQueue.length > 0` inside the watchdog tick itself (refreshes
+  `lastActivityAt` every tick while she's talking), NOT from raw Twilio
+  `media` frames, per spec.
+- **`setInterval` watchdog** — `startSilenceWatchdog()` (called right after
+  `this.session.requestGreeting()` in the Twilio `'start'` handler) arms a
+  5s-cadence `setInterval` and seeds `lastActivityAt`; `cleanup()` clears it.
+  `tickSilenceWatchdog()`:
+  - Guards (never fires): `!sessionReady`, `closed`, `transferring`,
+    `toolCallsInFlight > 0`, or `markQueue.length > 0` (the last one just
+    refreshes `lastActivityAt` and returns — treats her speech as activity so
+    a long response isn't mistaken for dead air the instant it ends).
+  - Mutual silence ≥ `SILENCE_CHECKIN_MS` (20000 default) → sets `checkInFired
+    = true` (permanent latch, so the check-in fires **at most once per
+    call**), resets `lastActivityAt` to the check-in moment (so the follow-up
+    15s is measured from here, not from the already-spent 20s), logs `🤫
+    silence check-in`, then `injectContext(...)` + `requestResponse()`.
+  - After the check-in, silence ≥ `SILENCE_HANGUP_MS` (15000 default) more →
+    **[UPDATED after Fable review]** does NOT hang up directly. It latches
+    `silenceHangupInitiated = true` (guards the branch from re-firing every
+    tick while the grace timer below is pending), records
+    `goodbyeRequestedAt`, logs `🤫 silence hangup`, then says a goodbye via
+    the same `injectContext(...)` + `requestResponse()` pair as the check-in,
+    and arms a 4000ms `setTimeout` (stored in `silenceHangupTimer`, cleared in
+    `cleanup()`). When that timer fires: if `this.closed`, no-op; if
+    `this.lastActivityAt > goodbyeRequestedAt` (the caller spoke while the
+    goodbye was generating/playing — `onSpeechStarted` already stamped it),
+    ABORT — reset `silenceHangupInitiated = false` and return (call
+    continues; `checkInFired` stays latched, so the "are you still there?"
+    question itself never repeats, but a LATER 15s silence period can
+    re-trigger this goodbye-then-hangup flow); otherwise
+    `void this.endCallNow('silence — no response after check-in')` — its own
+    `waitForPlaybackToDrain` covers any goodbye audio still playing, and its
+    `bargeInEpoch` check covers speech starting during that drain. Verbatim:
+    ```ts
+    // Already used the one check-in — continued silence now starts the
+    // goodbye. Guard so a pending grace-period timer isn't re-triggered every
+    // tick (silentMs keeps growing while we wait it out).
+    if (this.silenceHangupInitiated) return;
+    if (silentMs >= env.SILENCE_HANGUP_MS) {
+      this.silenceHangupInitiated = true;
+      const goodbyeRequestedAt = Date.now();
+      logger.info({ streamSid: this.streamSid, silentMs }, '🤫 silence hangup');
+      this.session.injectContext(
+        'BACKGROUND (do not read aloud as-is): the caller has not responded. Say ONE short, warm goodbye — e.g. "Seems like now\'s not a good time — feel free to call us back anytime!" — nothing else.'
+      );
+      this.session.requestResponse();
+      this.silenceHangupTimer = setTimeout(() => {
+        this.silenceHangupTimer = undefined;
+        if (this.closed) return;
+        if (this.lastActivityAt > goodbyeRequestedAt) {
+          this.silenceHangupInitiated = false;
+          return;
+        }
+        void this.endCallNow('silence — no response after check-in');
+      }, 4000);
+    }
+    ```
+- **`requestResponse()` (NEW, `openaiSession.ts`)** — added verbatim per spec,
+  right after `requestGreeting()`:
+  ```ts
+  requestResponse(): void {
+    if (!this.isOpen() || this.activeResponse) return;
+    this.sendRaw({ type: 'response.create' });
+  }
+  ```
+  `activeResponse`/`sendRaw` stay private; `requestGreeting()` untouched.
+  `git diff` on `openaiSession.ts` shows exactly this one addition — nothing
+  else in the file touched.
+- **Check-in steer text** (`injectContext` argument, verbatim): `"BACKGROUND
+  (do not read aloud as-is): the line has been quiet for a while. In ONE
+  short, warm sentence, check that the caller is still there — e.g. 'Are you
+  still there?' — then stop and wait for them."`
+- **`endCallNow(reason: string)` (NEW, shared hangup core)** — extracted the
+  drain+REST body of the old `handleEndCall` verbatim (same
+  `waitForPlaybackToDrain(6000)` + `bargeInEpoch` abort-on-barge-in +
+  Twilio REST `status:'completed'` + no-REST-client fallback), returning a
+  `{status:'ended'|'aborted'|'error', message?}` result instead of a
+  tool-shaped object. `handleEndCall` is now a 12-line wrapper that calls
+  `endCallNow('caller confirmed done')` and maps the result back onto the
+  EXACT SAME return shapes the model has always seen (`{ended:true}` /
+  `{aborted:true, note:...}` / `{error:...}`) — confirmed byte-identical
+  wording via diff. Only addition to the recorded audit trail: a `detail:
+  {reason}` field on each `CallStore.recordToolCall('end_call', ...)` call
+  (was previously bare `{name, ok}` with no detail) — informational only, no
+  test depends on the old shape.
+- **`toolCallsInFlight` guard (NEW)** — `registerTrackedTool()` wraps every
+  `session.registerTool(...)` call in `createSession()` (mechanical rename of
+  all 10 call sites, no handler logic touched) so the watchdog can tell when a
+  tool is genuinely in flight (e.g. a slow Phorest call) even after its spoken
+  filler line has already finished playing (`markQueue` back to empty) — this
+  guard is NOT redundant with OpenAI's own `activeResponse`, which goes false
+  as soon as `response.function_call_arguments.done` fires, well before the
+  tool handler resolves.
+- **Env vars (NEW, `src/config/env.ts` + `.env.example`, existing pattern)**:
+  `SILENCE_CHECKIN_MS` (default 20000), `SILENCE_HANGUP_MS` (default 15000).
+  `.env` itself not touched.
+- **NEW tests (updated after the goodbye-line fix):**
+  - `src/tests/twilioStream.silenceWatchdog.test.ts` (9 tests, fake timers):
+    (a) check-in fires exactly once at the 20s threshold; **(b) [rewritten]
+    "says a goodbye once SILENCE_HANGUP_MS after the check-in elapses, THEN
+    hangs up ~4s later"** — asserts the 2nd `injectContext`/`requestResponse`
+    pair (the goodbye) fires at t=35000 with `call.closed` still false and
+    `silenceHangupInitiated === true`, stays alive through the grace window,
+    then `call.closed === true` / `outcome === 'completed'` only after the
+    4s timeout elapses, with no 3rd `injectContext` call; **(new) "caller
+    speech during the post-goodbye grace window aborts the hangup — call
+    continues"** — speech 500ms into the grace window flips
+    `silenceHangupInitiated` back to `false` at the timeout mark and leaves
+    `call.closed` false, while `checkInFired` stays permanently true; (c)
+    caller speech resets the clock — no check-in even past the original 20s
+    window; **(d) [rescoped] "the 'are you still there?' check-in fires at
+    most once per call"** — now stays under the post-check-in 15s hangup
+    threshold so it purely exercises the `checkInFired` latch without
+    wandering into the (separately-tested) goodbye flow; plus guard tests for
+    `toolCallsInFlight` and `markQueue` non-empty (both suppress firing), and
+    a "never fires before `sessionReady`" test. Also 1 test confirming
+    `handleEndCall` still returns `{ended:true}` through the shared path.
+  - `src/tests/openaiSession.test.ts` — 3 new tests for `requestResponse()`
+    (sends when idle, no-ops while a response is active, no-ops/no-throw when
+    the socket isn't open) — unaffected by this fix.
+- **Verified:** `npx tsc --noEmit` clean. `npm test` → **119/119** (was 107,
+  +12 new: 9 watchdog + 3 requestResponse). `TZ=UTC npm test` → **119/119**.
+  `src/tests/twilioStream.bargein.test.ts` (5 tests) untouched and green —
+  `handleBargeIn()`/`markQueue`/`bargeInEpoch` mutation lines show zero diff
+  hits. No `session.update` shape change (only `openaiSession.ts` diff is the
+  one new `requestResponse()` method). `.env`, `business.json`, Phorest write
+  paths untouched.
+- Marked `[x]` in `tasks/agent_queue.md` with "(implemented, awaiting Fable
+  review/commit)" — this worker did not commit or push per instructions.
+
 ## 2026-08-21 — G1 IMPLEMENTED (worker agent): CONVERSATION POLICY block added to the prompt
 Implemented `tasks/agent_queue.md` G1 exactly (P1, prompt-only). Root cause:
 live call 2026-08-19 — caller said "don't interrupt me" and Erica went FULLY

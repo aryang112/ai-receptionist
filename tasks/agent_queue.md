@@ -63,7 +63,7 @@ delete or weaken any existing bug-fix rule. Keep total prompt growth ≤ 130 tok
 stays 103 here; diff shows one new section only; paste the new block in your
 state.md entry for Fable's review.
 
-## G2 — [ ] Silence watchdog: check-in, then hang up (P1, code)
+## G2 — [x] Silence watchdog: check-in, then hang up (P1, code) (implemented, awaiting Fable review/commit)
 **Why:** same call — after Erica went quiet the line sat in open-ended silence.
 Dead air = zombie-call cost + terrible UX. Standard voice-IVR pattern:
 check in once, then end the call.

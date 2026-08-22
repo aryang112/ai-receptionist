@@ -414,3 +414,27 @@ describe('RT-9 call-tagged logging', () => {
     expect((session.handlers as any).callTag).toBeUndefined();
   });
 });
+
+describe('G2 requestResponse — guarded response creation for out-of-band triggers', () => {
+  it('sends response.create when the session is open and no response is active', () => {
+    const { session, sent } = buildSession();
+    session.requestResponse();
+    expect(types(sent)).toEqual(['response.create']);
+  });
+
+  it('does NOT send response.create while a response is already active (RT-2/RT-3 guard)', async () => {
+    const { session, sent } = buildSession();
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_1' },
+    });
+    session.requestResponse();
+    expect(types(sent)).toEqual([]);
+  });
+
+  it('is a silent no-op when the socket is not open', () => {
+    const session: any = new OpenAIRealtimeSession({});
+    // Never connected — isOpen() is false.
+    expect(() => session.requestResponse()).not.toThrow();
+  });
+});

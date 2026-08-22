@@ -27,6 +27,13 @@ export const env = {
   // this clean clock grid (minutes). 15 = quarter-hours; set 30 for half-hours.
   SLOT_GRID_MIN: Number(process.env.SLOT_GRID_MIN || 15),
 
+  // G2: silence watchdog. After this much mutual silence (neither the caller
+  // nor Erica has said anything), Erica checks in once ("Are you still
+  // there?"). If silence continues for SILENCE_HANGUP_MS after that check-in,
+  // the call ends gracefully instead of sitting in open-ended dead air.
+  SILENCE_CHECKIN_MS: Number(process.env.SILENCE_CHECKIN_MS || 20000),
+  SILENCE_HANGUP_MS: Number(process.env.SILENCE_HANGUP_MS || 15000),
+
   // Twilio
   TWILIO_NUMBER: process.env.TWILIO_NUMBER || '',
   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID || '',

@@ -447,6 +447,29 @@ export class TwilioRealtimeCall {
   // Bumped on every barge-in; lets a pending end_call detect that the caller
   // spoke during the goodbye and abort the hangup.
   private bargeInEpoch = 0;
+  // --- G2: silence watchdog ---------------------------------------------
+  // ms timestamp of the last real activity (caller speech, or Erica actively
+  // speaking — markQueue non-empty). Ticks refresh this while Erica is
+  // speaking so a long response isn't mistaken for dead air once it ends.
+  private lastActivityAt = 0;
+  // The check-in ("Are you still there?") fires at most ONCE per call — this
+  // latches permanently once used.
+  private checkInFired = false;
+  private silenceWatchdogTimer: NodeJS.Timeout | undefined = undefined;
+  // True while a silence-triggered goodbye has been requested and we're in
+  // the ~4s grace window waiting to see if the caller speaks up before the
+  // actual hangup. Guards the tick from re-requesting the goodbye every 5s
+  // while that timer is pending; reset to false if the goodbye is aborted
+  // (caller spoke), which lets a LATER silence period restart the goodbye
+  // flow (checkInFired itself never resets — only the "are you still there?"
+  // check-in is capped at once per call).
+  private silenceHangupInitiated = false;
+  private silenceHangupTimer: NodeJS.Timeout | undefined = undefined;
+  // Count of tool handlers currently awaiting a result (e.g. a Phorest call).
+  // The watchdog must never check in / hang up mid-tool-call — the filler
+  // line may have already finished playing (markQueue empty) while the
+  // network call is still in flight.
+  private toolCallsInFlight = 0;
   // Caller looked up by their phone number (caller ID) at call start, so tools
   // answer instantly and Erica can greet them by name. null = not recognized.
   private prefetch: {
@@ -529,7 +552,7 @@ export class TwilioRealtimeCall {
       callTag,
       onAudioChunk: (chunk) => this.sendAudioToTwilio(chunk),
       onTextDelta: (delta) => this.handleAssistantText(delta),
-      onSpeechStarted: () => this.handleBargeIn(),
+      onSpeechStarted: () => this.handleCallerSpeechStarted(),
       onResponseComplete: () => this.handleResponseComplete(),
       onError: (error) => this.handleError(error),
       // RT-1: an unexpected OpenAI drop (not our own close()) would otherwise
@@ -538,40 +561,60 @@ export class TwilioRealtimeCall {
       onClose: () => this.failoverToOwner('OpenAI session closed unexpectedly'),
     });
 
-    this.session.registerTool('suggest_availability', (args) =>
+    this.registerTrackedTool('suggest_availability', (args) =>
       this.handleSuggestAvailability(args)
     );
-    this.session.registerTool('book_appointment', (args) =>
+    this.registerTrackedTool('book_appointment', (args) =>
       this.handleBookAppointment(args)
     );
-    this.session.registerTool('reschedule_appointment', (args) =>
+    this.registerTrackedTool('reschedule_appointment', (args) =>
       this.handleReschedule(args)
     );
-    this.session.registerTool('cancel_appointment', (args) =>
+    this.registerTrackedTool('cancel_appointment', (args) =>
       this.handleCancel(args)
     );
-    this.session.registerTool('get_business_hours', (args) =>
+    this.registerTrackedTool('get_business_hours', (args) =>
       this.handleGetBusinessHours(args)
     );
-    this.session.registerTool('get_prices', (args) =>
+    this.registerTrackedTool('get_prices', (args) =>
       this.handleGetPrices(args)
     );
-    this.session.registerTool('lookup_customer', (args) =>
+    this.registerTrackedTool('lookup_customer', (args) =>
       this.handleLookupCustomer(args)
     );
-    this.session.registerTool('list_appointments', (args) =>
+    this.registerTrackedTool('list_appointments', (args) =>
       this.handleListAppointments(args)
     );
-    this.session.registerTool('log_running_late', (args) =>
+    this.registerTrackedTool('log_running_late', (args) =>
       this.handleLogRunningLate(args)
     );
-    this.session.registerTool('transfer_to_owner', (args) =>
+    this.registerTrackedTool('transfer_to_owner', (args) =>
       this.handleTransferToOwner(args)
     );
-    this.session.registerTool('end_call', (args) => this.handleEndCall(args));
+    this.registerTrackedTool('end_call', (args) => this.handleEndCall(args));
     logger.debug(
       'OpenAI tools registered: suggest_availability, book_appointment, reschedule_appointment, cancel_appointment, get_business_hours, lookup_customer, list_appointments, log_running_late, transfer_to_owner, end_call'
     );
+  }
+
+  /**
+   * G2: register a tool handler wrapped so toolCallsInFlight tracks exactly
+   * how many are currently awaiting a result. The silence watchdog reads this
+   * — a slow Phorest call can outlast the spoken filler line (markQueue back
+   * to empty) while the model is still genuinely waiting on us.
+   */
+  private registerTrackedTool(
+    name: string,
+    handler: (args: unknown) => Promise<unknown> | unknown
+  ) {
+    this.session.registerTool(name, async (args: unknown) => {
+      this.toolCallsInFlight++;
+      try {
+        return await handler(args);
+      } finally {
+        this.toolCallsInFlight--;
+      }
+    });
   }
 
   /**
@@ -735,6 +778,8 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           });
           // Erica greets first, in her own voice (no separate Polly handoff).
           this.session.requestGreeting();
+          // G2: arm the silence watchdog now that the call is live.
+          this.startSilenceWatchdog();
           logger.info(
             { streamSid: this.streamSid },
             '🎙️ Waiting for caller audio...'
@@ -860,6 +905,16 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
   }
 
   /**
+   * G2: wiring for OpenAI's speech-started event (barge-in trigger). Stamps
+   * last-activity for the silence watchdog HERE — not inside handleBargeIn(),
+   * which stays byte-identical — then runs the existing barge-in logic.
+   */
+  private handleCallerSpeechStarted() {
+    this.lastActivityAt = Date.now();
+    this.handleBargeIn();
+  }
+
+  /**
    * Caller started talking while Erica was speaking: truncate her message to
    * what was actually heard and flush Twilio's outbound buffer so she stops now.
    */
@@ -892,6 +947,94 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     // owns the reset instead: responseStartTimestamp is nulled only once the
     // markQueue drains to empty (see handleMessage 'mark'). This mirrors OpenAI's
     // reference pattern and keeps barge-in armed through the whole playback.
+  }
+
+  /**
+   * G2: arm the silence watchdog. Called once the Twilio stream has started.
+   * lastActivityAt starts counting from "now" so time spent on the OpenAI
+   * handshake (before sessionReady) is never mistaken for caller silence —
+   * the tick itself also refuses to fire until sessionReady is true.
+   */
+  private startSilenceWatchdog() {
+    this.lastActivityAt = Date.now();
+    this.silenceWatchdogTimer = setInterval(
+      () => this.tickSilenceWatchdog(),
+      5000
+    );
+  }
+
+  /**
+   * G2: ~5s watchdog tick. Standard voice-IVR pattern — check in once after
+   * SILENCE_CHECKIN_MS of mutual silence ("Are you still there?"), then hang
+   * up after SILENCE_HANGUP_MS more of continued silence. Never fires before
+   * the session is ready, mid-tool-call, while transferring, or while Erica
+   * is still speaking (markQueue non-empty) — that counts as activity, so the
+   * clock is kept fresh instead, and only starts counting once she's done.
+   */
+  private tickSilenceWatchdog() {
+    if (!this.sessionReady || this.closed || this.transferring) return;
+    if (this.toolCallsInFlight > 0) return;
+    if (this.markQueue.length > 0) {
+      this.lastActivityAt = Date.now();
+      return;
+    }
+    const now = Date.now();
+    const silentMs = now - this.lastActivityAt;
+    if (!this.checkInFired) {
+      if (silentMs >= env.SILENCE_CHECKIN_MS) {
+        this.checkInFired = true;
+        // Treat the check-in moment as a fresh baseline — the follow-up
+        // hangup timer measures silence AFTER this, not from the original
+        // (already-consumed) SILENCE_CHECKIN_MS wait. Erica actually speaking
+        // the line pushes this further via the markQueue branch above.
+        this.lastActivityAt = now;
+        logger.info(
+          { streamSid: this.streamSid, silentMs },
+          '🤫 silence check-in'
+        );
+        this.session.injectContext(
+          'BACKGROUND (do not read aloud as-is): the line has been quiet for a while. In ONE short, warm sentence, check that the caller is still there — e.g. "Are you still there?" — then stop and wait for them.'
+        );
+        this.session.requestResponse();
+      }
+      return;
+    }
+    // Already used the one check-in — continued silence now starts the
+    // goodbye. Guard so a pending grace-period timer isn't re-triggered every
+    // tick (silentMs keeps growing while we wait it out).
+    if (this.silenceHangupInitiated) return;
+    if (silentMs >= env.SILENCE_HANGUP_MS) {
+      this.silenceHangupInitiated = true;
+      const goodbyeRequestedAt = Date.now();
+      logger.info({ streamSid: this.streamSid, silentMs }, '🤫 silence hangup');
+      // Say a warm goodbye first — the spec requires the goodbye line, not a
+      // silent drop. injectContext + requestResponse mirrors the check-in's
+      // own safe out-of-band trigger.
+      this.session.injectContext(
+        'BACKGROUND (do not read aloud as-is): the caller has not responded. Say ONE short, warm goodbye — e.g. "Seems like now\'s not a good time — feel free to call us back anytime!" — nothing else.'
+      );
+      this.session.requestResponse();
+      // Grace window for the goodbye to actually generate + play before we
+      // hang up. If the caller speaks during that window, onSpeechStarted has
+      // already stamped lastActivityAt past goodbyeRequestedAt — abort instead
+      // of hanging up on someone who just responded.
+      this.silenceHangupTimer = setTimeout(() => {
+        this.silenceHangupTimer = undefined;
+        if (this.closed) return;
+        if (this.lastActivityAt > goodbyeRequestedAt) {
+          // Caller spoke while the goodbye was generating/playing — stand
+          // down. checkInFired stays latched (the check-in itself is still
+          // capped at once per call); a later silence period can retrigger
+          // this goodbye-then-hangup flow.
+          this.silenceHangupInitiated = false;
+          return;
+        }
+        // endCallNow's own markQueue drain waits out any goodbye audio still
+        // playing, and its bargeInEpoch check covers speech that starts
+        // during that drain itself.
+        void this.endCallNow('silence — no response after check-in');
+      }, 4000);
+    }
   }
 
   private handleAssistantText(delta: string) {
@@ -1924,28 +2067,38 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
   }
 
   /**
-   * Gracefully hang up once the caller confirms they're done. The model speaks
-   * its goodbye BEFORE this tool call arrives, but that audio is still draining
-   * through Twilio's outbound buffer — wait for the mark queue to empty (same
-   * RT-6 race as the transfer handoff line) so the goodbye isn't cut off.
+   * G2: shared hangup core — the drain+REST logic previously inline in
+   * handleEndCall. Used by the end_call tool handler, the silence watchdog,
+   * and (later, G3) the max-call-duration cap. `reason` is for logs/audit
+   * only — it never reaches the caller. Waits for any in-flight audio to
+   * finish playing (RT-6 race — a goodbye/check-in line must not be cut off),
+   * then ends the call via the Twilio REST API, or just closes our side if no
+   * REST client is configured. Keeps the bargeInEpoch abort semantics: if the
+   * caller speaks during the drain, the hangup is aborted, not just delayed.
    */
-  private async handleEndCall(_args: unknown) {
+  private async endCallNow(
+    reason: string
+  ): Promise<{ status: 'ended' | 'aborted' | 'error'; message?: string }> {
     const client = getTwilioClient();
     if (!client || !this.callSid) {
       // No REST client (misconfig): tear down our side; Twilio ends the call
       // when the <Connect><Stream> socket closes.
       logger.warn(
-        { tool: 'end_call' },
+        { tool: 'end_call', reason },
         'Cannot hang up via REST — closing stream only'
       );
       if (this.outcome === 'none') this.outcome = 'completed';
-      CallStore.recordToolCall(this.callSid, { name: 'end_call', ok: true });
+      CallStore.recordToolCall(this.callSid, {
+        name: 'end_call',
+        ok: true,
+        detail: { reason },
+      });
       this.cleanup();
-      return { ended: true };
+      return { status: 'ended' };
     }
     logger.info(
-      { tool: 'end_call', callSid: this.callSid },
-      'Caller confirmed done — ending call'
+      { tool: 'end_call', callSid: this.callSid, reason },
+      'Ending call'
     );
     // Block the fatal-error failover path: tearing down a deliberately-ended
     // call must never redirect the (already gone) caller to the owner.
@@ -1958,26 +2111,28 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     if (this.bargeInEpoch !== epochAtRequest && !this.closed) {
       this.transferring = false;
       logger.info(
-        { tool: 'end_call', callSid: this.callSid },
+        { tool: 'end_call', callSid: this.callSid, reason },
         'Hangup aborted — caller spoke during the goodbye'
       );
       CallStore.recordToolCall(this.callSid, {
         name: 'end_call',
         ok: false,
         error: 'aborted — caller spoke during goodbye',
+        detail: { reason },
       });
-      return {
-        aborted: true,
-        note: 'The caller started speaking again — do NOT hang up. Listen and help with whatever they need, then ask "Anything else?" before trying end_call again.',
-      };
+      return { status: 'aborted' };
     }
     try {
       await client.calls(this.callSid).update({ status: 'completed' });
       // Keep a real outcome (booked/cancelled/…) — 'completed' only fills none.
       if (this.outcome === 'none') this.outcome = 'completed';
-      CallStore.recordToolCall(this.callSid, { name: 'end_call', ok: true });
+      CallStore.recordToolCall(this.callSid, {
+        name: 'end_call',
+        ok: true,
+        detail: { reason },
+      });
       this.cleanup();
-      return { ended: true };
+      return { status: 'ended' };
     } catch (error) {
       logger.error(
         { tool: 'end_call', error: this.formatError(error) },
@@ -1990,9 +2145,29 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         name: 'end_call',
         ok: false,
         error: this.formatError(error),
+        detail: { reason },
       });
-      return { error: this.formatError(error) };
+      return { status: 'error', message: this.formatError(error) };
     }
+  }
+
+  /**
+   * Gracefully hang up once the caller confirms they're done. Delegates the
+   * drain+REST work to endCallNow (G2) and maps its result back onto the
+   * exact tool-result shapes the model has always seen from this tool.
+   */
+  private async handleEndCall(_args: unknown) {
+    const result = await this.endCallNow('caller confirmed done');
+    if (result.status === 'aborted') {
+      return {
+        aborted: true,
+        note: 'The caller started speaking again — do NOT hang up. Listen and help with whatever they need, then ask "Anything else?" before trying end_call again.',
+      };
+    }
+    if (result.status === 'error') {
+      return { error: result.message };
+    }
+    return { ended: true };
   }
 
   private formatError(error: unknown) {
@@ -2147,6 +2322,15 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     if (this.preAuthTimer) {
       clearTimeout(this.preAuthTimer);
       this.preAuthTimer = undefined;
+    }
+    // G2: stop the silence watchdog — nothing left to check in / hang up on.
+    if (this.silenceWatchdogTimer) {
+      clearInterval(this.silenceWatchdogTimer);
+      this.silenceWatchdogTimer = undefined;
+    }
+    if (this.silenceHangupTimer) {
+      clearTimeout(this.silenceHangupTimer);
+      this.silenceHangupTimer = undefined;
     }
     // Persist the call end exactly once, and only if the call actually started
     // (a socket that closed before Twilio's "start" never wrote a start record).

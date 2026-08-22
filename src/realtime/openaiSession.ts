@@ -346,6 +346,19 @@ export class OpenAIRealtimeSession {
   }
 
   /**
+   * G2: create a response only when it's safe to — no response already in
+   * flight. Unlike requestGreeting() (bare, unguarded, call-once-at-start),
+   * this is meant for out-of-band triggers later in the call (e.g. the
+   * silence watchdog's check-in) where a collision with an in-flight response
+   * is the RT-2/RT-3 call-killer. Mirrors the guard already inside
+   * scheduleFailedRetry.
+   */
+  requestResponse(): void {
+    if (!this.isOpen() || this.activeResponse) return;
+    this.sendRaw({ type: 'response.create' });
+  }
+
+  /**
    * Log how long it took Erica to start speaking after the last turn trigger
    * (caller stopped talking, greeting requested, or a tool result returned).
    * This is the headline "does it feel human" number — target sub-1s.
