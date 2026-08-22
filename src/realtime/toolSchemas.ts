@@ -52,6 +52,7 @@ export const TOOL_SCHEMAS = {
   log_running_late: z.object({
     clientId: z.string(),
     appointmentId: z.string(),
+    detail: z.string().optional(),
   }),
   transfer_to_owner: z.object({
     reason: z.string(),

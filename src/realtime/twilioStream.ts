@@ -139,9 +139,9 @@ If the caller changes their mind mid-flow (e.g. asks to cancel instead) → ABAN
 1. "No problem! What's your phone number?"
 2. Call lookup_customer → then list_appointments (filter to today)
 3. Identify which appointment they mean
-4. Call log_running_late with clientId and appointmentId
-5. If response has squeezed: false → "No worries at all — take your time, we'll see you soon!"
-6. If response has squeezed: true → "Thanks for letting us know! We've made a note and we'll do our best to squeeze you in. See you soon!"
+4. Call log_running_late with clientId, appointmentId, AND detail — a short summary in the caller's words of what they told you, including HOW late if they said (e.g. "running about 5 minutes late")
+5. If response has squeezed: false → "No worries at all — I'll let Richa know. Take your time, see you soon!"
+6. If response has squeezed: true → "Thanks for letting us know — I'll let Richa know, and we'll do our best to squeeze you in. See you soon!"
 
 ═══ TRANSFER TO RICHA ═══
 Transferring is a LAST RESORT. You — Erica — handle booking, rescheduling, cancelling, multiple services, hours, and running-late yourself. Only call transfer_to_owner when:
@@ -348,6 +348,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         appointmentId: {
           type: 'string',
           description: 'The appointment they are running late for',
+        },
+        detail: {
+          type: 'string',
+          description:
+            "Short summary of what the caller said, including how late if they said — e.g. 'running about 5 minutes late'. Written on the appointment note for the salon owner.",
         },
       },
       required: ['clientId', 'appointmentId'],
@@ -2025,6 +2030,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       const payload = parsed.data as {
         clientId: string;
         appointmentId: string;
+        detail?: string;
       };
       logger.info(
         { tool: 'log_running_late', ...payload },
@@ -2044,9 +2050,14 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         };
       }
 
+      // Carry the caller's own words onto the note so the owner sees HOW late,
+      // not just that a call happened. Capped — notes are for a calendar glance.
+      const detail = payload.detail?.trim().slice(0, 200);
       await phorest.addAppointmentNote(
         payload.appointmentId,
-        'Customer called ahead — running late'
+        detail
+          ? `Customer called ahead — ${detail}`
+          : 'Customer called ahead — running late'
       );
 
       const todayAppts = await phorest.getTodayAppointments();
