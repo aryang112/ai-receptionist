@@ -44,7 +44,7 @@ const CORE_SERVICES = env.PHOREST_PREFERRED_SERVICE_IDS.length
   ? env.PHOREST_PREFERRED_SERVICE_IDS.join(', ')
   : 'Brow Threading, Eyebrow Tinting';
 
-function buildInstructions(): string {
+export function buildInstructions(): string {
   // Inject the authoritative current salon date/time so "today"/"tomorrow" and
   // any relative dates are computed correctly — never left to the model's own
   // (UTC-ish, undocumented) clock, which would book the wrong day near midnight.
@@ -64,6 +64,8 @@ GREETING: Open the call yourself, immediately and warmly. Identify as the virtua
 NEVER LEAVE SILENCE: Before you call ANY tool (looking something up, booking, checking availability, etc.), FIRST say a short, natural filler out loud — like "Let me check that for you…", "One sec…", or "Let me pull that up…" — and THEN call the tool. The caller must never hear dead air while you work.
 
 BUSINESS HOURS: Always use the get_business_hours tool when asked about hours. Never guess.
+
+LOCATION: ${businessHours.location.address}, ${businessHours.location.city}, ${businessHours.location.state} ${businessHours.location.zip} — say it naturally if asked. For directions: give the address, suggest their maps app — never invent turn-by-turn or landmarks.
 
 ═══ SERVICES & PRICES ═══
 Callers often ask for prices. When they ask the price of a service, say a quick filler ("Let me check that for you…") and call get_prices WITH the serviceName they asked about — it returns that service's exact price and duration. Only omit serviceName if they ask broadly "what services do you offer." Quote ONLY what get_prices returns; NEVER guess or make up a price. Read service names naturally (ignore any leading numbers/codes like "3)").
@@ -1707,6 +1709,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         saturday: businessHours.hours.sat.join(', ') || 'Closed',
         sunday: businessHours.hours.sun.join(', ') || 'Closed',
         closedDates: businessHours.closedDates,
+        address: `${businessHours.location.address}, ${businessHours.location.city}, ${businessHours.location.state} ${businessHours.location.zip}`,
       };
 
       logger.info(

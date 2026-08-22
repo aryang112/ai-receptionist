@@ -3,6 +3,62 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-22 — L1 IMPLEMENTED (worker agent)
+**Task:** Round 3 L1 — Erica can answer "where are you located?" (address was
+nowhere in the codebase). Implemented exactly per queue spec, nothing more.
+
+**Files changed:**
+- `src/config/business.json` — added `location` block ONLY (hours/closedDates
+  untouched, as required):
+  ```json
+  "location": {
+    "address": "8902 Harford Road",
+    "city": "Parkville",
+    "state": "MD",
+    "zip": "21234"
+  }
+  ```
+  No suite number (unconfirmed per spec — Yelp/Google "Ste 1" vs site
+  "Suite 100"; omitted, spoken directions don't need it).
+- `src/realtime/twilioStream.ts`:
+  - `buildInstructions()` exported (`function` → `export function`) so the new
+    test can assert on its output directly — the only non-content change to
+    that line.
+  - New `LOCATION:` prompt line inserted immediately after the existing
+    BUSINESS HOURS line (~:66), built entirely from `businessHours.location.*`
+    (no hardcoded address copy in the .ts file). Exact new line (as rendered
+    with the config values interpolated):
+    ```
+    LOCATION: 8902 Harford Road, Parkville, MD 21234 — say it naturally if asked. For directions: give the address, suggest their maps app — never invent turn-by-turn or landmarks.
+    ```
+    Source template: `` `LOCATION: ${businessHours.location.address}, ${businessHours.location.city}, ${businessHours.location.state} ${businessHours.location.zip} — say it naturally if asked. For directions: give the address, suggest their maps app — never invent turn-by-turn or landmarks.` ``
+    ~44 tokens by 4-chars/token estimate (no live tokenizer available in the
+    repo) — no other prompt line touched, reordered, or reworded.
+  - `handleGetBusinessHours` (~:1701) returned object gained one field:
+    `address: \`${businessHours.location.address}, ${businessHours.location.city}, ${businessHours.location.state} ${businessHours.location.zip}\`` → renders as
+    `"8902 Harford Road, Parkville, MD 21234"`. No other fields/behavior changed.
+- `src/tests/twilioStream.prompt.test.ts` (NEW) — imports `buildInstructions`
+  and `business.json`, asserts the rendered instructions string contains the
+  address/city/state/zip (sourced from config, not a hardcoded literal in the
+  test) and the `LOCATION:` marker.
+
+**Verification:**
+- `npx tsc --noEmit` → clean, no errors.
+- `npm test` → **125/125 passed** (floor was 124; +1 net from the new test;
+  test loaded from 21 test files). Before this task: 124/124 (queue floor).
+- `TZ=UTC npm test` → **125/125 passed**, same file count.
+- No existing test modified, skipped, or deleted.
+
+**Deviations from spec:** none. `buildInstructions` had to be exported (was
+module-private) to let the new test call it directly per the spec's own
+acceptance criterion ("assert on `buildInstructions()` output") — this is an
+export-visibility change only, not a behavior change, and was the only way to
+satisfy that criterion without duplicating the prompt-building logic in the
+test.
+
+**Queue status:** L1 marked `[x]` below — implemented, awaiting Fable
+review/commit. Not committed by this worker (per ritual — no `git add`/commit).
+
 ## 2026-08-22 — ✅ LIVE-TEST NIGHT DONE + TPM TIER RAISED — handoff (read this first)
 **TPM tier RAISED by owner 2026-08-22.** The 40k gpt-realtime ceiling that froze
 calls at ~1m30s (silence mid-call, reproduced live + confirmed on the dashboard)
