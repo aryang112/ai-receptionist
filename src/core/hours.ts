@@ -4,6 +4,14 @@ import businessHours from '../config/business.json';
 // business.json is the source of truth for hours (read-only here).
 const TZ = businessHours.timezone || 'America/New_York';
 
+// One business.json entry drives everything (V1): a vacation range closes the
+// salon for booking/availability purposes without touching weekday hours or
+// closedDates. Defensive default — older business.json snapshots (or a
+// reverted edit) may not have this key at all.
+type Vacation = { from: string; to: string; note?: string };
+const VACATIONS: Vacation[] =
+  (businessHours as { vacations?: Vacation[] }).vacations ?? [];
+
 // luxon weekday: 1=Mon .. 7=Sun
 const WEEKDAY_KEYS: Record<number, keyof typeof businessHours.hours> = {
   1: 'mon',
@@ -15,9 +23,15 @@ const WEEKDAY_KEYS: Record<number, keyof typeof businessHours.hours> = {
   7: 'sun',
 };
 
+/** ISO string compare is safe here — both sides are YYYY-MM-DD. */
+function isOnVacation(iso: string): boolean {
+  return VACATIONS.some((v) => v.from <= iso && iso <= v.to);
+}
+
 function rangesForDate(date: DateTime): string[] {
   const iso = date.toISODate();
   if (iso && businessHours.closedDates.includes(iso)) return [];
+  if (iso && isOnVacation(iso)) return [];
   const key = WEEKDAY_KEYS[date.weekday];
   return (key ? businessHours.hours[key] : []) ?? [];
 }
@@ -106,4 +120,43 @@ export function getHoursStatus(
   }
 
   return { salonOpenThatDay, hoursThatDay, isToday, closedRightNow, nextOpen };
+}
+
+export type ActiveOrUpcomingVacation = {
+  from: string;
+  to: string;
+  /** First calendar day the salon reopens (day after `to`). */
+  reopenISO: string;
+};
+
+/**
+ * The vacation that's either ACTIVE today, or starts within the next 14 days
+ * — else null. `now` is injectable for tests (same pattern as getHoursStatus).
+ * NOTE: getHoursStatus's own `nextOpen` scan only looks 14 days ahead, so a
+ * vacation LONGER than 14 days would make `nextOpen` come back null while
+ * it's active — a known, documented limitation, not fixed here (V1 only
+ * needs to cover the ~9-day Richa vacation).
+ */
+export function getActiveOrUpcomingVacation(
+  now: DateTime = DateTime.now()
+): ActiveOrUpcomingVacation | null {
+  const nowDt = now.setZone(TZ);
+  const todayISO = nowDt.toISODate();
+  if (!todayISO || !VACATIONS.length) return null;
+
+  const toResult = (v: Vacation): ActiveOrUpcomingVacation => {
+    const reopen = DateTime.fromISO(v.to, { zone: TZ }).plus({ days: 1 });
+    return { from: v.from, to: v.to, reopenISO: reopen.toISODate() ?? v.to };
+  };
+
+  const active = VACATIONS.find((v) => v.from <= todayISO && todayISO <= v.to);
+  if (active) return toResult(active);
+
+  const upcoming = VACATIONS.find((v) => {
+    const startsIn = DateTime.fromISO(v.from, { zone: TZ })
+      .startOf('day')
+      .diff(nowDt.startOf('day'), 'days').days;
+    return startsIn > 0 && startsIn <= 14;
+  });
+  return upcoming ? toResult(upcoming) : null;
 }

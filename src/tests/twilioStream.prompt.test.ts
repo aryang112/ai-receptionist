@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import { DateTime } from 'luxon';
 import { buildInstructions } from '../realtime/twilioStream.js';
 import businessHours from '../config/business.json';
+
+const at = (iso: string) => DateTime.fromISO(iso, { zone: 'America/New_York' });
 
 // L1: Erica must be able to answer "where are you located?" — the address is
 // sourced from business.json (single source of truth), never hardcoded in
@@ -15,5 +18,31 @@ describe('buildInstructions — LOCATION', () => {
     expect(instructions).toContain(businessHours.location.state);
     expect(instructions).toContain(businessHours.location.zip);
     expect(instructions).toContain('LOCATION:');
+  });
+});
+
+// V1: buildInstructions takes an injectable `now` (defaults to real now, same
+// pattern as getHoursStatus) so the vacation block is testable without
+// waiting for the real calendar date. business.json vacation: 2026-09-01 to
+// 2026-09-09.
+describe('buildInstructions — VACATION', () => {
+  it('injects an ACTIVE vacation block when "now" falls inside the range', () => {
+    const instructions = buildInstructions(at('2026-09-05T12:00'));
+    expect(instructions).toContain('VACATION');
+    expect(instructions).toMatch(/Richa is away right now/);
+    expect(instructions).toMatch(/transfer_to_owner/);
+  });
+
+  it('injects an UPCOMING vacation block when "now" is within 14 days of the start', () => {
+    const instructions = buildInstructions(at('2026-08-22T09:00'));
+    expect(instructions).toContain('VACATION');
+    expect(instructions).toMatch(/Richa will be away/);
+    // Must not claim she's already away before she actually is.
+    expect(instructions).not.toMatch(/Richa is away right now/);
+  });
+
+  it('omits the vacation block entirely when no vacation is active or upcoming', () => {
+    const instructions = buildInstructions(at('2026-10-01T09:00'));
+    expect(instructions).not.toContain('VACATION');
   });
 });

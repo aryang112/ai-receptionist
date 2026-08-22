@@ -10,7 +10,10 @@
     "sat": ["10:00-18:00"],
     "sun": []
   },
-  "closedDates": ["2025-11-27", "2025-12-25"],
+  "closedDates": ["2026-11-26", "2026-12-25"],
+  "vacations": [
+    { "from": "2026-09-01", "to": "2026-09-09", "note": "Richa is away" }
+  ],
   "location": {
     "address": "8902 Harford Road",
     "city": "Parkville",

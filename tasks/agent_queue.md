@@ -248,7 +248,7 @@ suite entirely; spoken directions don't need it.
 address, sourced from business.json — assert on `buildInstructions()` output);
 no other prompt lines touched.
 
-## V1 — [ ] Vacation mode: one business.json entry drives everything (P0 — Richa away ~Sept 1–9)
+## V1 — [x] Vacation mode: one business.json entry drives everything (P0 — Richa away ~Sept 1–9) (implemented, awaiting Fable review/commit)
 **Why:** Richa vacations Sept 1–9 (PROVISIONAL — Aryan confirms exact dates; a
 date change must be a one-line config edit, nothing else). While away: no
 bookings on those dates, no live transfers to her cell, Erica explains warmly

@@ -3,6 +3,218 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-22 — V1 IMPLEMENTED (worker agent)
+**Task:** Round 3 V1 — vacation mode. Richa is away ~Sept 1–9, 2026
+(PROVISIONAL). One `business.json` entry drives everything: no bookings on
+those dates, no live transfers to her cell while she's actually away, Erica
+explains warmly and books after return, and a message reaches her as SMS.
+Implemented exactly per queue spec, nothing more.
+
+**Files changed:**
+- **`src/config/business.json`** (the sanctioned edit for these two fields
+  only — hours/location untouched):
+  ```json
+  "closedDates": ["2026-11-26", "2026-12-25"],
+  "vacations": [
+    { "from": "2026-09-01", "to": "2026-09-09", "note": "Richa is away" }
+  ],
+  ```
+  (was `["2025-11-27", "2025-12-25"]` — stale 2025 dates replaced with the
+  2026 Thanksgiving/Christmas analogs, both PROVISIONAL pending confirmation.)
+- **`src/core/hours.ts`**:
+  - `VACATIONS` — module-level array read defensively from
+    `businessHours.vacations ?? []` (cast, not a literal-type assumption) so
+    an older/reverted `business.json` without the key doesn't crash.
+  - `rangesForDate()` (:18) now also returns `[]` when the date falls inside
+    any vacation range (`isOnVacation`, ISO string compare `from <= iso <=
+    to`) — this alone is what makes `getHoursStatus`/`getOpenClose` (and
+    therefore availability/booking) treat vacation days exactly like a
+    `closedDate` or a closed weekday, with zero extra wiring elsewhere.
+  - NEW export `getActiveOrUpcomingVacation(now = DateTime.now())` →
+    `{ from, to, reopenISO } | null`. `reopenISO` = the day after `to`.
+    Returns the vacation if today is inside `[from, to]` (active), else if it
+    starts within the next 14 days (upcoming), else `null`. Documented in a
+    comment: `getHoursStatus`'s own `nextOpen` scan is also a 14-day window,
+    so a vacation LONGER than 14 days would make `nextOpen` come back `null`
+    while active — known limitation, not fixed (out of scope; the real
+    vacation is 9 days).
+- **`src/realtime/twilioStream.ts`**:
+  - `buildInstructions()` signature changed to
+    `buildInstructions(now: DateTime = DateTime.now().setZone(env.TIMEZONE))`
+    — injectable for tests (mirrors `getHoursStatus`'s pattern); the one real
+    call site (`instructions: buildInstructions()` at the session-config
+    call) is untouched, so runtime behavior is unaffected.
+  - When `getActiveOrUpcomingVacation(now)` is non-null, a `VACATION` block
+    is spliced in right after the `LOCATION:` line (see exact text below).
+  - `get_business_hours` handler (:1745): added `vacations:
+    businessHours.vacations ?? []` to the returned object.
+  - `handleTransferToOwner` (:2215): right after arg-parse, computes
+    `getActiveOrUpcomingVacation(DateTime.now().setZone(env.TIMEZONE))` and
+    whether it's ACTIVE **today specifically** (not just "starting soon").
+    If active: does **not** touch `getTwilioClient()`, `waitForPlaybackToDrain`,
+    or `this.transferring` at all (proven by the new tests — see below) —
+    instead resolves a caller name (`this.prefetch` → `clientNames` map →
+    most-recent `clientNames` entry → `'a caller'`), fires
+    `notifyOwnerSms(...)` fire-and-forget, `markInfoOutcome()`,
+    `CallStore.recordToolCall(..., { detail: { vacationMessage: true, reason
+    } })`, and returns `{ transferred: false, note: "Richa is away until
+    <human date> — tell the caller you've passed their message along and
+    she'll follow up when she's back." }`. If NOT active (no vacation, or
+    upcoming-but-not-started), falls through to the pre-existing dial logic
+    **completely untouched** (confirmed via diff — every line below the new
+    `if` block is byte-identical to before). `failoverToOwner` (the
+    FATAL-ERROR path, :2607) was not touched at all — still dials
+    unconditionally, as required (a technical meltdown must still reach a
+    human even on vacation).
+
+**Exact VACATION prompt block (both branches, as rendered with real
+`business.json` values — `═══ VACATION (Richa is away) ═══` header, then 2
+content lines):**
+
+Active (injected while today ∈ [2026-09-01, 2026-09-09], e.g. `now` =
+2026-09-05):
+```
+═══ VACATION (Richa is away) ═══
+Richa is away right now, back September 10. Availability already excludes those dates — if a caller asks for one, explain warmly and offer the first days after she's back. Keep booking normally for dates after her return.
+Erica cannot connect a caller to Richa while she's away — offer to pass a message along instead ("I'll text her right now") and call transfer_to_owner; it delivers the message to her as a text.
+```
+
+Upcoming (injected while `now` is within 14 days of `from` but not yet
+inside the range — this is the branch that fires for the NEXT ~10 days
+under the real clock, since today is 2026-08-22):
+```
+═══ VACATION (Richa is away) ═══
+Richa will be away September 1–September 9, back September 10. Availability already excludes those dates — if a caller asks for one, explain warmly and offer the first days after she's back. Keep booking normally for dates after her return.
+Erica cannot connect a caller to Richa while she's away — offer to pass a message along instead ("I'll text her right now") and call transfer_to_owner; it delivers the message to her as a text.
+```
+(No block at all — empty string — once `getActiveOrUpcomingVacation` returns
+`null`, e.g. more than 14 days before `from` or after `to` with no next
+vacation configured.)
+
+**Availability-path verification (traced, not assumed — cited line numbers
+in the CURRENT file after this diff):**
+`handleSuggestAvailability` (`twilioStream.ts:1244`) calls
+`getHoursStatus(payload.date)` at `:1313` and `getOpenClose(payload.date)` at
+`:1318`. Both call `rangesForDate()` internally (`hours.ts:26`), which — after
+this task's change — returns `[]` for any date inside a vacation range
+exactly the same way it already does for `closedDates` and closed weekdays.
+Concretely: `getHoursStatus` sets `salonOpenThatDay = ranges.length > 0` →
+`false` for a vacation date, and `hoursThatDay = 'Closed'`; both are returned
+straight to the model in the tool result (`twilioStream.ts:1398-1404`, fields
+`salonOpenThatDay`/`hoursThatDay`/`closedRightNow`/`nextOpen`). `getOpenClose`
+returns `null` for the same date, which flows into the slot filter at
+`twilioStream.ts:1330-1333` (`snapSlotsToGrid(...).filter((!openClose || dt
+>= openClose.open) && (!openClose || dt.plus(...) <= openClose.close))`).
+**Caveat worth flagging (pre-existing, not introduced by V1):** when
+`openClose` is `null` the `!openClose ||` short-circuit makes that filter a
+no-op — it does NOT itself strip raw Phorest slots on a closed/vacation day.
+The actual safety net is the prompt: `buildInstructions()`'s existing
+"READING suggest_availability RESULTS" section already instructs Erica
+"If salonOpenThatDay is false → we don't open that day at all... NEVER say
+'fully booked'" — so even if Phorest's own calendar (which doesn't know about
+the vacation) still reports raw availability for staff on those dates, the
+model is told to ignore `slots` and treat `salonOpenThatDay: false` as
+authoritative. This is identical to how a closed weekday (e.g. Sunday) has
+always worked — vacation dates ride the exact same, already-live mechanism;
+no new wiring was needed or added, confirming the spec's "verify, don't fix"
+instruction. Booking/reschedule handlers don't have their own hours check —
+they're gated by `offeredSlots`/the fresh availability response, which is
+already empty/closed for these dates via the same path.
+
+**Tests added:**
+- `src/tests/hours.test.ts` — new `describe('vacations (V1)')` block (8
+  tests): a date inside the range is closed; both the first and last day of
+  the (inclusive) range are closed; the day after reopens with normal hours;
+  the day before is unaffected; `getActiveOrUpcomingVacation` active /
+  upcoming-within-14-days / null-too-far / null-once-over. Also fixed the
+  pre-existing `closed date -> closed even on a normal weekday` test, which
+  hardcoded `2025-12-25` — now `2026-12-25`, matching the new `closedDates`
+  (required consequence of the sanctioned business.json edit, not scope
+  creep; verified this is the ONLY other test referencing the old dates via
+  `grep -rn "2025-11-27\|2025-12-25" src/`).
+- `src/tests/twilioStream.prompt.test.ts` — new `describe('buildInstructions
+  — VACATION')` block (3 tests) using the new injectable `now` param: active
+  branch wording, upcoming branch wording (asserts it does NOT say "away
+  right now" — the false-claim risk called out above), and no block at all
+  outside both windows.
+- `src/tests/twilioStream.vacation.test.ts` (NEW, 4 tests) — same
+  `buildCall()` mock-socket scaffolding as
+  `twilioStream.silenceWatchdog.test.ts`/`durationCap.test.ts`. Uses
+  `vi.useFakeTimers()` + `vi.setSystemTime()` (not an injectable `now` param
+  on `handleTransferToOwner` itself — see Deviations) so the vacation-active
+  window is actually reachable in a test run despite the real current date
+  (2026-08-22) sitting 10 days BEFORE the vacation starts:
+  1. Vacation active (`now` = 2026-09-05): `notifyOwnerSms` called once with
+     a body containing "While you're away", the reason, and (with no
+     recognized caller in the harness) "a caller"; `waitForPlaybackToDrain`
+     (spied) never called; `call.transferring` stays `false`; return value
+     is exactly `{ transferred: false, note: <contains "September 10"> }`;
+     `call.outcome === 'info'`.
+  2. Same scenario but with `call.prefetch`/`call.clientNames` populated —
+     the SMS body contains the resolved first name ("Priya"), proving the
+     name-resolution chain works.
+  3. Vacation upcoming (`now` = 2026-08-22, 10 days out — the REAL current
+     date): falls through to the normal path, which (callSid unset in the
+     harness) hits the pre-existing "missing Twilio client or callSid" guard
+     → `{ error: 'Transfer unavailable' }`; `notifyOwnerSms` never called —
+     proves the vacation branch is skipped when not yet active.
+  4. No vacation active/upcoming (`now` = 2026-10-01): same fallthrough,
+     same assertions.
+
+**Verified:**
+- `npx tsc --noEmit` → clean.
+- `npm test` → **140/140 passed** (floor was 124/125 after L1; net +15 new:
+  8 hours.test.ts + 3 prompt.test.ts + 4 vacation.test.ts). Before this task:
+  125/125.
+- `TZ=UTC npm test` → **140/140 passed**, same file/test count.
+- No existing test deleted or `.skip`ped. `git diff --stat`: only
+  `business.json`, `hours.ts`, `twilioStream.ts`, `hours.test.ts`,
+  `twilioStream.prompt.test.ts` modified + `twilioStream.vacation.test.ts`
+  new (+ this `state.md`/`tasks/agent_queue.md`). `.env` untouched. No
+  `session.update` shape change — `git diff` on `openaiSession.ts` is empty.
+  Non-vacation transfer drain/dial code in `handleTransferToOwner` is
+  byte-identical below the new `if` block (confirmed by reading the diff:
+  every existing line after the insertion point is unchanged). `barge-in`
+  (`handleBargeIn`/`markQueue`/`bargeInEpoch`) not touched — not in the diff
+  at all.
+
+**Deviations from spec (both judgment calls, reasoned above/below):**
+1. **VACATION prompt block wording branches on active-vs-upcoming**, rather
+   than a single fixed "salon closed <from> to <to> (Richa is away)" line as
+   the spec's prose literally suggested. Reason: `getActiveOrUpcomingVacation`
+   returning non-null covers TWO real states (already-away vs.
+   about-to-be-away), and under the actual current date (2026-08-22, 10 days
+   before Sept 1) the **upcoming** branch is what's live right now — a fixed
+   "Richa is away" line would tell Erica something false today. Both
+   branches keep the caller-facing guidance (dates excluded, offer post-
+   return days, keep booking future dates) and the transfer-to-SMS
+   instruction identical; only the "is away" vs. "will be away" framing
+   differs, and only the ACTIVE-today check in `handleTransferToOwner`
+   (matching the spec's own explicit "if a vacation is ACTIVE (today inside
+   range)" instruction) actually gates real behavior.
+2. **Caller-name resolution for the vacation SMS** — `transfer_to_owner`'s
+   tool schema is `{ reason }` only (no `clientId` arg), so there's no
+   single "the" clientId to key `clientNames` with, unlike
+   `log_running_late` which does receive one. Resolution chain implemented:
+   `this.prefetch?.clientId` → `clientNames.get(...)` → `this.prefetch
+   ?.firstName` → most-recently-added `clientNames` entry → `'a caller'`.
+   Covers the common case (caller-ID-recognized caller transfers) and
+   degrades safely otherwise, per spec's "a plain 'a caller' is fine when
+   unknown."
+3. **Testability of `handleTransferToOwner`'s vacation gate** uses
+   `vi.useFakeTimers()` + `vi.setSystemTime()` rather than adding an
+   injectable `now` parameter to the (model-invoked) tool handler itself —
+   its signature is fixed by `TOOL_DEFINITIONS`/`parseToolArgs`, so an extra
+   param would only be reachable from tests, not real calls; system-time
+   mocking (already proven reliable by the passing test) avoids adding
+   test-only surface to a tool handler. `buildInstructions()` DID get a real
+   injectable `now` param, per spec, since it has a genuine non-test caller
+   that can supply the default.
+
+**Queue status:** V1 marked `[x]` below — implemented, awaiting Fable
+review/commit. Not committed by this worker (per ritual — no
+`git add`/commit).
+
 ## 2026-08-22 — L1 IMPLEMENTED (worker agent)
 **Task:** Round 3 L1 — Erica can answer "where are you located?" (address was
 nowhere in the codebase). Implemented exactly per queue spec, nothing more.

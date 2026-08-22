@@ -18,7 +18,11 @@ import type {
   CustomerResult,
   AppointmentSummary,
 } from '../services/phorest.types.js';
-import { getHoursStatus, getOpenClose } from '../core/hours.js';
+import {
+  getHoursStatus,
+  getOpenClose,
+  getActiveOrUpcomingVacation,
+} from '../core/hours.js';
 import { snapSlotsToGrid } from '../core/slots.js';
 import { verifyStreamToken } from '../security/wsAuth.js';
 import { DateTime } from 'luxon';
@@ -44,13 +48,40 @@ const CORE_SERVICES = env.PHOREST_PREFERRED_SERVICE_IDS.length
   ? env.PHOREST_PREFERRED_SERVICE_IDS.join(', ')
   : 'Brow Threading, Eyebrow Tinting';
 
-export function buildInstructions(): string {
+export function buildInstructions(
+  // Injectable for tests (same pattern as getHoursStatus) — defaults to the
+  // real current salon time.
+  now: DateTime = DateTime.now().setZone(env.TIMEZONE)
+): string {
   // Inject the authoritative current salon date/time so "today"/"tomorrow" and
   // any relative dates are computed correctly — never left to the model's own
   // (UTC-ish, undocumented) clock, which would book the wrong day near midnight.
-  const now = DateTime.now().setZone(env.TIMEZONE);
   const todayISO = now.toISODate();
   const tomorrowISO = now.plus({ days: 1 }).toISODate();
+
+  // V1: one business.json entry drives the whole vacation story. Non-null
+  // covers BOTH an active vacation and one starting within 14 days, so the
+  // wording below is phrased to stay true in either case (never claims
+  // "Richa is away" before she actually is).
+  const vacation = getActiveOrUpcomingVacation(now);
+  const vacationActive = !!(
+    vacation &&
+    todayISO &&
+    vacation.from <= todayISO &&
+    todayISO <= vacation.to
+  );
+  const vacationBlock = vacation
+    ? `
+
+═══ VACATION (Richa is away) ═══
+${
+  vacationActive
+    ? `Richa is away right now, back ${DateTime.fromISO(vacation.reopenISO, { zone: env.TIMEZONE }).toFormat('MMMM d')}.`
+    : `Richa will be away ${DateTime.fromISO(vacation.from, { zone: env.TIMEZONE }).toFormat('MMMM d')}–${DateTime.fromISO(vacation.to, { zone: env.TIMEZONE }).toFormat('MMMM d')}, back ${DateTime.fromISO(vacation.reopenISO, { zone: env.TIMEZONE }).toFormat('MMMM d')}.`
+} Availability already excludes those dates — if a caller asks for one, explain warmly and offer the first days after she's back. Keep booking normally for dates after her return.
+Erica cannot connect a caller to Richa while she's away — offer to pass a message along instead ("I'll text her right now") and call transfer_to_owner; it delivers the message to her as a text.`
+    : '';
+
   return `You are Erica, the warm and friendly AI receptionist for Richa's Threading Salon in Parkville, Maryland. You answer calls, book appointments, reschedule, cancel, and help with any questions about the salon.
 
 CURRENT DATE & TIME: Right now it is ${now.toFormat("cccc, MMMM d, yyyy 'at' h:mm a")} at the salon (timezone ${env.TIMEZONE}). When a caller says "today" use the date ${todayISO}; "tomorrow" is ${tomorrowISO}. ALWAYS compute appointment dates from this — never guess today's date, month, or year. Pass every date to tools as YYYY-MM-DD.
@@ -66,6 +97,7 @@ NEVER LEAVE SILENCE: Before you call ANY tool (looking something up, booking, ch
 BUSINESS HOURS: Always use the get_business_hours tool when asked about hours. Never guess.
 
 LOCATION: ${businessHours.location.address}, ${businessHours.location.city}, ${businessHours.location.state} ${businessHours.location.zip} — say it naturally if asked. For directions: give the address, suggest their maps app — never invent turn-by-turn or landmarks.
+${vacationBlock}
 
 ═══ SERVICES & PRICES ═══
 Callers often ask for prices. When they ask the price of a service, say a quick filler ("Let me check that for you…") and call get_prices WITH the serviceName they asked about — it returns that service's exact price and duration. Only omit serviceName if they ask broadly "what services do you offer." Quote ONLY what get_prices returns; NEVER guess or make up a price. Read service names naturally (ignore any leading numbers/codes like "3)").
@@ -1710,6 +1742,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         sunday: businessHours.hours.sun.join(', ') || 'Closed',
         closedDates: businessHours.closedDates,
         address: `${businessHours.location.address}, ${businessHours.location.city}, ${businessHours.location.state} ${businessHours.location.zip}`,
+        vacations: businessHours.vacations ?? [],
       };
 
       logger.info(
@@ -2190,6 +2223,56 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         return { error: parsed.error };
       }
       const payload = parsed.data as { reason: string };
+
+      // V1: while Richa is ACTIVELY on vacation (today falls inside the
+      // range — NOT just "starting soon"), never dial her personal phone.
+      // Take a message instead. The FATAL-ERROR failover (failoverToOwner,
+      // below) is untouched by this and keeps dialing — a technical
+      // meltdown should still reach a human even on vacation.
+      const vacationNow = DateTime.now().setZone(env.TIMEZONE);
+      const vacationTodayISO = vacationNow.toISODate();
+      const vacation = getActiveOrUpcomingVacation(vacationNow);
+      const vacationActive = !!(
+        vacation &&
+        vacationTodayISO &&
+        vacation.from <= vacationTodayISO &&
+        vacationTodayISO <= vacation.to
+      );
+      if (vacation && vacationActive) {
+        logger.info(
+          {
+            tool: 'transfer_to_owner',
+            reason: payload.reason,
+            callSid: this.callSid,
+            vacation,
+          },
+          'Transfer suppressed — Richa is on vacation; sending SMS instead'
+        );
+        const callerName =
+          (this.prefetch?.clientId
+            ? this.clientNames.get(this.prefetch.clientId)
+            : undefined) ??
+          this.prefetch?.firstName ??
+          [...this.clientNames.values()].pop() ??
+          'a caller';
+        void this.notifyOwnerSms(
+          `Hi Richa, it's Erica. While you're away: ${callerName} called — ${payload.reason}. I let them know you're away.`
+        );
+        this.markInfoOutcome();
+        CallStore.recordToolCall(this.callSid, {
+          name: 'transfer_to_owner',
+          ok: true,
+          detail: { vacationMessage: true, reason: payload.reason },
+        });
+        const reopenLabel = DateTime.fromISO(vacation.reopenISO, {
+          zone: env.TIMEZONE,
+        }).toFormat('MMMM d');
+        return {
+          transferred: false,
+          note: `Richa is away until ${reopenLabel} — tell the caller you've passed their message along and she'll follow up when she's back.`,
+        };
+      }
+
       logger.info(
         {
           tool: 'transfer_to_owner',
