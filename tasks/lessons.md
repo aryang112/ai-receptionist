@@ -151,3 +151,26 @@ return 500 "Request method not supported"), POST with an empty `serviceNote`
 removed or blanked via the third-party API — the only clean slate is
 cancel-and-recreate the appointment. Don't burn time retrying verbs on the
 note endpoint.
+
+## ⚠️ tsx-watch restarts are call-killers — never save src during live testing (2026-08-21)
+Three separate live symptoms, one cause. `npm run dev` = `tsx watch`, and any
+src save restarts the process, which (1) drops in-flight calls AND creates a
+~10s webhook dead-window where inbound calls die before the greeting (Twilio
+gets no answer — looked like "Erica hung up on Richa's phone"), (2) truncates
+`data/dev.log` (boot behavior), destroying the 📊 token evidence for every
+earlier call, and (3) re-runs the ~5s client phone-index build, which a call
+arriving seconds after boot RACES: the prefetch's 700ms greeting cap lost by
+87ms live and a known caller got the stranger flow. (3) is now code-fixed
+(c4b9c7d late recognition upgrades the call when the lookup lands) — (1) and
+(2) are physics: coordinate saves with the phone, and don't trust dev.log to
+hold history across restarts.
+
+## 📵 OpenAI TPM starvation profile at Tier 1 (observed live, now mitigated) (2026-08-22)
+At the old 40k TPM tier a brisk call burned ~38k tokens/min (history+prompt is
+re-counted EVERY turn — cached tokens still count toward TPM), so every chatty
+call went silent at ~1m30s: tool succeeds, the SPOKEN reply fails
+rate_limit_exceeded, caller hears dead air at the worst moment. Owner raised
+the org tier 2026-08-22 (org-level spend tier — the Project Limits pencil can
+only LOWER). If silence-at-90s ever returns, check `⚖️ TPM remaining` in the
+logs FIRST before debugging code. Prompt trim (todo 3.4) still worthwhile —
+it cuts the per-turn burn on every tier.

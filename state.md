@@ -3,6 +3,42 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-22 — ✅ LIVE-TEST NIGHT DONE + TPM TIER RAISED — handoff (read this first)
+**TPM tier RAISED by owner 2026-08-22.** The 40k gpt-realtime ceiling that froze
+calls at ~1m30s (silence mid-call, reproduced live + confirmed on the dashboard)
+is lifted. That closes the queue's last OWNER item (B3). Account reference:
+personal OpenAI org `org-lBInMEtpLdHD96ZHs58vLf6Y`, project "AI Receptionist"
+(`proj_9NODLAwCEtu9l8IQnSJ8OoXp`), key = `OPENAI_REALTIME_API_KEY` in .env.
+Limits are ORG-level (spend tier) — the Project Settings→Limits pencil only lowers.
+
+**Shipped this session (each verified 124/124 + tsc clean; all hot-reloaded live):**
+- `e50e8eb` transfer drain cap 3s→12s + one-short-sentence handoff rule (mid-word cutoff on live call — fixed)
+- `51493a6` log_running_late optional `detail` → dynamic note text ("Customer called ahead — <caller's words>"); Erica closes "I'll let Richa know"
+- `dff8926` owner FYI SMS on running-late: "Hi Richa, it's Erica. <name> just called — <detail> for their <service> at <time>. FYI!" (salon number → OWNER_PHONE, fire-and-forget, clientNames map = server-side names only)
+- `c4b9c7d` late caller-ID recognition: 700ms greeting cap kept, but timeout ≠ no-match — in-flight lookup upgrades the call when it lands (boot race lost by 87ms live)
+- `fbc5bbc` lesson: Phorest appointment notes are WRITE-ONLY (POST only; no delete/edit verb; appointment PUT ignores `notes`)
+Verified live: note lands in the Phorest app end-to-end; cancel→rebook→running-late flow clean.
+
+**NEXT SESSION — do in order:**
+1. Live re-test with raised TPM: (a) a >2min chatty call — expect NO silence
+   deaths; (b) running-late with a specific lateness ("about 10 minutes") →
+   note carries the caller's words + SMS arrives at OWNER_PHONE; (c) transfer →
+   handoff sentence completes before <Dial>; (d) call right after a server
+   restart → recognized mid-call (late prefetch), no phone-number ask.
+2. If clean: prep merge-to-main + push (branch is 60+ commits ahead — push ONLY on Aryan's word).
+3. Proposals discussed, awaiting Aryan's go (specs in this file's 2026-08-21 22:25 entry + chat):
+   vacation/pilot mode (OWNER_AWAY_UNTIL env → no-dial transfer handler + SMS
+   message-taking + business.json closedDates); two-person bookings (book both
+   under caller + serviceNote naming person 2); promotions prompt policy (never
+   confirm/deny an offer, note the claim, Richa applies at checkout); general
+   `leave_note` tool; persist per-call token totals to CallStore (dev.log
+   truncates every boot).
+4. Backlog: prompt trim (todo 3.4 — also cuts TPM burn/turn), rotate the
+   Phorest secret leaked in PLAN.md, `.env` PUBLIC_URL is dead (unused in src).
+⚠️ Live-testing gotcha (bit us twice tonight): `tsx watch` restarts on ANY src
+save → kills in-flight AND incoming calls (webhook dead-window) + truncates
+`data/dev.log` + re-races the phone-index build. Never save during live calls.
+
 ## 2026-08-21 — ✅ QUEUE COMPLETE (Fable orchestrator + Sonnet workers): all 6 tasks shipped
 The overnight run never executed (0 commits, queue untouched) — re-run today as
 Fable-orchestrated Sonnet workers, one per task, sequential, Fable reviewing

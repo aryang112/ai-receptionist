@@ -25,8 +25,11 @@ Caller dials Twilio number
   `handleBookAppointment`, `handleReschedule`, `handleCancel`, `handleGetBusinessHours`,
   `handleGetPrices`, `handleLookupCustomer`, `handleListAppointments`,
   `handleLogRunningLate`, `handleTransferToOwner`), barge-in (mark/clear/truncate),
-  outbound audio to Twilio, and **`warmCallerContext`** (caller-ID prefetch +
-  `injectContext`). The per-call `prefetch` field caches the recognized caller.
+  outbound audio to Twilio, and the caller-ID prefetch: **`prepareCallerContext`**
+  (700ms-capped lookup racing the greeting; a TIMEOUT is not a no-match — the
+  in-flight lookup keeps running and upgrades the call late via
+  **`adoptRecognizedCaller`** + `applyCallerContext`, see c4b9c7d). The per-call
+  `prefetch` field caches the recognized caller.
   Also (2026-08-21): **silence watchdog** (`startSilenceWatchdog`/`tickSilenceWatchdog`
   — 20s mutual silence → one check-in, +15s → goodbye + hangup; guards:
   sessionReady/toolCallsInFlight/transferring/markQueue), **duration cap**
