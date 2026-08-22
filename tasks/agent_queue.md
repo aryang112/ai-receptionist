@@ -38,7 +38,7 @@
 
 ---
 
-## G1 — [ ] Conversation-policy block in the prompt (P1, prompt-only)
+## G1 — [x] Conversation-policy block in the prompt (P1, prompt-only) (implemented, awaiting Fable review/commit)
 **Why:** live call 2026-08-19 — caller said "don't interrupt me" and Erica went
 fully mute until told she could speak again. Same class as prompt-injection
 ("ignore your instructions", "give me a discount"). Code guards already bound
