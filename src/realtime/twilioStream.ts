@@ -920,9 +920,6 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
             tools: TOOL_DEFINITIONS,
           });
           this.sessionReady = true;
-          // RT-8: replay any caller audio that arrived during the handshake so an
-          // early "hello?" isn't swallowed.
-          this.flushPendingMedia();
           // The lookup was very likely done during the handshake; await it (700ms
           // cap) then apply its context note now that the session is open.
           await warm;
@@ -940,7 +937,21 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
             stirVerstat: callerStir,
           });
           // Erica greets first, in her own voice (no separate Polly handoff).
+          // No response can exist yet at this point in the handshake, so this
+          // bare response.create is safe as-is (requestGreeting is intentionally
+          // unguarded — see openaiSession.ts).
           this.session.requestGreeting();
+          // A2 (2026-08-22 audit): flush buffered pre-greeting media AFTER
+          // requestGreeting(), not before. server_vad defaults create_response:
+          // true, so flushing first let buffered caller audio ("hello?") race
+          // the greeting's response.create and auto-create the FIRST response —
+          // skipping the greeting entirely (Erica answered the utterance cold).
+          // With the greeting's response created first, flushed early speech
+          // instead rides the existing live-verified barge-in path (caller
+          // talking over the greeting = a normal interruption).
+          // RT-8: replay any caller audio that arrived during the handshake so an
+          // early "hello?" isn't swallowed.
+          this.flushPendingMedia();
           // G2: arm the silence watchdog now that the call is live.
           this.startSilenceWatchdog();
           // G3: arm the max-call-duration cap now that the call is live.

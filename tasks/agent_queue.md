@@ -402,7 +402,7 @@ Phorest port): stale slot → rejected with fresh list + NO booking write; still
 free slot → books; fetch failure → books (fail-open proven). Existing
 suggest_availability + slots tests untouched and green.
 
-## A2 — [ ] Greeting race: buffered pre-greeting speech suppresses the greeting (P2, code — LIVE validation required)
+## A2 — [x] Greeting race: buffered pre-greeting speech suppresses the greeting (P2, code — LIVE validation required) (implemented, awaiting Fable review/commit + live validation)
 **Why (2026-08-07 audit + July call-2 anomaly, still open — grep-verified):**
 in the `'start'` handler, `flushPendingMedia()` (:834) runs BEFORE
 `requestGreeting()` (:851). server_vad defaults `create_response: true`, so

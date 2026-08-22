@@ -3,6 +3,151 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-22 — A2 IMPLEMENTED (worker agent)
+**Task:** Round 3 A2 — greeting race: buffered pre-greeting caller speech could
+suppress the greeting. In the Twilio `'start'` handler, `flushPendingMedia()`
+ran BEFORE `session.requestGreeting()`. `server_vad` defaults
+`create_response: true`, so flushed early speech ("hello?") could auto-create
+the FIRST OpenAI response before the greeting's own `response.create` landed —
+skipping the greeting; Erica answered the utterance cold (the July "skipped
+greeting" anomaly, 2026-08-07 audit).
+
+**Fix — exactly per spec, nothing more:** moved the `this.flushPendingMedia();`
+line (src/realtime/twilioStream.ts, `'start'` case) to run immediately AFTER
+`this.session.requestGreeting();`, still before `startSilenceWatchdog()`/
+`startDurationCap()`. Nothing else in the `'start'` case was reordered — the
+statements between the old flush call site and `requestGreeting()` (`await
+warm`, `applyCallerContext()`, `startedAtMs` stamp, `CallStore.startCall`)
+keep their exact original order and position; only the one `flushPendingMedia()`
+line moved. Added two comments: one at the `requestGreeting()` call site
+noting no response can exist yet there (so its bare, unguarded
+`response.create` is safe as-is — `requestGreeting()` itself is byte-for-byte
+untouched), and one at the (moved) `flushPendingMedia()` call explaining the
+race and why flushing after the greeting's `response.create` is safe (buffered
+early speech now rides the existing live-verified barge-in path — "caller
+talks over the greeting" — instead of racing to create the first response).
+`flushPendingMedia()`'s own body, `requestGreeting()`'s own body, RT-8's
+buffering, and `handleMedia()` are all **untouched** (confirmed by reading the
+diff: `git diff --stat` shows only `src/realtime/twilioStream.ts` in the
+production diff, and within it only the reorder + 2 new comments — no other
+line changed). `openaiSession.ts` and `business.json`/`.env` are **not in the
+diff at all**. No barge-in symbol (`handleBargeIn`/`markQueue`/`bargeInEpoch`)
+appears in the diff (grepped, zero hits) — confirmed separately by running
+`twilioStream.bargein.test.ts` (5 tests, all pass, untouched).
+
+**Full diff (production code):**
+```diff
+           this.sessionReady = true;
+-          // RT-8: replay any caller audio that arrived during the handshake so an
+-          // early "hello?" isn't swallowed.
+-          this.flushPendingMedia();
+           // The lookup was very likely done during the handshake; await it (700ms
+           // cap) then apply its context note now that the session is open.
+           await warm;
+@@ applyCallerContext / startedAtMs / CallStore.startCall — UNCHANGED @@
+           // Erica greets first, in her own voice (no separate Polly handoff).
++          // No response can exist yet at this point in the handshake, so this
++          // bare response.create is safe as-is (requestGreeting is intentionally
++          // unguarded — see openaiSession.ts).
+           this.session.requestGreeting();
++          // A2 (2026-08-22 audit): flush buffered pre-greeting media AFTER
++          // requestGreeting(), not before. server_vad defaults create_response:
++          // true, so flushing first let buffered caller audio ("hello?") race
++          // the greeting's response.create and auto-create the FIRST response —
++          // skipping the greeting entirely (Erica answered the utterance cold).
++          // With the greeting's response created first, flushed early speech
++          // instead rides the existing live-verified barge-in path (caller
++          // talking over the greeting = a normal interruption).
++          // RT-8: replay any caller audio that arrived during the handshake so an
++          // early "hello?" isn't swallowed.
++          this.flushPendingMedia();
+           // G2: arm the silence watchdog now that the call is live.
+```
+
+**New test — `src/tests/twilioStream.greetingRace.test.ts` (2 tests):**
+Test approach chosen and why: the spec's preferred approach (drive the real
+`'start'` handler via `handleMessage`) turned out to be feasible, NOT too
+entangled — the only blocker was `createSession()` constructing a real
+`OpenAIRealtimeSession` whose `connect()` opens a genuine network WebSocket to
+OpenAI. Fixed by `vi.mock('../realtime/openaiSession.js', …)` to replace the
+whole class with a stub (constructor assigns `vi.fn()` spies for `connect`
+(resolves immediately), `configureSession` (resolves immediately),
+`registerTool`, `requestGreeting`, `appendTwilioAudio`, `injectContext`,
+`requestResponse`, `truncateActiveResponse`, `close`) — this is the ONLY
+module mocked; `twilioStream.ts` itself, `CallStore`, `wsAuth`, `phorest` are
+all real. This drives the **actual production `'start'` case**, not a
+re-implementation of its ordering:
+- No `from` customParameter is sent in the synthetic `'start'` event, so
+  `prepareCallerContext` short-circuits immediately (its first line is `if
+  (!callerPhone) return;`) — no Phorest call is made, keeping the test
+  focused on the ordering bug only.
+- `WS_AUTH_SECRET` is set in this repo's real `.env` (loaded via `import
+  'dotenv/config'` in `env.ts`), so the auth gate is real too — the test mints
+  a genuine signed token via `issueStreamToken(callSid)` (from
+  `src/security/wsAuth.ts`) bound to the same `callSid` the synthetic `'start'`
+  event carries, exactly as `routes/twilio.ts` does for a real call.
+- `CallStore.startCall`/`endCall` are spied (no-op) to avoid real file writes
+  to `./data/calls.jsonl` during the test — same pattern as
+  `twilioStream.blocklist.test.ts`'s `cleanup()`-wiring tests.
+- Test 1: buffers two synthetic pre-ready `media` events (`handleMedia`
+  buffers into `pendingMedia` while `sessionReady` is false), then drives the
+  `'start'` handshake. Asserts `session.requestGreeting` was called exactly
+  once and `session.appendTwilioAudio` was called twice with the buffered
+  payloads in order, then asserts via Vitest's `mock.invocationCallOrder`
+  (a global call-order index shared across all mocks) that `requestGreeting`'s
+  order number is LESS THAN `appendTwilioAudio`'s first order number — i.e.
+  the greeting's `response.create` unambiguously fires before any buffered
+  audio reaches the session.
+- Test 2: no buffered media (the common case) — `requestGreeting` still fires
+  once, `appendTwilioAudio` is never called. Guards against a regression where
+  the reorder somehow broke the normal (no pre-buffered-speech) call.
+- **Verified the test actually catches the regression it targets:** ran it
+  against the OLD (pre-fix) ordering via `git stash` on just
+  `twilioStream.ts` — test 1 failed exactly as expected
+  (`expected 18 to be less than 15` — flush's invocation order number was
+  LOWER than greeting's, i.e. flush ran first) while test 2 still passed (no
+  buffered media = no observable difference in the old ordering, correctly).
+  Then `git stash pop` restored the fix; both tests pass again.
+- One gotcha hit and fixed while writing this test: `vi.restoreAllMocks()` in
+  a blanket `afterEach` also resets plain `vi.fn()`-created mocks (not just
+  `vi.spyOn` ones) — for a mock not created via `spyOn`, `.mockRestore()`
+  behaves like `.mockReset()` and wipes any `.mockImplementation()`, which
+  broke the `OpenAIRealtimeSession` stub after the first test. Fixed by
+  restoring only the two `CallStore` spies individually
+  (`startCallSpy.mockRestore()` / `endCallSpy.mockRestore()`) instead of a
+  blanket `restoreAllMocks()`.
+
+**Verification:**
+- `npx tsc --noEmit` — clean, zero errors.
+- `npm test` — **174/174 green** (floor was 172; +2 new tests, 0 skipped, 0
+  existing test modified). Test files: 27 passed (was 26).
+- `TZ=UTC npm test` — **174/174 green**, same count.
+- Explicitly re-ran the hard-constraint suites in isolation to double-confirm:
+  `twilioStream.bargein.test.ts` + `twilioStream.silenceWatchdog.test.ts` +
+  `twilioStream.durationCap.test.ts` — **19/19 green**, byte-identical to
+  their pre-A2 behavior (no source changes touch any code those tests exercise
+  beyond the one moved line + the `'start'` case, which they don't invoke).
+
+**Deviations from spec:** none. The spec explicitly allowed either the full
+`handleMessage`-driven test OR the narrower stubbed-session fallback if the
+former proved too entangled — I got the former working (via the
+`openaiSession.js` module mock), so no fallback was needed. Comment placement
+picked "right after `requestGreeting()`, before the watchdog arms" per the
+spec's "pick the position that reads best" allowance.
+
+**⚠️ LIVE VALIDATION REQUIRED (per spec — not yet done, flagging for
+Fable/Aryan):** this fix needs two live calls before it can be considered
+fully proven:
+1. A call where the caller speaks IMMEDIATELY on connect (before/during the
+   greeting) — the greeting must still play (or be cleanly barged-in per the
+   existing barge-in path), NOT get skipped.
+2. One normal call (no immediate caller speech) — greeting plays normally,
+   nothing regressed.
+
+**Files changed:** `src/realtime/twilioStream.ts` (the reorder + 2 comments,
+`'start'` case only) and `src/tests/twilioStream.greetingRace.test.ts` (new,
+2 tests). `tasks/agent_queue.md` updated to claim then close A2. Nothing else.
+
 ## 2026-08-22 — A1 IMPLEMENTED (worker agent)
 **Task:** Round 3 A1 — re-validate availability server-side immediately before
 every booking/reschedule write. Phorest `/booking` with `force_selected_time`
