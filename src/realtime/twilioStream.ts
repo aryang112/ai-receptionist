@@ -470,6 +470,22 @@ export class TwilioRealtimeCall {
   // line may have already finished playing (markQueue empty) while the
   // network call is still in flight.
   private toolCallsInFlight = 0;
+  // --- G3: max call duration cap ------------------------------------------
+  // Hard cap on call length so a chatty/malicious caller can't burn Realtime
+  // tokens indefinitely (worse under the 40k TPM freeze). Two one-shot
+  // timers, armed on Twilio 'start' alongside the silence watchdog.
+  private durationWarningTimer: NodeJS.Timeout | undefined = undefined;
+  private durationCapTimer: NodeJS.Timeout | undefined = undefined;
+  // Armed once the cap fires: durationCapToolWaitTimer polls toolCallsInFlight
+  // (never kill a booking write mid-flight — waits up to 15s), durationCapGrace-
+  // Timer waits for the goodbye to play before hanging up (mirrors the silence
+  // watchdog's grace window), durationCapRetryTimer re-attempts the hangup once
+  // if endCallNow aborted because the caller spoke during the drain. Unlike the
+  // silence hangup, the duration cap itself is NOT cancelled by caller speech —
+  // it's hard, so an abort just gets retried, not abandoned.
+  private durationCapToolWaitTimer: NodeJS.Timeout | undefined = undefined;
+  private durationCapGraceTimer: NodeJS.Timeout | undefined = undefined;
+  private durationCapRetryTimer: NodeJS.Timeout | undefined = undefined;
   // Caller looked up by their phone number (caller ID) at call start, so tools
   // answer instantly and Erica can greet them by name. null = not recognized.
   private prefetch: {
@@ -780,6 +796,8 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           this.session.requestGreeting();
           // G2: arm the silence watchdog now that the call is live.
           this.startSilenceWatchdog();
+          // G3: arm the max-call-duration cap now that the call is live.
+          this.startDurationCap();
           logger.info(
             { streamSid: this.streamSid },
             '🎙️ Waiting for caller audio...'
@@ -1034,6 +1052,94 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         // during that drain itself.
         void this.endCallNow('silence — no response after check-in');
       }, 4000);
+    }
+  }
+
+  /**
+   * G3: arm the max-call-duration cap. Two one-shot timers off the same
+   * clock as the silence watchdog's start: a background-only nudge at
+   * MAX_CALL_MINUTES - 60s, then the hard cap at MAX_CALL_MINUTES.
+   */
+  private startDurationCap() {
+    const capMs = env.MAX_CALL_MINUTES * 60 * 1000;
+    const warningMs = Math.max(0, capMs - 60000);
+    this.durationWarningTimer = setTimeout(
+      () => this.fireDurationWarning(),
+      warningMs
+    );
+    this.durationCapTimer = setTimeout(() => this.fireDurationCap(), capMs);
+  }
+
+  /**
+   * G3: cap - 60s. Context ONLY — no requestResponse(), so this never
+   * interrupts a turn in progress. Erica sees the nudge next time she
+   * generates a response and wraps up naturally after the current request.
+   */
+  private fireDurationWarning() {
+    if (this.closed) return;
+    logger.info({ streamSid: this.streamSid }, '⏳ duration warning');
+    this.session.injectContext(
+      'BACKGROUND (do not read aloud as-is): we are near the call time limit. Wrap up naturally after finishing the current request — do not mention a time limit to the caller.'
+    );
+  }
+
+  /**
+   * G3: the hard cap. Never kill an in-flight booking write — if a tool call
+   * is running, poll for up to 15s and proceed as soon as it resolves (or the
+   * ceiling hits) before saying goodbye and hanging up.
+   */
+  private fireDurationCap() {
+    if (this.closed || this.transferring) return;
+    logger.info({ streamSid: this.streamSid }, '⏳ duration cap hangup');
+    this.waitForToolCallsThenSayGoodbye(Date.now());
+  }
+
+  /** G3: recheck toolCallsInFlight every 500ms, up to a 15s ceiling. */
+  private waitForToolCallsThenSayGoodbye(startedAt: number) {
+    if (this.closed) return;
+    if (this.toolCallsInFlight > 0 && Date.now() - startedAt < 15000) {
+      this.durationCapToolWaitTimer = setTimeout(
+        () => this.waitForToolCallsThenSayGoodbye(startedAt),
+        500
+      );
+      return;
+    }
+    this.durationCapToolWaitTimer = undefined;
+    this.sayDurationCapGoodbye();
+  }
+
+  /**
+   * G3: one short goodbye, then a grace window (mirrors the silence
+   * watchdog's post-goodbye grace) for it to actually generate + play before
+   * the hangup fires.
+   */
+  private sayDurationCapGoodbye() {
+    if (this.closed) return;
+    this.session.injectContext(
+      'BACKGROUND (do not read aloud as-is): we are at the call time limit. Say ONE short goodbye — e.g. "I have to hop off — call us back anytime and we\'ll pick up right where we left off!" — nothing else.'
+    );
+    this.session.requestResponse();
+    this.durationCapGraceTimer = setTimeout(() => {
+      this.durationCapGraceTimer = undefined;
+      void this.hangupForDurationCap();
+    }, 4000);
+  }
+
+  /**
+   * G3: unlike the silence hangup, caller speech during the goodbye does NOT
+   * cancel the cap — it's hard. endCallNow's own bargeInEpoch check can still
+   * abort the REST hangup if the caller talks during its drain; if so, the
+   * cap is still exceeded, so retry once after a short delay.
+   */
+  private async hangupForDurationCap() {
+    if (this.closed) return;
+    const result = await this.endCallNow('duration cap');
+    if (result.status === 'aborted') {
+      this.durationCapRetryTimer = setTimeout(() => {
+        this.durationCapRetryTimer = undefined;
+        if (this.closed) return;
+        void this.endCallNow('duration cap');
+      }, 2000);
     }
   }
 
@@ -2331,6 +2437,27 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     if (this.silenceHangupTimer) {
       clearTimeout(this.silenceHangupTimer);
       this.silenceHangupTimer = undefined;
+    }
+    // G3: stop the duration-cap timers — nothing left to warn / hang up on.
+    if (this.durationWarningTimer) {
+      clearTimeout(this.durationWarningTimer);
+      this.durationWarningTimer = undefined;
+    }
+    if (this.durationCapTimer) {
+      clearTimeout(this.durationCapTimer);
+      this.durationCapTimer = undefined;
+    }
+    if (this.durationCapToolWaitTimer) {
+      clearTimeout(this.durationCapToolWaitTimer);
+      this.durationCapToolWaitTimer = undefined;
+    }
+    if (this.durationCapGraceTimer) {
+      clearTimeout(this.durationCapGraceTimer);
+      this.durationCapGraceTimer = undefined;
+    }
+    if (this.durationCapRetryTimer) {
+      clearTimeout(this.durationCapRetryTimer);
+      this.durationCapRetryTimer = undefined;
     }
     // Persist the call end exactly once, and only if the call actually started
     // (a socket that closed before Twilio's "start" never wrote a start record).

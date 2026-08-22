@@ -114,7 +114,7 @@ check in once, then end the call.
 follows, and caller speech resets the clock; existing barge-in tests untouched
 and green.
 
-## G3 — [ ] Max call duration cap (P1, code)
+## G3 — [x] Max call duration cap (P1, code) (implemented, awaiting Fable review/commit)
 **Why:** nothing bounds call length — a chatty/malicious caller burns Realtime
 tokens indefinitely (worse under the 40k TPM freeze, RT-5). Professional
 systems hard-cap session length.

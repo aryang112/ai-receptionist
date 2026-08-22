@@ -3,6 +3,138 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-21 — G3 IMPLEMENTED (worker agent): max call duration cap
+Implemented `tasks/agent_queue.md` G3 exactly (P1, code). Root cause: nothing
+bounded call length — a chatty/malicious caller could burn Realtime tokens
+indefinitely (worse under the 40k TPM freeze, B3). Standard professional
+voice-system pattern: hard-cap session length with a warned wrap-up first.
+Built entirely on G2's shared primitives (`endCallNow()`, `injectContext()` +
+`requestResponse()`, `toolCallsInFlight`) — no new session-config surface, no
+`openaiSession.ts` changes at all.
+- **Two one-shot timers, armed alongside the silence watchdog** —
+  `startDurationCap()` is called in the Twilio `'start'` handler right after
+  `this.startSilenceWatchdog()`. `setTimeout`s (not `setInterval`, since both
+  fire exactly once): `durationWarningTimer` at `MAX_CALL_MINUTES*60_000 -
+  60_000` and `durationCapTimer` at `MAX_CALL_MINUTES*60_000`. Both cleared in
+  `cleanup()` (plus 3 more timers below), so a call that ends earlier for any
+  other reason never fires a stray warning/hangup afterward.
+- **Warning (cap − 60s), verbatim:**
+  ```ts
+  private fireDurationWarning() {
+    if (this.closed) return;
+    logger.info({ streamSid: this.streamSid }, '⏳ duration warning');
+    this.session.injectContext(
+      'BACKGROUND (do not read aloud as-is): we are near the call time limit. Wrap up naturally after finishing the current request — do not mention a time limit to the caller.'
+    );
+  }
+  ```
+  `injectContext` ONLY — no `requestResponse()` call at all, so this can
+  never interrupt a turn already in progress (spec requirement). Erica picks
+  it up next time she generates a response.
+- **Cap branch — tool-grace, then goodbye, then hangup, verbatim:**
+  ```ts
+  private fireDurationCap() {
+    if (this.closed || this.transferring) return;
+    logger.info({ streamSid: this.streamSid }, '⏳ duration cap hangup');
+    this.waitForToolCallsThenSayGoodbye(Date.now());
+  }
+
+  private waitForToolCallsThenSayGoodbye(startedAt: number) {
+    if (this.closed) return;
+    if (this.toolCallsInFlight > 0 && Date.now() - startedAt < 15000) {
+      this.durationCapToolWaitTimer = setTimeout(
+        () => this.waitForToolCallsThenSayGoodbye(startedAt),
+        500
+      );
+      return;
+    }
+    this.durationCapToolWaitTimer = undefined;
+    this.sayDurationCapGoodbye();
+  }
+
+  private sayDurationCapGoodbye() {
+    if (this.closed) return;
+    this.session.injectContext(
+      'BACKGROUND (do not read aloud as-is): we are at the call time limit. Say ONE short goodbye — e.g. "I have to hop off — call us back anytime and we\'ll pick up right where we left off!" — nothing else.'
+    );
+    this.session.requestResponse();
+    this.durationCapGraceTimer = setTimeout(() => {
+      this.durationCapGraceTimer = undefined;
+      void this.hangupForDurationCap();
+    }, 4000);
+  }
+
+  private async hangupForDurationCap() {
+    if (this.closed) return;
+    const result = await this.endCallNow('duration cap');
+    if (result.status === 'aborted') {
+      this.durationCapRetryTimer = setTimeout(() => {
+        this.durationCapRetryTimer = undefined;
+        if (this.closed) return;
+        void this.endCallNow('duration cap');
+      }, 2000);
+    }
+  }
+  ```
+  Added a `this.transferring` guard on `fireDurationCap` itself (not spec'd
+  verbatim, but the same guard `tickSilenceWatchdog` already uses, and G2's
+  own `endCallNow`/`handleTransferToOwner` comments call out the
+  double-redirect hazard of two hangup paths racing) — the cap simply steps
+  aside if an owner transfer is already underway rather than adding a second
+  hangup attempt on top of it.
+  - **Tool-in-flight grace:** `waitForToolCallsThenSayGoodbye` re-polls every
+    500ms, up to a 15s ceiling from when the cap fired — never says goodbye
+    while a Phorest write (e.g. `book_appointment`) is still in flight, per
+    spec.
+  - **Goodbye + grace:** same `injectContext` + `requestResponse()` pair as
+    G2's check-in/goodbye, then a 4000ms grace timer (mirrors G2's silence-
+    hangup grace) before calling `endCallNow('duration cap')`.
+  - **Hard cap, not cancellable by caller speech:** unlike G2's silence
+    hangup, nothing here reads `lastActivityAt`/`bargeInEpoch` to abort on
+    caller speech during the grace window — the cap is deliberately
+    unconditional. The one place caller speech CAN interrupt it is inside
+    `endCallNow` itself (its own `bargeInEpoch` check after the playback
+    drain) — if that aborts, `hangupForDurationCap` retries `endCallNow` once
+    more after 2s, since the cap is still exceeded either way. (This retry
+    path isn't hit by the no-REST-client fallback branch the tests exercise —
+    it only matters once a real Twilio client + callSid are wired up, so it's
+    implemented per spec but not separately unit-tested; see note below.)
+- **Outcome preservation:** free — relies entirely on `endCallNow`'s existing
+  `if (this.outcome === 'none') this.outcome = 'completed'` guard (G2). No
+  new code needed; proven by a dedicated test (below).
+- **`cleanup()`:** clears all 5 new timers (`durationWarningTimer`,
+  `durationCapTimer`, `durationCapToolWaitTimer`, `durationCapGraceTimer`,
+  `durationCapRetryTimer`) alongside the existing silence-watchdog clears.
+- **Env var (NEW, `src/config/env.ts` + `.env.example`, existing pattern):**
+  `MAX_CALL_MINUTES` (default 10). `.env` itself not touched.
+- **NEW tests** — `src/tests/twilioStream.durationCap.test.ts` (5 tests, fake
+  timers, same mock scaffolding as `twilioStream.silenceWatchdog.test.ts`,
+  incl. the `callSid`-unset trick so `endCallNow` takes its synchronous
+  no-REST-client fallback — this is also why the aborted→retry path above
+  has no dedicated test, that mock harness can't reach the REST branch):
+  1. warning fires at cap−60s: `injectContext` called once (matches
+     `/time limit/i`), `requestResponse` NOT called, call not closed.
+  2. cap fires: goodbye `injectContext`/`requestResponse` pair fires
+     immediately (2nd `injectContext` call, matches `/goodbye/i`), call stays
+     open through the 4s grace, then closes with `outcome === 'completed'`.
+  3. `toolCallsInFlight = 1` at cap → goodbye deferred (only the earlier
+     warning has fired); resolving the tool a few seconds later lets the next
+     500ms poll tick proceed to the goodbye.
+  4. bonus: a tool that never resolves still gets its goodbye said once the
+     15s ceiling elapses (proves the ceiling is real, not just documentation).
+  5. a pre-set `outcome = 'booked'` survives the full cap→goodbye→hangup
+     flow unchanged (not overwritten to `'completed'`).
+- **Verified:** `npx tsc --noEmit` clean. `npm test` → **124/124** (was 119,
+  +5 new). `TZ=UTC npm test` → **124/124**. `git diff` on
+  `src/realtime/openaiSession.ts` is empty — no session-config or session-
+  class changes at all (G2 already supplied everything G3 needed).
+  `handleBargeIn()` doesn't appear anywhere in the `twilioStream.ts` diff —
+  confirmed byte-identical. `src/tests/twilioStream.bargein.test.ts` (5) and
+  `src/tests/twilioStream.silenceWatchdog.test.ts` (9) both still green,
+  untouched. `.env`, `business.json`, Phorest write paths untouched.
+- Marked `[x]` in `tasks/agent_queue.md` with "(implemented, awaiting Fable
+  review/commit)" — this worker did not commit or push per instructions.
+
 ## 2026-08-21 — G2 IMPLEMENTED (worker agent): silence watchdog — check in once, then hang up
 Implemented `tasks/agent_queue.md` G2 exactly (P1, code). Root cause: live call
 2026-08-19 — after Erica went quiet the line sat in open-ended silence (dead air

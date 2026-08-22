@@ -34,6 +34,12 @@ export const env = {
   SILENCE_CHECKIN_MS: Number(process.env.SILENCE_CHECKIN_MS || 20000),
   SILENCE_HANGUP_MS: Number(process.env.SILENCE_HANGUP_MS || 15000),
 
+  // G3: hard cap on call length. At MAX_CALL_MINUTES - 60s Erica gets a
+  // background-only nudge to wrap up; at MAX_CALL_MINUTES she says one
+  // goodbye and the call ends via the shared hangup path — bounds Realtime
+  // token spend against a chatty/malicious caller (worse under the TPM freeze).
+  MAX_CALL_MINUTES: Number(process.env.MAX_CALL_MINUTES || 10),
+
   // Twilio
   TWILIO_NUMBER: process.env.TWILIO_NUMBER || '',
   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID || '',
