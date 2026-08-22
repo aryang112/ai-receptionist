@@ -460,6 +460,12 @@ export class OpenAIRealtimeSession {
           { eventType: event.type, itemId: event.item_id },
           'Speech started (VAD) — barge-in'
         );
+        // B2: new caller speech makes any pending RT-5 failed-response retry
+        // stale — without this, a bare `response.create` could fire up to 10s
+        // later and resume an OLD task (with tool access) against whatever the
+        // caller has said since. server_vad already creates a fresh response
+        // for this new turn, so dropping the stale retry is safe.
+        this.clearFailedRetry();
         this.handlers.onSpeechStarted?.();
         break;
       }

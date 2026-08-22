@@ -158,7 +158,7 @@ the note.
 stays 103 here; no literal example sentence containing a re-askable question
 remains in the note; paste new note text in state.md.
 
-## B2 — [ ] Stale RT-5 retry executes writes against switched intent (P0, code + prompt)
+## B2 — [x] Stale RT-5 retry executes writes against switched intent (P0, code + prompt) (implemented, awaiting Fable review/commit)
 **Why (observed):** caller asked to reschedule to 4:30 → response FAILED (TPM).
 While retries churned, caller said "why don't you just cancel it". A pending
 RT-5 retry fired at 394s and the resumed response called

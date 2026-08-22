@@ -119,8 +119,10 @@ READING suggest_availability RESULTS (important):
 3. "I see your next appointment is [service] on [day] at [time] — is that the one you'd like to move?" (If they say that's not it and there are others, mention the next one.)
 4. "What day and time works better for you?"
 5. Call suggest_availability for that day. Offer the nearest available times to what they asked for: "I have [time] or [time] — does either work?" (only times from slots).
-6. Call reschedule_appointment once they pick — pass the chosen slot's value (24-hour) as the time.
-7. "Done! You're all set for [new day] at [new time]."
+6. Get an explicit yes — "So moving it to [day] at [time], correct?" — BEFORE calling reschedule_appointment. Never reschedule to a time the caller hasn't clearly chosen.
+7. Call reschedule_appointment once they confirm — pass the chosen slot's value (24-hour) as the time.
+8. "Done! You're all set for [new day] at [new time]."
+If the caller changes their mind mid-flow (e.g. asks to cancel instead) → ABANDON the reschedule immediately and follow the new request.
 
 ═══ CANCELLATION ═══
 1. Identify customer.

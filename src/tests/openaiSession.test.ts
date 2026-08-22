@@ -157,6 +157,37 @@ describe('RT-5 failed-response retry', () => {
   });
 });
 
+describe('B2 stale RT-5 retry cleared on new caller speech', () => {
+  beforeEach(() => vi.useFakeTimers());
+
+  it('clears a pending failed-response retry when the caller starts speaking again, so it never fires', async () => {
+    const { session, sent } = buildSession();
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_1' },
+    });
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_1', status: 'failed' },
+    });
+    // Retry scheduled but not yet fired.
+    expect(types(sent)).toEqual([]);
+
+    // Caller speaks again (e.g. switches intent) before the retry timer
+    // elapses — this must invalidate the pending retry (B2).
+    await fire(session, {
+      type: 'input_audio_buffer.speech_started',
+      item_id: 'item_new',
+    });
+
+    // Advance well past when the stale retry would have fired (max delay is
+    // capped at 10s in scheduleFailedRetry).
+    vi.advanceTimersByTime(11000);
+    expect(types(sent)).toEqual([]);
+    vi.useRealTimers();
+  });
+});
+
 describe('RT-7 stray-delta gating after barge-in', () => {
   it('drops audio deltas carrying the cancelled response id, then re-arms on next response.created', async () => {
     const onAudioChunk = vi.fn();

@@ -3,6 +3,41 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-21 — B2 FIXED (worker agent): stale RT-5 retry executes writes against switched intent
+Implemented `tasks/agent_queue.md` B2 exactly (P0, code + prompt). Root cause:
+`clearFailedRetry()` was only called on close/cleanup, so a scheduled RT-5 retry
+(`response.create`, up to 10s later) could fire AFTER the caller switched intent
+mid-call (e.g. "reschedule" → "actually cancel it") and resume the OLD task with
+tool access — this is exactly what moved Aryan's real appt to Aug 20 4:00 PM
+without consent in live call #3.
+- **(a) CODE** — `src/realtime/openaiSession.ts`, `input_audio_buffer.speech_started`
+  case: added `this.clearFailedRetry();` (with a comment) right after the log
+  line, before `this.handlers.onSpeechStarted?.()`. New caller speech now
+  invalidates any pending stale retry; server_vad's default `create_response:true`
+  still creates a fresh response for the new turn, so nothing is lost. No
+  `session.update` shape change — this is a plain method call in app code.
+- **(b) PROMPT** — `src/realtime/twilioStream.ts` `buildInstructions()`,
+  RESCHEDULING section: inserted an explicit-consent gate before the tool call
+  (mirrors the CANCELLATION flow's existing "get an explicit yes" step) and an
+  abandon-on-mind-change rule. Renumbered steps 6→8. New/changed lines:
+  - step 6 (new): `Get an explicit yes — "So moving it to [day] at [time],
+    correct?" — BEFORE calling reschedule_appointment. Never reschedule to a
+    time the caller hasn't clearly chosen.`
+  - step 7 (was 6, reworded): `Call reschedule_appointment once they confirm —
+    pass the chosen slot's value (24-hour) as the time.`
+  - new trailing line: `If the caller changes their mind mid-flow (e.g. asks to
+    cancel instead) → ABANDON the reschedule immediately and follow the new
+    request.`
+- **NEW test** — `src/tests/openaiSession.test.ts`, describe block "B2 stale
+  RT-5 retry cleared on new caller speech": schedules a failed-response retry,
+  fires `input_audio_buffer.speech_started`, advances fake timers 11s (past the
+  10s retry cap), asserts zero messages were sent (no stale `response.create`).
+- **Verified:** `npx tsc --noEmit` clean. `npm test` → **104/104** (was 103,
+  +1 new). `TZ=UTC npm test` → **104/104**. Barge-in tests (`twilioStream.bargein.test.ts`)
+  untouched and green; `handleBargeIn`/`markQueue`/`bargeInEpoch` not touched.
+- Marked `[x]` in `tasks/agent_queue.md` (awaiting Fable review/commit — this
+  worker did not commit or push per instructions).
+
 ## 2026-08-19 — 📞 Live test round 2: barge-in ✅ + two UX changes shipped
 Live call (ngrok, real Phorest): barge-in/interrupt confirmed smooth by Aryan.
 Two behavior changes implemented same session (tsc clean, 103/103 vitest):
