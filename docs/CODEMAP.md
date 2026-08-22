@@ -27,10 +27,21 @@ Caller dials Twilio number
   `handleLogRunningLate`, `handleTransferToOwner`), barge-in (mark/clear/truncate),
   outbound audio to Twilio, and **`warmCallerContext`** (caller-ID prefetch +
   `injectContext`). The per-call `prefetch` field caches the recognized caller.
+  Also (2026-08-21): **silence watchdog** (`startSilenceWatchdog`/`tickSilenceWatchdog`
+  — 20s mutual silence → one check-in, +15s → goodbye + hangup; guards:
+  sessionReady/toolCallsInFlight/transferring/markQueue), **duration cap**
+  (`startDurationCap` — warn at cap−60s, goodbye+hangup at cap, ≤15s in-flight-tool
+  grace), shared **`endCallNow(reason)`** hangup core (drain + REST + bargeInEpoch
+  abort; `handleEndCall` is a thin wrapper), `registerTrackedTool` (counts
+  `toolCallsInFlight`), prompt sections CONVERSATION POLICY (G1) + reschedule
+  consent gate (B2b).
 - **openaiSession.ts** — `OpenAIRealtimeSession`: WS connect (GA, no beta header),
   `configureSession` (GA nested schema: g711_ulaw, server_vad, noise_reduction,
   truncation.retention_ratio), event loop (`handleEvent`), tool-call buffering,
-  `injectContext`, `requestGreeting`, `truncateActiveResponse` (barge-in), latency +
+  `injectContext`, `requestGreeting`, **`requestResponse()`** (guarded response.create
+  — the ONLY safe out-of-band speech trigger; use with `injectContext`),
+  `truncateActiveResponse` (barge-in), RT-5 retry (cleared on speech_started — B2;
+  capped at 2 consecutive, reset on success/speech — B3), latency +
   token + TPM logging, crash-safe sends. **Validate any new session field vs the live API.**
 - **audio.ts** — DELETED (g711 passthrough replaced it).
 
@@ -65,14 +76,18 @@ Caller dials Twilio number
 
 ## src/config/
 - **env.ts** — all env (model, voice, VAD knobs `OPENAI_VAD_*`, `OPENAI_NOISE_REDUCTION`,
-  `SERVICE_CACHE_TTL_HOURS`, Phorest creds, `OWNER_PHONE`). Defaults are sensible.
+  `SERVICE_CACHE_TTL_HOURS`, Phorest creds, `OWNER_PHONE`, `SILENCE_CHECKIN_MS`/
+  `SILENCE_HANGUP_MS` (20s/15s watchdog), `MAX_CALL_MINUTES` (10)). Defaults are sensible.
 - **business.json** — salon hours per weekday + closedDates. **Do not change casually.**
 
-## src/tests/  (vitest, 103 tests)
+## src/tests/  (vitest, 124 tests)
 phorest.client.test.ts (URL/range/client_id/timezone/retry regressions),
 hours.test.ts, booking.alias/match.test.ts, slots.test.ts (clean-grid snapping),
 wsAuth, middleware, twilioStream.bargein/contracts, phorest.mock/selector,
-appointment(.validation), twilio.route.
+appointment(.validation), twilio.route, openaiSession.test.ts (RT-5 retry, B2
+stale-retry clear, B3 retry cap, requestResponse guard),
+twilioStream.silenceWatchdog.test.ts (9, fake timers),
+twilioStream.durationCap.test.ts (5, fake timers).
 
 ## scripts/  (read-only diagnostics + ops)
 inspect-appointment.ts, list-services.ts, check-availability.ts, test-appt-filter.ts,
@@ -87,4 +102,6 @@ drains goodbye audio, aborts if the caller barges in mid-goodbye).
 
 ## Log markers to grep
 `⏱` per-turn latency + tool durations · `📊` token usage + cache-hit% · `⚖️` TPM remaining
-· `🗣️ ERICA SAID` / `USER SAID` transcripts · `🗓️ Booking state after create` · `📞`/`☎️` call start/end.
+/ retry budget exhausted · `🗣️ ERICA SAID` / `USER SAID` transcripts · `🗓️ Booking state
+after create` · `📞`/`☎️` call start/end · `🤫` silence check-in/hangup · `⏳` duration
+warning/cap hangup.

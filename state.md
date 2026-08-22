@@ -3,7 +3,31 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
-## 2026-08-21 — G3 IMPLEMENTED (worker agent): max call duration cap
+## 2026-08-21 — ✅ QUEUE COMPLETE (Fable orchestrator + Sonnet workers): all 6 tasks shipped
+The overnight run never executed (0 commits, queue untouched) — re-run today as
+Fable-orchestrated Sonnet workers, one per task, sequential, Fable reviewing
+every diff and committing after approval. Order: B2 → B3 → B1 → G1 → G2 → G3.
+- **B2** `4795acc` — speech_started clears stale RT-5 retry; reschedule consent gate (104 tests)
+- **B3** `5132e36` — consecutive RT-5 retries capped at 2; reset on success + speech (107)
+- **B1** `a6a2d37` — parrotable example removed from recognized-caller note (107)
+- **G1** `deeb814` — CONVERSATION POLICY prompt block (never go mute) (107)
+- **G2** `12b9ccc` — silence watchdog 20s check-in → goodbye → hangup; endCallNow()
+  refactor; requestResponse(); toolCallsInFlight. One review rejection: worker
+  dead-dropped without the spec'd goodbye — fixed on resubmit (119)
+- **G3** `9e3d2c0` — MAX_CALL_MINUTES cap (10m): warn at −60s, goodbye + hangup,
+  ≤15s tool grace, outcome preserved (124)
+**Final: 124/124 green (was 103), also TZ=UTC; tsc clean.**
+STILL OPEN (owner, Aryan): raise the OpenAI TPM tier (platform.openai.com →
+Limits) — B3's structural fix; prompt-trim (todo.md 3.4) also still open.
+**Morning live-test checklist:**
+1. Say "don't interrupt me" → Erica stays polite + responsive, never mute (G1)
+2. Open with a service request → after "is this Aryan?", she continues it without re-asking (B1)
+3. Reschedule → explicit "yes" before write; switching to "cancel" mid-flow abandons it (B2)
+4. Go silent → "are you still there?" ~20s; stay quiet → goodbye + hangup ~35-39s.
+   Hanging up before 40s is CORRECT (G2)
+5. Finish a booking, "no, I'm good" → goodbye + hangup (existing end_call)
+6. Barge-in still snappy; normal booking unaffected
+7. Long call → wrap-up steer at 9m, goodbye + hangup at 10m (G3)
 Implemented `tasks/agent_queue.md` G3 exactly (P1, code). Root cause: nothing
 bounded call length — a chatty/malicious caller could burn Realtime tokens
 indefinitely (worse under the 40k TPM freeze, B3). Standard professional
