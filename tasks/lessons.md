@@ -142,3 +142,12 @@ best-effort side effect backs a SPOKEN claim, grep dev.log for its warn line
 ("Failed to add appointment note") during every live test — a swallowed error
 is invisible on the phone. And per the standing lesson: validate ANY new/renamed
 Phorest field against the live API, not the docs.
+
+## 📝 Phorest appointment notes are write-only — no delete/edit endpoint (2026-08-21)
+Probed live: `/appointment/{id}/note` supports ONLY POST (GET/PUT/DELETE all
+return 500 "Request method not supported"), POST with an empty `serviceNote`
+400s, and the `notes` field on the appointment-update PUT is silently ignored
+(200, version bumps, note unchanged). So a note, once written, cannot be
+removed or blanked via the third-party API — the only clean slate is
+cancel-and-recreate the appointment. Don't burn time retrying verbs on the
+note endpoint.
