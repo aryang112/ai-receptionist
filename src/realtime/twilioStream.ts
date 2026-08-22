@@ -658,61 +658,103 @@ export class TwilioRealtimeCall {
     if (!callerPhone) return;
     try {
       // Don't let a cold lookup delay the greeting (normally instant — the phone
-      // index is warmed at boot — but cap it just in case).
+      // index is warmed at boot — but cap it just in case). The lookup keeps
+      // running past the cap; see the late-recognition continuation below.
+      const lookup = phorest
+        .lookupCustomerByPhone(callerPhone)
+        .catch(() => null);
+      let timedOut = false;
       const customer = await Promise.race<CustomerResult | null>([
-        phorest.lookupCustomerByPhone(callerPhone).catch(() => null),
-        new Promise((r) => setTimeout(() => r(null), 700)),
+        lookup,
+        new Promise((r) =>
+          setTimeout(() => {
+            timedOut = true;
+            r(null);
+          }, 700)
+        ),
       ]);
       if (!customer) {
         logger.info(
-          { tool: 'prefetch' },
-          'Caller ID not recognized — normal flow'
+          { tool: 'prefetch', timedOut },
+          timedOut
+            ? 'Caller ID lookup still in flight at greeting cap — will upgrade if it lands'
+            : 'Caller ID not recognized — normal flow'
         );
-        // We have the caller's number (caller ID) but no Phorest match. Let Erica
-        // offer that number later instead of asking cold. (Raw number is NOT
-        // logged — only injected into the model's private context.)
+        // We have the caller's number (caller ID) but no Phorest match (yet).
+        // Let Erica offer that number later instead of asking cold. (Raw number
+        // is NOT logged — only injected into the model's private context.)
         this.pendingCallerContext = `We could not match this caller ID, so greet them normally and ask what they need. If you later need a phone number for their file, offer the one they're calling from — "Is the number you're calling from the best one for your file?" — rather than asking cold.`;
+        if (timedOut) {
+          // Seen live 2026-08-21: a call seconds after boot races the client
+          // phone-index build (~5s for 4k clients) and the 700ms cap loses by
+          // milliseconds, so a known client got the stranger flow. When the
+          // real lookup lands, upgrade the call — unless it already matched
+          // another way meanwhile.
+          void lookup.then((late) => {
+            if (!late || this.closed || this.prefetch) return;
+            this.adoptRecognizedCaller(late, callerPhone, { late: true });
+            if (this.sessionReady) this.applyCallerContext();
+          });
+        }
         return;
       }
-      // Prefer the phone Phorest has on the account; fall back to the caller ID
-      // we dialed in with. Normalized to 10 digits (strip leading 1) so it's the
-      // canonical form the booking path expects — never a fabricated number.
-      const prefetchPhone =
-        this.normalizePhone(customer.phone) ?? this.normalizePhone(callerPhone);
-      this.prefetch = {
-        clientId: customer.clientId,
-        firstName: customer.firstName,
-        lastName: customer.lastName,
-        ...(prefetchPhone ? { phone: prefetchPhone } : {}),
-        appointments: null,
-      };
-      this.clientNames.set(
-        customer.clientId,
-        `${customer.firstName} ${customer.lastName}`.trim()
-      );
-      logger.info(
-        { tool: 'prefetch', clientId: customer.clientId },
-        'Caller recognized by phone — warming context'
-      );
-      // Warm their upcoming appointments so reschedule/cancel is instant later.
-      phorest
-        .listAppointments(customer.clientId)
-        .then((appts) => {
-          if (this.prefetch) this.prefetch.appointments = appts;
-          // These appointments have now been surfaced to this call — allow
-          // cancel/reschedule against them (ownership guard).
-          for (const a of appts) this.servedAppointmentIds.add(a.appointmentId);
-        })
-        .catch(() => {});
-      // Tell Erica who's calling (the looked-up name, not a hardcoded one).
-      const fullName = `${customer.firstName} ${customer.lastName}`.trim();
-      this.pendingCallerContext = `BACKGROUND (do not read aloud): the number this caller is phoning from matches an existing client on file — ${customer.firstName} (full name ${fullName}). Open with your STANDARD greeting EXACTLY as written (salon name + the recording notice + "How can I help you today?") — do NOT say their name in the greeting, do NOT say "I see you're calling from…", and do NOT announce that you recognize the number. Greeting someone by name before they've said a word feels surveillant, so don't. Then STOP and WAIT for them to say what they need. When they state their FIRST request, acknowledge it and confirm who you're talking to in the same breath — e.g. "Of course! And just to confirm — is this ${customer.firstName}?" Confirm identity ONCE only, at that moment — never re-ask, and never confirm before they've said what they need.
-- If they say YES: greet them by first name and continue DIRECTLY with the request they already stated — ask only for whatever detail is still missing (day/time, etc.), never re-ask something they already told you (service, intent). Do NOT ask for their phone number and NEVER read a phone number aloud — the system already has their account. When you need their details, call lookup_customer with NO arguments (it returns this account instantly — no second lookup). When you book for them you do NOT need a phone number — just book with their name; the system attaches their account (clientId) automatically. Use their first name naturally where it fits (e.g. "You're all set, ${customer.firstName}!").
-- If they say NO (someone else is calling from this number): keep it light — "Oh, no problem!" — ask for THEIR name, and help them as their own person. Do NOT book them under ${customer.firstName}'s account, and do NOT mention ${customer.firstName}'s name again or any of their details.
-Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assume why they're calling until they clearly say so.`;
+      this.adoptRecognizedCaller(customer, callerPhone);
     } catch {
       this.prefetch = null; // graceful: behave exactly as today (ask for phone)
     }
+  }
+
+  /**
+   * Adopt a caller-ID-matched client: cache the record, warm their
+   * appointments, and stage the context note for injection. `late` means the
+   * match resolved after the 700ms greeting cap (boot-time index race) — Erica
+   * has already greeted, so the note must weave in, not script the greeting.
+   */
+  private adoptRecognizedCaller(
+    customer: CustomerResult,
+    callerPhone: string,
+    opts: { late?: boolean } = {}
+  ) {
+    // Prefer the phone Phorest has on the account; fall back to the caller ID
+    // we dialed in with. Normalized to 10 digits (strip leading 1) so it's the
+    // canonical form the booking path expects — never a fabricated number.
+    const prefetchPhone =
+      this.normalizePhone(customer.phone) ?? this.normalizePhone(callerPhone);
+    this.prefetch = {
+      clientId: customer.clientId,
+      firstName: customer.firstName,
+      lastName: customer.lastName,
+      ...(prefetchPhone ? { phone: prefetchPhone } : {}),
+      appointments: null,
+    };
+    this.clientNames.set(
+      customer.clientId,
+      `${customer.firstName} ${customer.lastName}`.trim()
+    );
+    logger.info(
+      { tool: 'prefetch', clientId: customer.clientId, late: !!opts.late },
+      'Caller recognized by phone — warming context'
+    );
+    // Warm their upcoming appointments so reschedule/cancel is instant later.
+    phorest
+      .listAppointments(customer.clientId)
+      .then((appts) => {
+        if (this.prefetch) this.prefetch.appointments = appts;
+        // These appointments have now been surfaced to this call — allow
+        // cancel/reschedule against them (ownership guard).
+        for (const a of appts) this.servedAppointmentIds.add(a.appointmentId);
+      })
+      .catch(() => {});
+    // Tell Erica who's calling (the looked-up name, not a hardcoded one).
+    const fullName = `${customer.firstName} ${customer.lastName}`.trim();
+    if (opts.late) {
+      this.pendingCallerContext = `BACKGROUND (do not read aloud): UPDATE — the number this caller is phoning from has NOW been matched to an existing client on file: ${customer.firstName} (full name ${fullName}). The match arrived after your greeting, so weave it in naturally from here. If they already told you a DIFFERENT name, ignore this match entirely and continue as you were. Otherwise, if you haven't yet confirmed who they are, confirm ONCE at the next natural moment — "And just to confirm — is this ${customer.firstName}?" Once confirmed: do NOT ask for their phone number and NEVER read a phone number aloud — the system already has their account. If they were mid-way through giving you a number, a warm "actually, I've just found your file — no number needed!" is perfect. When you need their details, call lookup_customer with NO arguments (it returns this account instantly). When you book for them you do NOT need a phone number — just book with their name; the system attaches their account (clientId) automatically. Never re-ask anything they already told you.`;
+      return;
+    }
+    this.pendingCallerContext = `BACKGROUND (do not read aloud): the number this caller is phoning from matches an existing client on file — ${customer.firstName} (full name ${fullName}). Open with your STANDARD greeting EXACTLY as written (salon name + the recording notice + "How can I help you today?") — do NOT say their name in the greeting, do NOT say "I see you're calling from…", and do NOT announce that you recognize the number. Greeting someone by name before they've said a word feels surveillant, so don't. Then STOP and WAIT for them to say what they need. When they state their FIRST request, acknowledge it and confirm who you're talking to in the same breath — e.g. "Of course! And just to confirm — is this ${customer.firstName}?" Confirm identity ONCE only, at that moment — never re-ask, and never confirm before they've said what they need.
+- If they say YES: greet them by first name and continue DIRECTLY with the request they already stated — ask only for whatever detail is still missing (day/time, etc.), never re-ask something they already told you (service, intent). Do NOT ask for their phone number and NEVER read a phone number aloud — the system already has their account. When you need their details, call lookup_customer with NO arguments (it returns this account instantly — no second lookup). When you book for them you do NOT need a phone number — just book with their name; the system attaches their account (clientId) automatically. Use their first name naturally where it fits (e.g. "You're all set, ${customer.firstName}!").
+- If they say NO (someone else is calling from this number): keep it light — "Oh, no problem!" — ask for THEIR name, and help them as their own person. Do NOT book them under ${customer.firstName}'s account, and do NOT mention ${customer.firstName}'s name again or any of their details.
+Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assume why they're calling until they clearly say so.`;
   }
 
   /** Inject the caller context prepared by prepareCallerContext (session must be open). */
