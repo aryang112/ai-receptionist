@@ -57,8 +57,15 @@ export const TOOL_SCHEMAS = {
   transfer_to_owner: z.object({
     reason: z.string(),
   }),
-  // Argless by design — a hangup must never fail on argument validation.
-  end_call: z.object({}),
+  // S1: optional `reason` tags WHY the call ended ('spam' decline vs the
+  // default 'done' caller-confirmed hangup) — MUST mirror TOOL_DEFINITIONS
+  // (lessons.md F1: a one-sided add gets silently stripped by zod
+  // strip-mode). Still effectively "must never fail" in practice: the
+  // handler (handleEndCall) treats any parse failure as a normal hangup
+  // rather than blocking it with an error — see twilioStream.ts.
+  end_call: z.object({
+    reason: z.enum(['done', 'spam']).optional(),
+  }),
 } as const;
 
 export type ToolName = keyof typeof TOOL_SCHEMAS;

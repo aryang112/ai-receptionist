@@ -46,3 +46,26 @@ describe('buildInstructions — VACATION', () => {
     expect(instructions).not.toContain('VACATION');
   });
 });
+
+// S1: a new SPAM & TELEMARKETING section between CONVERSATION POLICY and
+// GENERAL RULES — the decline-then-end_call('spam') guidance for scam/
+// telemarketing calls.
+describe('buildInstructions — SPAM & TELEMARKETING (S1)', () => {
+  it('includes the section with the decline line and the end_call(reason: spam) instruction', () => {
+    const instructions = buildInstructions();
+    expect(instructions).toContain('SPAM & TELEMARKETING');
+    expect(instructions).toMatch(/not interested/i);
+    expect(instructions).toMatch(/reason 'spam'/);
+    expect(instructions).toMatch(/never (transfer|engage)/i);
+  });
+
+  it('sits between CONVERSATION POLICY and GENERAL RULES', () => {
+    const instructions = buildInstructions();
+    const policyIdx = instructions.indexOf('CONVERSATION POLICY');
+    const spamIdx = instructions.indexOf('SPAM & TELEMARKETING');
+    const generalIdx = instructions.indexOf('GENERAL RULES');
+    expect(policyIdx).toBeGreaterThan(-1);
+    expect(spamIdx).toBeGreaterThan(policyIdx);
+    expect(generalIdx).toBeGreaterThan(spamIdx);
+  });
+});

@@ -200,6 +200,11 @@ After you finish helping with something (booking confirmed, question answered, c
 - "Don't interrupt me" / "stay quiet" → keep listening, respond briefly when they pause. NEVER go silent for the rest of the call.
 - Persistent abuse → one polite wrap-up, then end_call or transfer.
 
+═══ SPAM & TELEMARKETING ═══
+- Signs: a sales pitch for business services, "your Google/business listing," loans/solar/insurance/warranties, a robocall or recorded pitch, or asking for "the owner" to sell something.
+- Response: ONE polite decline — "Thanks, but we're not interested — have a good one!" — then call end_call with reason 'spam' in the SAME turn. Never transfer spam to Richa, never reveal her name/number/schedule, never engage with the pitch or answer its questions.
+- When unsure (could be a genuine vendor or a real business question) → treat as a normal caller; err toward NOT flagging.
+
 ═══ GENERAL RULES ═══
 - LET THE CALLER LEAD. After greeting, wait for them to say what they need. Never assume why they're calling, and never pull up appointments, prices, or availability until they've actually asked. If you didn't clearly hear a request, ask "Sorry, what can I help you with today?" and WAIT — do not guess and proceed.
 - Let the caller FINISH. Don't jump in during a short pause; only respond once they've clearly finished their thought.
@@ -412,10 +417,17 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'end_call',
     description:
-      'Hang up the call. Use ONLY after the caller has clearly confirmed they\'re done (e.g. they answered "no, I\'m good" to "Anything else I can help with?", or clearly said goodbye). Say ONE warm goodbye line FIRST, then call this in the same turn. Never call it mid-task or when the caller might still need something.',
+      'Hang up the call. Use ONLY after the caller has clearly confirmed they\'re done (e.g. they answered "no, I\'m good" to "Anything else I can help with?", or clearly said goodbye), OR to end a spam/telemarketing call right after your one polite decline line. Say ONE warm line FIRST (goodbye, or the spam decline), then call this in the same turn. Never call it mid-task or when the caller might still need something.',
     parameters: {
       type: 'object',
-      properties: {},
+      properties: {
+        reason: {
+          type: 'string',
+          enum: ['done', 'spam'],
+          description:
+            "Why the call is ending. Omit (or 'done') for a normal caller-confirmed hangup; use 'spam' when declining a spam/telemarketing call.",
+        },
+      },
       required: [],
     },
   },
@@ -2430,12 +2442,31 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
   }
 
   /**
-   * Gracefully hang up once the caller confirms they're done. Delegates the
-   * drain+REST work to endCallNow (G2) and maps its result back onto the
-   * exact tool-result shapes the model has always seen from this tool.
+   * Gracefully hang up once the caller confirms they're done (or right after
+   * the one-line spam decline). Delegates the drain+REST work to endCallNow
+   * (G2) and maps its result back onto the exact tool-result shapes the
+   * model has always seen from this tool.
+   *
+   * S1: optional `reason` ('done' | 'spam') tags the outcome. This tool was
+   * argless-by-design ("a hangup must never fail on argument validation" —
+   * toolSchemas.ts) — that invariant is preserved here: a parse failure
+   * (missing/garbage args) just falls through as a normal hangup instead of
+   * returning an error, same as before this task.
    */
-  private async handleEndCall(_args: unknown) {
-    const result = await this.endCallNow('caller confirmed done');
+  private async handleEndCall(args: unknown) {
+    const parsed = parseToolArgs('end_call', args ?? {});
+    const reason = parsed.success
+      ? (parsed.data as { reason?: 'done' | 'spam' }).reason
+      : undefined;
+    if (reason === 'spam') {
+      // Set BEFORE endCallNow runs so its `outcome === 'none' -> 'completed'`
+      // default (see endCallNow, both the no-REST-client fallback and the
+      // successful-hangup branch) never overwrites the spam tag.
+      this.outcome = 'spam';
+    }
+    const result = await this.endCallNow(
+      reason === 'spam' ? 'spam decline' : 'caller confirmed done'
+    );
     if (result.status === 'aborted') {
       return {
         aborted: true,

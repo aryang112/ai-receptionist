@@ -3,6 +3,148 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-22 — S1 IMPLEMENTED (worker agent)
+**Task:** Round 3 S1 — spam & telemarketer handling. Richa gets frequent
+scam/telemarketing calls (Google-listing scams, loan/solar/warranty pitches,
+robocalls). Erica must decline once, hang up, and TAG the call `'spam'` so
+S2 (next task, not this one) can block repeat offenders at the webhook.
+Implemented exactly per queue spec, nothing more.
+
+**Files changed:**
+- **`src/realtime/twilioStream.ts`**:
+  - New `═══ SPAM & TELEMARKETING ═══` prompt section, spliced between the
+    existing `═══ CONVERSATION POLICY ═══` and `═══ GENERAL RULES ═══`
+    sections inside `buildInstructions()` (verified positionally by a new
+    test — see below). Exact text (verbatim, 3 bullets + header):
+    ```
+    ═══ SPAM & TELEMARKETING ═══
+    - Signs: a sales pitch for business services, "your Google/business listing," loans/solar/insurance/warranties, a robocall or recorded pitch, or asking for "the owner" to sell something.
+    - Response: ONE polite decline — "Thanks, but we're not interested — have a good one!" — then call end_call with reason 'spam' in the SAME turn. Never transfer spam to Richa, never reveal her name/number/schedule, never engage with the pitch or answer its questions.
+    - When unsure (could be a genuine vendor or a real business question) → treat as a normal caller; err toward NOT flagging.
+    ```
+  - `TOOL_DEFINITIONS` → `end_call`: added an **optional** `reason` param
+    (`type: 'string', enum: ['done', 'spam']`, not in `required`) with a
+    short description. Description text also updated (one clause added) to
+    tell the model it may call `end_call` right after the spam decline line,
+    not just after a normal goodbye. This is a `session.update` `tools`
+    array SHAPE change (see ⚠️ note below).
+  - `handleEndCall(args: unknown)` (was `_args: unknown`, fully ignored):
+    now calls `parseToolArgs('end_call', args ?? {})`, reads
+    `reason` off the parsed data, and — **only when `reason === 'spam'`** —
+    sets `this.outcome = 'spam'` **before** calling `endCallNow(...)`. Every
+    other line of the function (the `endCallNow('caller confirmed done')`
+    call itself, and the `aborted`/`error`/`ended` result mapping) is
+    byte-identical to before. No change to `endCallNow` at all.
+- **`src/realtime/toolSchemas.ts`**: `TOOL_SCHEMAS.end_call` changed from
+  `z.object({})` to `z.object({ reason: z.enum(['done', 'spam']).optional() })`
+  — exact mirror of the `TOOL_DEFINITIONS` change (lessons.md F1: a one-sided
+  add gets silently stripped by zod strip-mode; this keeps them in sync).
+
+**Abort-path outcome decision (the judgment call the spec asked me to make
+explicitly):** I did **not** add any new logic to `endCallNow`'s aborted
+branch (fires when the caller speaks during the goodbye/decline-line drain —
+`this.bargeInEpoch !== epochAtRequest`). That branch has never touched
+`this.outcome` at all, in either direction — on abort it just returns
+`{status:'aborted'}` and leaves whatever `this.outcome` already was. Since
+`handleEndCall` now sets `this.outcome = 'spam'` **before** calling
+`endCallNow`, an abort simply leaves it at `'spam'` (nothing resets it) —
+which is what "preserve the existing semantics for everything except the new
+reason" means literally: the aborted path's semantics ARE "don't touch
+outcome," full stop, and that's unchanged. I considered explicitly resetting
+`outcome` back to `'none'` on abort per the spec's fallback instruction, but
+rejected it: (1) it would be *new* behavior the current code doesn't have for
+ANY reason value, not a preservation of existing semantics; (2) it's the
+correct outcome anyway — the model already judged this call as spam by
+calling `end_call({reason:'spam'})`; if the caller barges in and the hangup
+is aborted, the call keeps going, but it's still fundamentally a spam call
+that will very likely end via a normal `end_call` (or the duration cap)
+shortly after — at which point `endCallNow`'s `if (outcome === 'none')
+outcome = 'completed'` guard would otherwise downgrade a real spam verdict to
+a meaningless `'completed'`, exactly the kind of overwrite the whole task
+exists to prevent. So: on abort, `outcome` stays `'spam'` if it was already
+`'spam'`, unchanged in every other respect.
+
+**⚠️ session.update shape change:** the `tools` array now carries one
+additional optional param (`end_call.reason`) — per the hard constraint,
+prompt-text changes are safe but a `tools` schema addition is the one
+allowed-but-risky category. **The first live call after deploy must confirm
+the greeting still plays** (= OpenAI accepted the new `session.update`
+without rejecting the whole session). If the greeting doesn't play / the
+call hangs up instantly on pickup, suspect this change first and check for
+an `error` event from OpenAI on session config.
+
+**Design decision — "argless by design" invariant preserved:** the
+pre-existing `toolSchemas.ts` comment on `end_call` was "Argless by design —
+a hangup must never fail on argument validation." Adding a real zod
+`.enum()` means a garbage `reason` value (e.g. `{reason: 'nonsense'}`) now
+technically fails `safeParse`. Rather than let that propagate into an
+`{error: ...}` tool result (which would BLOCK the hangup — a regression),
+`handleEndCall` treats any parse failure as "no reason known" and falls
+through to a completely normal hangup, same as `handleEndCall({})`. Verified
+by a dedicated test (`'an invalid/garbage reason never blocks the hangup'`).
+This is not in the literal spec text but is a direct, minimal-footprint
+consequence of the existing invariant it names — noting it here per the
+lessons.md F8 rule (don't claim something the code doesn't do without tracing
+it; here's the trace).
+
+**Tests added:**
+- `src/tests/twilioStream.spam.test.ts` (NEW, 7 tests) — same `buildCall()`
+  mock-socket scaffolding as `twilioStream.silenceWatchdog.test.ts` /
+  `twilioStream.vacation.test.ts` (callSid unset + no Twilio creds in the
+  test env → `endCallNow` takes its synchronous no-REST-client fallback, no
+  real Twilio API call):
+  - `handleEndCall({reason:'spam'})` → `{ended:true}`, `call.closed===true`,
+    `call.outcome==='spam'`.
+  - `handleEndCall({})` → `{ended:true}`, `call.outcome==='completed'`
+    (default path unchanged).
+  - `handleEndCall(undefined)` → same default-path assertions (no args at
+    all, not just an empty object).
+  - `handleEndCall({reason:'not-a-real-reason'})` → still hangs up,
+    `outcome==='completed'` (proves the argless-by-design invariant holds
+    for a value zod itself would reject).
+  - `parseToolArgs('end_call', {reason:'spam'})` → `success:true`, data
+    keeps `reason:'spam'` (proves the mirror — zod does NOT strip it).
+  - `parseToolArgs('end_call', {})` → `success:true`, `reason` is
+    `undefined` (argless call still valid).
+  - `parseToolArgs('end_call', {reason:'nonsense'})` → `success:false`
+    (proves it's a real enum, not a passthrough string — the invalid-reason
+    handler test above is meaningful, not vacuous).
+- `src/tests/twilioStream.prompt.test.ts` — new `describe('buildInstructions
+  — SPAM & TELEMARKETING (S1)')` block (2 tests): section present with the
+  decline line + `end_call ... reason 'spam'` wording + the never-
+  transfer/never-engage language; and a positional check that the section's
+  string index sits strictly between `CONVERSATION POLICY`'s and `GENERAL
+  RULES`'s.
+- Pre-existing test in `twilioStream.silenceWatchdog.test.ts`
+  (`'handleEndCall (normal goodbye) still returns { ended: true } via
+  endCallNow'`, calling `handleEndCall({})`) still passes unmodified —
+  confirms the default/no-reason path is byte-for-byte compatible with
+  pre-S1 behavior.
+
+**Verified:**
+- `npx tsc --noEmit` → clean.
+- `npm test` → **149/149 passed** (floor was >140 after V1; net +9: 7
+  `twilioStream.spam.test.ts` + 2 new in `twilioStream.prompt.test.ts`).
+  Before this task: 140/140.
+- `TZ=UTC npm test` → **149/149 passed**, same file/test count.
+- No existing test deleted or `.skip`ped. `git diff --stat`: only
+  `twilioStream.ts`, `toolSchemas.ts`, `twilioStream.prompt.test.ts` modified
+  + `twilioStream.spam.test.ts` new (+ this `state.md`/`tasks/agent_queue.md`
+  claim). `.env` and `business.json` untouched (not in the diff at all).
+  `openaiSession.ts` untouched (not in the diff — no session-config-shape
+  changes beyond the `tools` array param addition, which is app-level and
+  explicitly allowed by the hard constraints). Barge-in machinery
+  (`handleBargeIn`/`markQueue`/`bargeInEpoch`) not touched — not in the diff.
+  `endCallNow` itself is byte-identical (not in the diff).
+
+**Deviations from spec:** none in substance. Two implementation details not
+spelled out verbatim in the spec, both reasoned above: (1) the abort-path
+outcome decision (spec explicitly asked for this judgment call — see above),
+(2) falling through to a normal hangup on an invalid/unrecognized `reason`
+value rather than surfacing a validation error, which is the direct and
+necessary consequence of the pre-existing "argless by design, must never
+fail" comment the spec itself pointed at.
+
 ## 2026-08-22 — V1 IMPLEMENTED (worker agent)
 **Task:** Round 3 V1 — vacation mode. Richa is away ~Sept 1–9, 2026
 (PROVISIONAL). One `business.json` entry drives everything: no bookings on

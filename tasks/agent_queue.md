@@ -299,7 +299,7 @@ false}` shape returned. To make `buildInstructions`/vacation testable, an
 optional injectable `now` (defaulting to real now) is allowed — same pattern
 `getHoursStatus` already uses.
 
-## S1 — [ ] Spam & telemarketer handling: prompt + 'spam' outcome (P1, prompt + small code)
+## S1 — [x] Spam & telemarketer handling: prompt + 'spam' outcome (P1, prompt + small code) (implemented, awaiting Fable review/commit)
 **Why:** Richa gets frequent scam/telemarketing calls (Google-listing scams,
 loan/solar/warranty pitches, robocalls). Every second one talks to Erica burns
 real Realtime tokens. Erica must decline once, hang up, and TAG the call so S2
