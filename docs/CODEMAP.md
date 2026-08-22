@@ -34,7 +34,11 @@ Caller dials Twilio number
   grace), shared **`endCallNow(reason)`** hangup core (drain + REST + bargeInEpoch
   abort; `handleEndCall` is a thin wrapper), `registerTrackedTool` (counts
   `toolCallsInFlight`), prompt sections CONVERSATION POLICY (G1) + reschedule
-  consent gate (B2b).
+  consent gate (B2b). Also (2026-08-21 late): **`notifyOwnerSms`** (best-effort
+  FYI text from TWILIO_NUMBER → OWNER_PHONE; fire-and-forget), `clientNames`
+  map (clientId→name at every server-side resolution point — feeds the SMS,
+  never trusts model-supplied identity); log_running_late takes optional
+  `detail` (caller's words → dynamic note + SMS), transfer drain cap 12s.
 - **openaiSession.ts** — `OpenAIRealtimeSession`: WS connect (GA, no beta header),
   `configureSession` (GA nested schema: g711_ulaw, server_vad, noise_reduction,
   truncation.retention_ratio), event loop (`handleEvent`), tool-call buffering,
@@ -104,4 +108,4 @@ drains goodbye audio, aborts if the caller barges in mid-goodbye).
 `⏱` per-turn latency + tool durations · `📊` token usage + cache-hit% · `⚖️` TPM remaining
 / retry budget exhausted · `🗣️ ERICA SAID` / `USER SAID` transcripts · `🗓️ Booking state
 after create` · `📞`/`☎️` call start/end · `🤫` silence check-in/hangup · `⏳` duration
-warning/cap hangup.
+warning/cap hangup · `📨` owner FYI SMS sent (warn lines: skipped/failed).

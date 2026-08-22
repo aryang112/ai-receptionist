@@ -758,3 +758,11 @@ call the Phorest salon API. No STT/TTS vendors — it's a single speech-to-speec
 `src/services/phorest.client.ts` (the real Phorest adapter — tz + API quirks live here),
 `src/services/booking.ts` (service matching + aliases), `src/core/hours.ts` (business hours),
 `src/config/business.json` (hours source of truth), `.env` (real creds, gitignored).
+
+## 2026-08-21 ~22:25 — Live-test session fixes (Fable, direct)
+- e50e8eb transfer no longer cuts Erica off mid-word (drain cap 3s→12s + one-short-sentence handoff rule)
+- 51493a6 log_running_late: optional `detail` → dynamic note text ("Customer called ahead — <caller's words>"); closes with "I'll let Richa know"
+- dff8926 owner FYI SMS on running-late: "Hi Richa, it's Erica. <name> just called — <detail> for their <service> at <time>. FYI!" (from …6449 → OWNER_PHONE, fire-and-forget; clientNames map feeds the name server-side)
+- fbc5bbc lessons: Phorest notes are write-only (POST only; no delete/edit verb; appointment PUT ignores `notes`)
+- Verified live this session: note plumbing works end-to-end (user saw the note in the Phorest app); TPM starvation reproduced on a real call (40k tier, drained to 1,596 → response failed 2×, silence) — OWNER tier raise now urgent
+- All 124 tests green + tsc clean after each change; dev server hot-reloads via tsx watch
