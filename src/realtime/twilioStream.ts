@@ -503,6 +503,10 @@ export class TwilioRealtimeCall {
     phone?: string;
     appointments: AppointmentSummary[] | null;
   } | null = null;
+  // clientId → full name for every client this call has resolved (caller-ID
+  // prefetch or lookup_customer). Lets server-side messages (owner SMS) name
+  // the caller without trusting model-supplied identity.
+  private clientNames = new Map<string, string>();
   // WRITE-PATH SECURITY: appointment IDs this call has actually surfaced to the
   // caller (via list_appointments, the caller-ID prefetch, or a booking made on
   // this call). We refuse to cancel/reschedule any ID not in this set so the
@@ -682,6 +686,10 @@ export class TwilioRealtimeCall {
         ...(prefetchPhone ? { phone: prefetchPhone } : {}),
         appointments: null,
       };
+      this.clientNames.set(
+        customer.clientId,
+        `${customer.firstName} ${customer.lastName}`.trim()
+      );
       logger.info(
         { tool: 'prefetch', clientId: customer.clientId },
         'Caller recognized by phone — warming context'
@@ -1834,10 +1842,13 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
             ok: true,
             detail: { clientId: result.clientId, matchedBy: 'phone' },
           });
+          const phoneMatchName =
+            `${result.firstName} ${result.lastName}`.trim();
+          this.clientNames.set(result.clientId, phoneMatchName);
           return {
             found: true,
             clientId: result.clientId,
-            name: `${result.firstName} ${result.lastName}`.trim(),
+            name: phoneMatchName,
             matchedBy: 'phone',
           };
         }
@@ -1880,10 +1891,13 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
             ok: true,
             detail: { clientId: results[0]!.clientId, matchedBy: 'name' },
           });
+          const nameMatchName =
+            `${results[0]!.firstName} ${results[0]!.lastName}`.trim();
+          this.clientNames.set(results[0]!.clientId, nameMatchName);
           return {
             found: true,
             clientId: results[0]!.clientId,
-            name: `${results[0]!.firstName} ${results[0]!.lastName}`.trim(),
+            name: nameMatchName,
             matchedBy: 'name',
           };
         }
@@ -1907,6 +1921,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           for (const c of candidates) {
             if (c.nextAppointment)
               this.servedAppointmentIds.add(c.nextAppointment.appointmentId);
+            this.clientNames.set(
+              c.clientId,
+              `${c.firstName} ${c.lastName}`.trim()
+            );
           }
           this.markInfoOutcome();
           CallStore.recordToolCall(this.callSid, {
@@ -2082,6 +2100,19 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         { tool: 'log_running_late', squeezed },
         'Running late logged'
       );
+
+      // FYI text to Richa so she gets a phone notification, not just a
+      // calendar note. Fire-and-forget — the caller never waits on it.
+      const callerName = this.clientNames.get(payload.clientId) ?? 'A client';
+      const apptDesc = callerAppt
+        ? ` for their ${callerAppt.serviceName} at ${callerAppt.timeDisplay}`
+        : ' for their upcoming appointment';
+      void this.notifyOwnerSms(
+        `Hi Richa, it's Erica. ${callerName} just called — ${
+          detail ?? 'running late'
+        }${apptDesc}. FYI!`
+      );
+
       this.markInfoOutcome();
       CallStore.recordToolCall(this.callSid, {
         name: 'log_running_late',
@@ -2315,6 +2346,38 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
    * before the transfer redirect so the "let me get Richa for you" line isn't cut
    * off mid-sentence by the <Dial>. Polls cheaply; never rejects.
    */
+  /**
+   * Best-effort FYI text to the owner (Richa), sent from the salon's own
+   * Twilio number. Never throws and is meant to be fire-and-forget — a failed
+   * SMS must not affect the call or delay a tool response.
+   */
+  private async notifyOwnerSms(body: string): Promise<void> {
+    try {
+      const client = getTwilioClient();
+      if (!client || !env.TWILIO_NUMBER || !env.OWNER_PHONE) {
+        logger.warn(
+          { tool: 'owner_sms' },
+          'Owner SMS skipped — Twilio not configured'
+        );
+        return;
+      }
+      const result = await client.messages.create({
+        body,
+        from: env.TWILIO_NUMBER,
+        to: env.OWNER_PHONE,
+      });
+      logger.info(
+        { tool: 'owner_sms', sid: result.sid, status: result.status },
+        '📨 Owner SMS sent'
+      );
+    } catch (error) {
+      logger.warn(
+        { tool: 'owner_sms', error: String(error) },
+        'Owner SMS failed — continuing'
+      );
+    }
+  }
+
   private waitForPlaybackToDrain(capMs: number): Promise<void> {
     return new Promise((resolve) => {
       if (this.markQueue.length === 0 || this.closed) {
