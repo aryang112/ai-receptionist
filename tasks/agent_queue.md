@@ -140,7 +140,7 @@ tool grace works, outcome preserved.
 
 ## B-series — bugs from live call #3 (2026-08-19, call 9a7b0447; diagnosed by Fable from data/dev.log)
 
-## B1 — [ ] Recognized-caller note: model parrots the example line (P1, prompt-only)
+## B1 — [x] Recognized-caller note: model parrots the example line (P1, prompt-only) (implemented, awaiting Fable review/commit)
 **Why:** caller opened with "I want to book a brow lamination" → after the
 "is this Aryan?" confirm, Erica said **verbatim** "Hi Aryan! What service were
 you thinking?" — the literal example embedded in the injected background note —

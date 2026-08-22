@@ -3,6 +3,37 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-21 — B1 IMPLEMENTED (worker agent): recognized-caller note no longer parrots an example line
+Implemented `tasks/agent_queue.md` B1 exactly (P1, prompt-only). Root cause:
+the YES-branch background note injected by `prepareCallerContext()`
+(`src/realtime/twilioStream.ts`) embedded a literal quotable example — `(e.g.
+"Hi ${customer.firstName}! What service were you thinking?")` — which the
+model read back VERBATIM even when the caller had already stated the service,
+making them repeat themselves (live call #3: caller said "I want to book a
+brow lamination" → after the "is this Aryan?" confirm, Erica asked "Hi Aryan!
+What service were you thinking?").
+- **PROMPT-TEXT ONLY** — one line changed in `prepareCallerContext()`'s YES
+  branch. No session.update changes, no code logic changes, no other file
+  touched.
+  - **BEFORE:** `If they say YES: greet them warmly by name and continue
+    straight into the request they already stated — do NOT make them repeat
+    it (e.g. "Hi ${customer.firstName}! What service were you thinking?").`
+  - **AFTER:** `If they say YES: greet them by first name and continue
+    DIRECTLY with the request they already stated — ask only for whatever
+    detail is still missing (day/time, etc.), never re-ask something they
+    already told you (service, intent).`
+  - Rest of the note (identity-confirm example, NO branch, trailing
+    "Either way…" line) is byte-identical — not touched.
+- **Verified:** `npx tsc --noEmit` clean. `npm test` → **107/107** (count
+  unchanged — B1 is prompt-only, no new tests per spec). `TZ=UTC npm test` →
+  **107/107**. Grepped the YES-branch note text — no literal example sentence
+  containing a re-askable question remains. `git diff --stat` confirms exactly
+  1 file, 1 line changed (`src/realtime/twilioStream.ts`); no other files
+  touched (`.env`, `business.json`, Phorest paths, barge-in code all
+  untouched).
+- Marked `[x]` in `tasks/agent_queue.md` with "(implemented, awaiting Fable
+  review/commit)" — this worker did not commit or push per instructions.
+
 ## 2026-08-21 — B3 IMPLEMENTED (worker agent): bound RT-5 retry churn under TPM starvation
 Implemented `tasks/agent_queue.md` B3 code mitigation exactly (P0). Built on top
 of B2 (commit 4795acc) without undoing its `clearFailedRetry()` call in
