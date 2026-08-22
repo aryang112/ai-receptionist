@@ -3,6 +3,58 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-22 (2) — ✅ ROUND 3 COMPLETE (Fable orchestrator + Sonnet workers): spam, vacation, call-mix defects — handoff (read this first)
+All 6 Round-3 tasks shipped, reviewed, committed. **174/174 tests (was 124),
+tsc clean, both TZs.** One worker per task, sequential, Fable review-gate on
+every diff (~1.0M worker tokens total). Commits:
+- `5e1255b` **L1** location: address (8902 Harford Road, Parkville, MD 21234 —
+  from the Wix repo; suite # unconfirmed, deliberately omitted) in
+  business.json → prompt LOCATION line + hours-tool `address` field.
+- `83354a6` **V1** vacation mode: `business.json.vacations` (2026-09-01→09-09
+  PROVISIONAL) closes those dates for availability/booking (hours.ts), injects
+  a VACATION prompt block (active or ≤14d out; still books after return),
+  reroutes transfer_to_owner → SMS message-taking while active (fatal failover
+  still dials). 2026 closedDates refreshed (11-26, 12-25 PROVISIONAL). Future
+  vacations = edit the one business.json entry, restart dev server.
+- `e2a6f59` **S1** spam: SPAM & TELEMARKETING prompt section (decline once →
+  end_call same turn; when unsure, DON'T flag); end_call optional
+  `reason: 'done'|'spam'` (zod mirrored) → outcome 'spam'. Fable review fix:
+  endCallNow reason string says 'spam decline' on spam hangups.
+- `dd517d8` **S2** blocklist: `data/blocklist.json` (threshold 2, manual-edit
+  unblock); /voice webhook `<Reject>`s known spam BEFORE any OpenAI session
+  (repeat robocalls ≈ $0); known Phorest clients can NEVER be blocklisted;
+  StirVerstat logged per call (log-only).
+- `b2deeb3` **A1** double-book guard: fetchOpenSlots (extracted truth) re-run
+  fresh immediately before EVERY booking/reschedule write; stale time →
+  reject + fresh list; Phorest error → fail-open. Known edge: reschedule
+  adjacent to caller's own appt can false-reject (warn-logged).
+- `1519141` **A2** greeting race: flushPendingMedia() now AFTER
+  requestGreeting() — early caller speech barges-in the greeting instead of
+  suppressing it (July "skipped greeting" anomaly).
+
+**NEXT SESSION / LIVE-TEST CHECKLIST (Round 3 additions + Round 2 leftovers):**
+1. FIRST CALL: greeting plays = session.update accepted (S1 changed the tools
+   array shape — the one risky surface; lessons.md rule).
+2. Ask "where are you located?" → exact address, natural (L1).
+3. Fake a telemarketer pitch → one polite decline → hangup; call log outcome
+   'spam' (S1). Do it twice from a non-client number → 3rd call gets rejected
+   at the webhook, `🚫` in logs, no OpenAI session (S2).
+4. Vacation (needs `vacations` dates spanning today OR trust the tests): ask
+   for a Sept 1–9 booking → warm "Richa's away, how about the 10th+"; ask to
+   talk to Richa → message taken → SMS arrives at OWNER_PHONE (V1).
+5. Two phones: offer the same slot to A, book it on B, then book on A →
+   "that time was just taken" + fresh times (A1).
+6. Speak IMMEDIATELY on connect → greeting plays or is cleanly barged-in;
+   one normal call unaffected (A2). Barge-in still snappy.
+7. Round 2 leftovers still pending live re-test with raised TPM: >2min chatty
+   call no silence deaths; running-late note+SMS; transfer handoff completes.
+**OPEN (Aryan/Richa):** confirm exact vacation dates (edit business.json
+`vacations` if not 09-01→09-09); confirm 2026 closedDates (assumed Thanksgiving
+11-26 + Christmas 12-25); suite number if Richa wants it spoken; rotate the
+Phorest secret in git history BEFORE any push; prompt trim (todo 3.4) still
+open; merge-to-main + push only on Aryan's word (branch now 68 commits ahead).
+⚠️ Reminder: `tsx watch` restarts on ANY src save — never save during live calls.
+
 ## 2026-08-22 — A2 IMPLEMENTED (worker agent)
 **Task:** Round 3 A2 — greeting race: buffered pre-greeting caller speech could
 suppress the greeting. In the Twilio `'start'` handler, `flushPendingMedia()`
