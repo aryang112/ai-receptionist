@@ -126,3 +126,25 @@ describe('buildInstructions — SERVICES & PRICES catalog (H1)', () => {
     );
   });
 });
+
+// LIVE FIX 2026-08-23: today's open/closed status is precomputed server-side
+// — a live Sunday call showed the model anchoring on the weekly table's first
+// row and quoting Monday's hours as "today". The prompt must hand over
+// finished facts, never weekday homework.
+describe("buildInstructions — TODAY'S STATUS precompute", () => {
+  it('Sunday afternoon: CLOSED all day, next open tomorrow, tomorrow = Monday hours', () => {
+    const instructions = buildInstructions(at('2026-08-23T17:37')); // Sunday
+    expect(instructions).toMatch(/today is Sunday and the salon is CLOSED all day/);
+    expect(instructions).toMatch(/At this moment we are CLOSED — next open tomorrow at 12 PM/);
+    expect(instructions).toMatch(/Tomorrow \(Monday\): 12 PM to 5 PM/);
+  });
+  it('Tuesday 2pm: open today and OPEN right now', () => {
+    const instructions = buildInstructions(at('2026-08-25T14:00')); // Tuesday
+    expect(instructions).toMatch(/today is Tuesday and the salon is open 12 PM to 7 PM/);
+    expect(instructions).toMatch(/At this moment we are OPEN/);
+  });
+  it('Tuesday 9pm: open today but CLOSED right now', () => {
+    const instructions = buildInstructions(at('2026-08-25T21:00'));
+    expect(instructions).toMatch(/At this moment we are CLOSED/);
+  });
+});

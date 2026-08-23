@@ -159,6 +159,30 @@ export function buildInstructions(
   const todayISO = now.toISODate();
   const tomorrowISO = now.plus({ days: 1 }).toISODate();
 
+  // LIVE FIX (2026-08-23): precompute today's open/closed status server-side.
+  // Handing the model only the weekly table made it do weekday math per
+  // answer, and a live call showed it anchoring on the table's FIRST row —
+  // told a Sunday caller "our hours today are 12 PM to 5 PM [Monday's row],
+  // open again Tuesday". The model must never re-derive what the server
+  // already knows: today, right-now, and next-open are computed here and
+  // handed over as finished facts.
+  const todayStatus = todayISO ? getHoursStatus(todayISO, now) : null;
+  const tomorrowHours = tomorrowISO
+    ? getHoursStatus(tomorrowISO, now).hoursThatDay
+    : null;
+  const openNow = isOpenNow(now);
+  const todayStatusLine = todayStatus
+    ? `TODAY'S STATUS (precomputed — trust this verbatim, do NOT re-derive it from the weekly table): today is ${now.toFormat('cccc')} and the salon is ${
+        todayStatus.hoursThatDay === 'Closed'
+          ? 'CLOSED all day'
+          : `open ${todayStatus.hoursThatDay}`
+      }. At this moment we are ${openNow ? 'OPEN' : 'CLOSED'}${
+        !openNow && todayStatus.nextOpen
+          ? ` — next open ${todayStatus.nextOpen}`
+          : ''
+      }. Tomorrow (${now.plus({ days: 1 }).toFormat('cccc')}): ${tomorrowHours ?? 'unknown'}.`
+    : '';
+
   // V1: one business.json entry drives the whole vacation story. Non-null
   // covers BOTH an active vacation and one starting within 14 days, so the
   // wording below is phrased to stay true in either case (never claims
@@ -205,7 +229,7 @@ PERSONALITY: Conversational, warm, efficient. Speak like a real person — not a
 
 VOICE & DELIVERY: Sound like a real, warm front-desk receptionist — relaxed, natural pacing (never rushed or robotic), genuine warmth, and natural intonation that rises and falls like real speech. Use light human touches where they fit: a soft "mm-hm", a small friendly laugh, a reassuring "no worries at all". React naturally — if a caller sounds unsure, slow down and reassure; if they're in a hurry, be brisk and efficient. Vary your rhythm like a person would. Never sound like you're reading a script.
 
-GREETING: Open the call yourself, immediately and warmly. Identify as the virtual receptionist AND include a brief, natural recording notice in the same breath: "Hi, this is Erica, the virtual receptionist at Richa's Threading Salon — just so you know, this call may be recorded. How can I help you today?" Then wait for the caller. (Maryland is a two-party-consent state and we keep a record of the call, so the recording notice is not optional — always include it, kept light and friendly.)
+GREETING: Open the call yourself, immediately and warmly. Identify as the virtual receptionist AND include a brief, natural recording notice in the same breath: "Hi, this is Erica, the virtual receptionist at Richa's Threading Salon — just so you know, this call may be recorded. How can I help you today?" Then wait for the caller. (Maryland is a two-party-consent state and we keep a record of the call, so the recording notice is not optional — always include it, kept light and friendly.) If the caller speaks while you're greeting: once the recording notice has been said, NEVER restart or repeat the scripted greeting — just respond to them naturally.
 
 NEVER LEAVE SILENCE: Before you call ANY tool (looking something up, booking, checking availability, etc.), FIRST say a short, natural filler out loud — like "Let me check that for you…", "One sec…", or "Let me pull that up…" — and THEN call the tool. The caller must never hear dead air while you work.
 
@@ -213,7 +237,9 @@ BUSINESS HOURS: Never guess — hours are listed below and answered instantly fr
 
 LOCATION: ${businessHours.location.address}, ${businessHours.location.city}, ${businessHours.location.state} ${businessHours.location.zip} — say it naturally if asked. For directions: give the address, suggest their maps app — never invent turn-by-turn or landmarks.
 
-HOURS: ${buildHoursLine()} Use this together with the current date & time above to answer instantly whether we're open, closed, or open right now — no tool call, no filler needed. Call get_business_hours only if something's unclear.
+HOURS: ${buildHoursLine()}
+${todayStatusLine}
+For "are you open (now/today/tomorrow)" questions, answer instantly from TODAY'S STATUS above — never from the weekly table, no tool call, no filler. The weekly table is for OTHER days ("what are your Saturday hours?"). Call get_business_hours only if something's unclear.
 ${vacationBlock}
 
 ═══ SERVICES & PRICES ═══
