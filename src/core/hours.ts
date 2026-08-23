@@ -124,6 +124,22 @@ export function getHoursStatus(
   return { salonOpenThatDay, hoursThatDay, isToday, closedRightNow, nextOpen };
 }
 
+/**
+ * Is the salon open at this instant? Salon-TZ, respects weekday hours,
+ * closedDates, AND vacation ranges (all via rangesForDate). Used to gate
+ * live transfers to Richa: outside open hours her phone must not ring —
+ * Erica takes a message instead (2026-08-23, Aryan-confirmed behavior).
+ * `now` injectable for tests.
+ */
+export function isOpenNow(now: DateTime = DateTime.now()): boolean {
+  const nowDt = now.setZone(TZ);
+  const todayISO = nowDt.toISODate();
+  if (!todayISO) return false;
+  const oc = getOpenClose(todayISO);
+  if (!oc) return false;
+  return nowDt >= oc.open && nowDt <= oc.close;
+}
+
 export type ActiveOrUpcomingVacation = {
   from: string;
   to: string;

@@ -29,6 +29,7 @@ import {
   getOpenClose,
   getActiveOrUpcomingVacation,
   fmtTime,
+  isOpenNow,
 } from '../core/hours.js';
 import { snapSlotsToGrid } from '../core/slots.js';
 import { verifyStreamToken } from '../security/wsAuth.js';
@@ -304,6 +305,7 @@ Do NOT transfer just because: a service isn't in the memorised price list (try t
 
 When you do transfer, say ONLY one short handoff sentence first (a brief "let me get Richa for you" in your own words — one sentence, nothing more), then call transfer_to_owner. Any explanation of WHY (e.g. "since it's for two different people…") comes BEFORE that sentence in your previous turn, or not at all; the call hands off right after you finish speaking, so a long final sentence risks being cut off.
 EXCEPTION — if a note above says Richa is currently away on her time off: do NOT say you'll get her or promise a transfer. Offer to pass a message along instead, and once they give it, call transfer_to_owner with the message as the reason — it reaches her as a text, not a call.
+SAME RULE OUTSIDE OPEN HOURS — check the HOURS line against the current time above: when the salon is closed, don't promise a live transfer (Richa isn't at the salon). Offer to pass a message along; transfer_to_owner delivers it to her as a text and she follows up when the salon reopens.
 
 ═══ ENDING THE CALL ═══
 After you finish helping with something (booking confirmed, question answered, cancellation done), ask: "Anything else I can help you with?"
@@ -2963,6 +2965,43 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         return {
           transferred: false,
           note: `Richa is away until ${reopenLabel} — tell the caller you've passed their message along and she'll follow up when she's back.`,
+        };
+      }
+
+      // AFTER-HOURS gate (2026-08-23, Aryan-confirmed): live transfers ring
+      // Richa's PERSONAL mobile — outside open hours that means her phone at
+      // night and, most likely, her personal voicemail. So the dial only
+      // happens while the salon is open; otherwise take a message and text
+      // it to her, exactly like vacation mode (which is checked first above,
+      // for its better wording). The fatal-error failover below is NOT
+      // gated — a technical meltdown still reaches a human at any hour.
+      if (!isOpenNow()) {
+        logger.info(
+          {
+            tool: 'transfer_to_owner',
+            reason: payload.reason,
+            callSid: this.callSid,
+          },
+          'Transfer suppressed — after hours; sending SMS instead'
+        );
+        const afterHoursCallerName =
+          (this.prefetch?.clientId
+            ? this.clientNames.get(this.prefetch.clientId)
+            : undefined) ??
+          this.prefetch?.firstName ??
+          'a caller';
+        void this.notifyOwnerSms(
+          `Hi Richa, it's Erica. After-hours message: ${afterHoursCallerName} called — ${payload.reason}. I let them know you'll follow up when the salon reopens.`
+        );
+        this.markInfoOutcome();
+        CallStore.recordToolCall(this.callSid, {
+          name: 'transfer_to_owner',
+          ok: true,
+          detail: { afterHoursMessage: true, reason: payload.reason },
+        });
+        return {
+          transferred: false,
+          note: "The salon is closed right now, so the caller can't be connected to Richa — tell them you've passed their message along and she'll follow up when the salon reopens.",
         };
       }
 

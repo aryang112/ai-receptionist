@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { DateTime } from 'luxon';
-import { getHoursStatus, getActiveOrUpcomingVacation } from '../core/hours.js';
+import {
+  getHoursStatus,
+  getActiveOrUpcomingVacation,
+  isOpenNow,
+} from '../core/hours.js';
 
 // business.json: mon 12-17, tue-fri 12-19, sat 10-18, sun closed; closedDates incl 2026-12-25.
 // vacations: 2026-09-01 to 2026-09-09 (Richa away), reopens 2026-09-10 (Thu).
@@ -93,5 +97,18 @@ describe('vacations (V1)', () => {
   it('getActiveOrUpcomingVacation: null once the vacation is fully over and not upcoming again', () => {
     const v = getActiveOrUpcomingVacation(at('2026-09-15T09:00'));
     expect(v).toBeNull();
+  });
+});
+
+describe('isOpenNow (after-hours transfer gate, 2026-08-23)', () => {
+  it('true during open hours on a normal weekday', () => {
+    // Tuesday 2026-08-25, tue hours 12:00-19:00
+    expect(isOpenNow(at('2026-08-25T14:00'))).toBe(true);
+  });
+  it('false after closing, before opening, on Sundays, and on vacation days', () => {
+    expect(isOpenNow(at('2026-08-25T21:00'))).toBe(false); // after close
+    expect(isOpenNow(at('2026-08-25T09:00'))).toBe(false); // before open
+    expect(isOpenNow(at('2026-08-23T13:00'))).toBe(false); // Sunday
+    expect(isOpenNow(at('2026-09-03T13:00'))).toBe(false); // vacation Thursday
   });
 });
