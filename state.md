@@ -1068,6 +1068,31 @@ codebase's established per-file convention):
 review/commit. Not committed by this worker (per ritual — no
 `git add`/commit).
 
+## 2026-08-23 — 🚀 DEPLOYED TO RAILWAY (production) + H1 hot-loaded hours/prices — handoff (read this first)
+**Erica runs in production**: Railway project `erica-receptionist`, service
+`erica`, https://erica-production-f2e2.up.railway.app — the Twilio number
++14103046449 webhook now points THERE (ngrok retired for testing). Verified:
+/health 200, catalog warmed (63 services), client index loaded (4,175,
+complete), volume `erica-volume` at /app/data (calls.jsonl/blocklist/digest
+state persist across deploys). 21 env vars set via CLI (values never echoed);
+prod deltas: NODE_ENV=production, LOG_LEVEL=info, **DIGEST_ENABLED=false**
+(no digests to Richa until Stage 1 — flip it then). Deploys via `railway up
+--service erica` from the repo root (ships working tree; .env/.git NOT
+uploaded). Dashboard: https://erica-production-f2e2.up.railway.app/admin?token=<ADMIN_TOKEN from .env>.
+- `c427d5f` fix(boot): ESM JSON imports crash plain node (tsx tolerated it)
+  — business.json now loaded via typed fs reader (businessConfig.ts).
+- `4247728` H1: hours + full price catalog hot-loaded into the prompt
+  (Aryan-approved); instant open/closed + price answers, tool fallback kept.
+- Aryan's model-ladder refinement recorded (lessons + memory): worker tier
+  per task difficulty (Haiku/Sonnet/Opus), judgment + review gate on Fable.
+- lockin-coach (Telegram health coach, single-user) inspected per Aryan:
+  KEPT RUNNING by his choice — Erica went to a fresh project instead.
+**NEXT:** (1) Aryan's sign-off call → now hits PRODUCTION (validates greeting
+w/ H1 prompt + recognition fix live); (2) local `npm run dev` no longer needed
+for phone tests; (3) before Vonage Stage 1: SPAM_NEVER_BLOCK=<Vonage number>,
+DIGEST_ENABLED=true + DIGEST_TO, caller-ID passthrough check, Phorest secret
+rotation before any git push (unchanged), Richa's vacation dates.
+
 ## 2026-08-22 (4) — ✅ PRE-PROD AUDIT (3 Fable lenses) + ALL P0/P1 FIXES SHIPPED — handoff (read this first)
 Three parallel FABLE auditors (Aryan's rule, now in lessons.md: Sonnet = coding
 workers only; judgment work runs on Fable) swept new-code correctness,
