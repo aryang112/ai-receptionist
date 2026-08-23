@@ -1087,6 +1087,17 @@ uploaded). Dashboard: https://erica-production-f2e2.up.railway.app/admin?token=<
   per task difficulty (Haiku/Sonnet/Opus), judgment + review gate on Fable.
 - lockin-coach (Telegram health coach, single-user) inspected per Aryan:
   KEPT RUNNING by his choice — Erica went to a fresh project instead.
+**DEPLOY HYGIENE (2026-08-23 evening, verified end-to-end):** Railway's
+"Deployment crashed!" emails on every deploy were the OLD container dying
+dirty on SIGTERM. Fixed in two layers: `916ac7a` graceful shutdown handler
+(exit 0) + `7e6322f` railway.json startCommand `node dist/index.js` (npm as
+entrypoint reported ANY SIGTERM'd child as a crash — node must be pid 1).
+Proven: replaced container logs "Shutdown signal received — closing server"
+(pid=1), no npm error, no crash email after the final replacement. Deploy
+rule: replacements DROP in-flight calls — ship during quiet hours only once
+Vonage forwarding is live. Verify deploys by DEPLOYMENT STATUS + new-container
+logs, never by curling the public URL (the old container answers during a
+failed rollout — false green, caught by Aryan via the crash emails).
 **NEXT:** (1) Aryan's sign-off call → now hits PRODUCTION (validates greeting
 w/ H1 prompt + recognition fix live); (2) local `npm run dev` no longer needed
 for phone tests; (3) before Vonage Stage 1: SPAM_NEVER_BLOCK=<Vonage number>,
