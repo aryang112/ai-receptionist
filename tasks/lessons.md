@@ -183,6 +183,9 @@ quality. Sonnet's role in this project is implementing well-specced queue
 tasks (agent_queue.md pattern), with Fable review-gating every diff. Rule:
 before spawning any agent, ask "is this execution of a tight spec, or is it
 judgment?" — judgment never gets downgraded to a cheaper model.
+Refined 2026-08-23 (Aryan): the whole ladder is available — pick the worker
+model per task difficulty (Haiku/Sonnet routine, Opus for subtler coding);
+what's fixed is that judgment stays on Fable and every diff is review-gated.
 
 ## 🦜 NEVER put a quotable example line inside a prompt/injected note (bitten TWICE) (2026-08-22)
 B1 (live call #3) and again tonight: any verbatim example sentence inside an
