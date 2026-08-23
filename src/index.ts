@@ -122,3 +122,19 @@ server.listen(PORT, () => {
       )
   );
 });
+
+// Graceful shutdown (2026-08-23): Railway replaces deployments by sending
+// SIGTERM to the old container. Without a handler, Node dies abruptly, npm
+// reports a non-zero exit, and Railway emails a false "Deployment crashed!"
+// alert for every routine deploy (three on 2026-08-23 alone). Exit 0 on
+// SIGTERM/SIGINT = clean stop, honest notifications. NOTE: an in-flight call
+// still drops when its container is replaced — deploy during quiet hours.
+function shutdown(signal: string) {
+  logger.info({ signal }, 'Shutdown signal received — closing server');
+  server.close(() => process.exit(0));
+  // Force-exit if something (open WS, keepalive) holds the loop — bounded,
+  // and unref'd so it never keeps the process alive itself.
+  setTimeout(() => process.exit(0), 5000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
