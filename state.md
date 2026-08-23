@@ -962,6 +962,49 @@ codebase's established per-file convention):
 review/commit. Not committed by this worker (per ritual — no
 `git add`/commit).
 
+## 2026-08-22 (4) — ✅ PRE-PROD AUDIT (3 Fable lenses) + ALL P0/P1 FIXES SHIPPED — handoff (read this first)
+Three parallel FABLE auditors (Aryan's rule, now in lessons.md: Sonnet = coding
+workers only; judgment work runs on Fable) swept new-code correctness,
+call-lifecycle races, and the data/analytics layer. ~20 verified findings.
+**Everything P0/P1 + most P2s FIXED same session — 261/261 tests, tsc clean:**
+- `88cd033` (Fable direct): **P0 closed/vacation days returned FULL Phorest
+  availability** (null openClose skipped the hours filter — Sept 1–9 was
+  bookable; now zero slots, write-guarded too). **Blocklist safety bundle:**
+  TWILIO_NUMBER/OWNER_PHONE/`SPAM_NEVER_BLOCK` env allowlist (a Vonage
+  caller-ID substitution can no longer dead the whole forwarded line);
+  mtime-aware cache (manual unblock works live); client-guard fails CLOSED on
+  Phorest errors; aborted spam decline rolls the outcome back (real callers
+  can't accrue blocklist points). **Lifecycle:** 'start' continuation
+  re-checks closed after every await (no phantom rows/timer leak on
+  mid-handshake hangup); sessionReady flips after requestGreeting (residual
+  live-media greeting race + consent-line skip closed); endCallNow one-shot
+  guard; cap chain respects transferring, bounded retries + forced final
+  hangup (2 barge-ins no longer defeat the cap); cap goodbye retries when a
+  response was in flight; failover calls now outcome 'failover' + endReason;
+  pre-vacation prompt no longer promises message-taking early.
+- `bb00231` (Sonnet worker, Fable-reviewed): digest = YESTERDAY at 08:30
+  (post-19:30 after-hours calls were in NO digest ever); multi-service
+  revenue summed; blocked rows out of call totals; cost estimate prices
+  text/audio separately (was all-audio = overstated); late-recognized
+  callers amended (type 'recognized' row); $75.50 formatting. PLUS
+  **vitest global isolation** — every `npm test` appended ~33 fake rows to
+  the REAL data/calls.jsonl; purged 3,167 polluted lines (18 genuine calls
+  kept; backup data/calls.jsonl.bak-20260822).
+**AUDIT ITEMS ACCEPTED/DEFERRED (not bugs to fix now):** 'stop' mid-booking
+write ends outcome 'info' with a post-end booking row (tolerated, digest
+right); recording proxy lacks Range (seek may not work; playback fine);
+transcript interleave ordering when input transcription goes live; post-tool
+check-in collision (rare, RT-3-softened). **Standing pre-audit items still
+open** (see audit report in this file's history + todo.md): name-lookup
+re-filter, PH-10 reschedule duration shrink, duplicate profiles, nextOpen
+now-relative, split-hours, 0-duration services, ws keepalive pong deadline.
+**DECISION FOR ARYAN (Stage 1):** after-hours transfer currently live-dials
+Richa's cell at night (→ her personal voicemail). Option: hours-gated
+message-taking (the V1 SMS machinery, one conditional). **Pre-Stage-1 MUST:**
+put the Vonage/salon number in SPAM_NEVER_BLOCK; verify caller-ID passthrough
+on the first forwarded call. Audit tokens: 3 Fable auditors ~546k; analytics
+worker 262k.
+
 ## 2026-08-22 (3) — ✅ ROUND 4 COMPLETE: pilot observability (logs, recordings, dashboard, digest) + Vonage rollout plan — handoff (read this first)
 All 4 M-tasks shipped, reviewed, committed. **239/239 tests (was 174 after
 Round 3), tsc clean, both TZs.** ~0.85M worker tokens (M1 261k · M2 189k ·
