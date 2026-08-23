@@ -425,7 +425,183 @@ greeting must still play (or be cleanly barged-in), plus one normal call.
 
 ---
 
+## Round 4 (2026-08-22) — PILOT OBSERVABILITY: call logs, recordings, dashboard, owner digest
+> Aryan's directive: before production he must be able to AUDIT Erica — full
+> call logs in an understandable form, recordings ideally, cost + success
+> measurement, and a summary report to Richa/him. Market research
+> (docs/MARKET_RESEARCH_2026-07-18.md) confirms: per-call recordings/
+> transcripts/summaries are table stakes ("owners won't trust an AI they can't
+> audit") and revenue-attribution is THE retention feature. Rollout will be
+> Vonage call-forwarding (after-hours first) — see docs/VONAGE_PILOT.md.
+> Facts established by Fable (verified in code): per-turn token usage is
+> LOGGED (openaiSession `📊 turn tokens`, ~:575) but never persisted; Erica's
+> transcript persists (assistantTranscript, 8KB cap) but the caller side does
+> NOT — the `conversation.item.input_audio_transcription.completed` handler
+> (~:498) is DEAD CODE because `configureSession` never enables
+> `audio.input.transcription` (verified ~:272-303). The greeting ALREADY
+> discloses recording (two-party-consent MD) — recordings are legally covered.
+> Test floor: 174.
+
+## M1 — [ ] Persist the full story of every call: usage, both-side transcript, end reason (P0, code)
+**Why:** calls.jsonl is the pilot's evidence base, but today it has no token
+usage (cost), no caller-side words, and no reason the call ended — you can't
+judge "helpful or weird" or compute cost from it.
+**Files:** `src/realtime/openaiSession.ts` (handler wiring — app code),
+`src/realtime/twilioStream.ts`, `src/services/callStore.ts`, `src/config/env.ts`.
+**Spec:**
+- openaiSession handlers object gains optional callbacks (same pattern as
+  `onSpeechStarted`): `onUserTranscript?(text)` — fire it in the EXISTING
+  `conversation.item.input_audio_transcription.completed` case (keep the log
+  line); `onAssistantTranscript?(text)` — fire in the existing
+  `response.(output_)audio_transcript.done` cases (keep logs);
+  `onUsage?({inputTokens, outputTokens, cachedTokens, totalTokens})` — fire in
+  the existing `📊 turn tokens` block (keep the log).
+- **Input transcription enable, ENV-GATED OFF:** `OPENAI_INPUT_TRANSCRIPTION`
+  (default `'off'`). When not 'off', `configureSession` adds
+  `transcription: { model: env.OPENAI_INPUT_TRANSCRIPTION }` under
+  `audio.input` (GA nested schema; e.g. 'gpt-4o-mini-transcribe' or
+  'whisper-1'). ⚠️ THIS IS THE RISKY SESSION-SHAPE CLASS (lessons.md): default
+  MUST stay 'off' until validated on a live call (greeting plays = accepted).
+  Comment this loudly at the field. With it off, caller-side transcript simply
+  stays absent (recordings cover it meanwhile, M2).
+- twilioStream: per-call `transcript: Array<{role:'caller'|'erica', text,
+  ts}>` (cap ~200 entries AND ~16KB, drop-oldest…) fed by the two transcript
+  handlers; per-call usage accumulator {inputTokens, outputTokens,
+  cachedTokens, turns} fed by onUsage. In `cleanup()`: write ONE
+  `CallStore.recordTranscript(callSid, entries)` line (skip if empty) and
+  extend the endCall record with `usage` + `estCostUsd` + `endReason`.
+- `estCostUsd`: single constants block (comment: ESTIMATE at gpt-realtime
+  audio rates) — input $32/1M, cached input $0.40/1M, output $64/1M:
+  `((input-cached)*32 + cached*0.40 + output*64) / 1e6`, rounded to 4dp.
+- `endReason`: thread the `reason` string already passed to `endCallNow()`
+  (plus 'twilio stop' for a caller hangup, 'transfer' when transferring) into
+  a field cleanup includes in the endCall record — the dashboard's flag
+  source (silence hangup / duration cap / spam decline are all reasons).
+- callStore: `recordTranscript(callSid, entries)` (type 'transcript'); EndEntry
+  gains optional `usage`, `estCostUsd`, `endReason`. Keep `assistantTranscript`
+  for back-compat.
+**Accept:** tsc clean; >174 green + TZ=UTC. Tests: usage accumulation lands in
+the end record with correct arithmetic (incl. cached discount); transcript
+interleaves roles in ts order and respects caps; endReason present for the
+silence-watchdog and duration-cap paths (drive the existing fake-timer
+harnesses); OPENAI_INPUT_TRANSCRIPTION='off' → session.update payload is
+BYTE-IDENTICAL to today (snapshot/deep-equal test); ='gpt-4o-mini-transcribe'
+→ payload contains exactly the one new nested field.
+
+## M2 — [ ] Call recordings via Twilio REST, dual-channel, env-gated (P0, code)
+**Why:** Aryan wants to HEAR the calls — the ground truth for "acting weird",
+and the caller-side record while input transcription is still off. The
+greeting already announces recording (MD two-party consent — do NOT remove it).
+**Files:** `src/realtime/twilioStream.ts`, `src/services/callStore.ts`,
+`src/config/env.ts`.
+**Spec:**
+- env `RECORD_CALLS` (default `'true'`). In the Twilio `'start'` handler,
+  right after `CallStore.startCall`: if enabled AND `getTwilioClient()` AND
+  `this.callSid` → fire-and-forget
+  `client.calls(callSid).recordings.create({ recordingChannels: 'dual' })`
+  `.then(r => CallStore.recordRecording(callSid, r.sid))`,
+  `.catch(warn '🎙️ recording start failed')` — NEVER awaited on the call
+  path, never throws (dev without creds = clean skip + debug log).
+- callStore: `recordRecording(callSid, recordingSid)` (type 'recording').
+- Log marker `🎙️ recording started` with last-8 of the sid.
+**Accept:** tsc clean; >M1-floor green + TZ=UTC. Tests (mock Twilio client on
+the existing scaffolding): enabled → create called once with dual channels +
+sid persisted; RECORD_CALLS='false' → not called; no client → no throw, no
+record; recording API rejection → call proceeds unharmed.
+
+## M3 — [ ] Owner dashboard: audit every call from a phone (P0, code) — depends on M1+M2
+**Why:** the audit surface. Aryan/Richa open one page and see: what calls came
+in, what happened, what it cost, what it earned, and any call that needs a
+listen. Market table stakes (recordings/transcripts/summaries per call).
+**Files:** NEW `src/routes/admin.ts`, NEW `src/public/dashboard.html`,
+`src/index.ts` (mount), `src/config/env.ts`.
+**Spec:**
+- Auth: env `ADMIN_TOKEN`. Empty token: dev-permissive with a boot warn,
+  REFUSE the routes in production (mirror the WS_AUTH_SECRET fail-closed
+  pattern in src/security/wsAuth.ts). Accept `?token=` (sets an httpOnly
+  cookie then redirects clean) or `Authorization: Bearer`. Constant-time
+  compare. Mount under `/admin` in index.ts WITH the stricter /api rate
+  limiter (see how index.ts:44-56 wires limiters — reuse, don't reinvent).
+- `GET /admin` → serves dashboard.html (read once at boot).
+  `GET /admin/api/calls?days=7` → from `readCalls()` (callStore), joined per
+  callSid: {callSid, startTs, fromLast4 ONLY (never the full number over
+  HTTP), recognized (bool), durationMs, outcome, endReason, tools:[{name,ok}],
+  booking:{service,price,date,time}?, usage?, estCostUsd?, hasRecording,
+  hasTranscript, blocked (type 'blocked' rows become their own entries),
+  flags[]}. flags: 'no-outcome' (outcome none), 'tool-error' (any ok:false),
+  'silence-hangup', 'duration-cap', 'spam', 'transfer-failed'.
+  `GET /admin/api/stats?days=30` → daily buckets + totals: calls, outcomes
+  histogram, bookings count + revenue (sum booking.price), spam declined +
+  webhook-blocked counts, after-hours count (start ts outside
+  `getOpenClose(date)` in salon TZ — reuse src/core/hours.ts), avg duration,
+  total estCostUsd, revenuePerDollar (revenue / cost, null-safe).
+  `GET /admin/api/transcript/:callSid` → the transcript record.
+  `GET /admin/api/recording/:callSid` → look up recordingSid, PROXY-STREAM
+  `https://api.twilio.com/2010-04-01/Accounts/<sid>/Recordings/<rsid>.mp3`
+  with basic auth from env — Twilio creds NEVER reach the browser; pipe the
+  audio through (Node fetch → res, set content-type audio/mpeg).
+- dashboard.html: SELF-CONTAINED (inline CSS+JS, zero CDN/external requests),
+  mobile-first (Aryan/Richa will check from phones). Top: stat tiles (today +
+  7-day: calls, booked + $revenue, after-hours captured, spam blocked, est
+  cost, revenue-per-$). Then the call list, newest first: time, caller last-4
+  (+ "known client" dot), outcome badge (color-coded), duration, cost, flag
+  chips. Tap a row → detail: interleaved transcript as a chat view, tools
+  timeline with ok/fail, booking card, `<audio controls>` pointed at the
+  recording proxy, end reason. A "needs review" filter (any flagged call).
+  Auto-refresh every 30s. Clean, calm, legible — no framework, no build step.
+- Never expose full phone numbers or Twilio/OpenAI credentials via any admin
+  response.
+**Accept:** tsc clean; >M2-floor green + TZ=UTC. Tests (supertest pattern like
+twilio.route.test.ts, CALL_STORE_PATH pointed at a tmp fixture): 401/refusal
+without token (production mode); calls endpoint joins a multi-record fixture
+correctly (booking + usage + flags); stats revenue/cost math; after-hours
+classification (one in-hours, one evening call); recording proxy requires
+auth + never leaks creds in headers/body (assert on a mocked fetch).
+
+## M4 — [ ] Daily owner digest SMS + Sunday weekly summary (P1, code) — depends on M1
+**Why:** Richa/Aryan shouldn't have to open the dashboard to know the pilot is
+working — the market's retention lever is a proactive "here's what Erica
+earned you" note. SMS (not email) — zero new vendors, notifyOwnerSms plumbing
+exists.
+**Files:** NEW `src/services/ownerSms.ts` (extract), NEW
+`src/services/digest.ts`, `src/index.ts` (scheduler), `src/config/env.ts`,
+`src/realtime/twilioStream.ts` (delegate).
+**Spec:**
+- Extract the body of twilioStream's `notifyOwnerSms` into
+  `src/services/ownerSms.ts` `sendOwnerSms(body: string, to?: string)`
+  (default `env.OWNER_PHONE`; keeps the fire-and-forget never-throw + last-4
+  logging semantics). twilioStream's method becomes a thin delegate — its two
+  call sites (running-late FYI, vacation message) must behave byte-identically
+  (their tests prove it).
+- `digest.ts`: `buildDailyDigest(forDateISO)` from `readCalls()` — e.g.
+  "Erica yesterday: 6 calls — 2 booked ($75), 1 reschedule, 2 price/hours, 1
+  spam blocked. 1 after-hours booking captured. Est cost $1.12." ≤ ~300 chars,
+  plain text (no markdown). `buildWeeklyDigest(weekEndISO)` — 7-day totals +
+  best day. Return null when there were zero handled calls (don't text Richa
+  on quiet days; webhook-blocked spam alone doesn't count as activity).
+- Scheduler in index.ts (guard `NODE_ENV !== 'test'`): env `DIGEST_ENABLED`
+  (default 'true'), `DIGEST_TIME` (default '19:30', salon TZ via luxon),
+  `DIGEST_TO` (default OWNER_PHONE, comma-separated for +Aryan). Check every
+  60s: past DIGEST_TIME AND `data/digest-state.json` lastSent != today →
+  build digest for TODAY (the day being summarized), send to each recipient,
+  stamp the file (never-throw, callStore file pattern). Sundays append the
+  weekly summary as a second message. Timer `.unref()` so tests/shutdown
+  don't hang.
+**Accept:** tsc clean; >M3-floor green + TZ=UTC. Tests: digest text from a
+fixture day (bookings/spam/after-hours all represented, revenue + cost math
+right); null on a no-call day; scheduler stamps + doesn't double-send (fake
+timers + tmp state file); ownerSms extraction — running-late + vacation tests
+still green untouched.
+
+---
+
 ## Orchestration notes (for the session leader)
+- **Round 4 (2026-08-22):** M1 → M2 → M3 → M4, ONE Sonnet worker at a time
+  (M1/M2 share twilioStream+callStore; M3 reads what they write; M4 refactors
+  notifyOwnerSms). Fable review-gate + commit per task, token tally reported.
+  Live-validation items land in state.md: OPENAI_INPUT_TRANSCRIPTION stays
+  'off' until a live call proves the session accepts it; first recorded call
+  → confirm the recording appears + plays via the dashboard proxy.
 - **Round 3 (2026-08-22):** L1 → V1 → S1 → S2 → A1 → A2, ONE Sonnet worker at
   a time (all but S2 touch `twilioStream.ts`; S2 depends on S1's outcome tag).
   Fable reviews every diff, commits after approval, reports a token tally.
