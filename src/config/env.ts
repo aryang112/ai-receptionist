@@ -106,4 +106,13 @@ export const env = {
   // or 'whisper-1') AFTER a live call confirms the session accepts it
   // (greeting still plays = accepted).
   OPENAI_INPUT_TRANSCRIPTION: process.env.OPENAI_INPUT_TRANSCRIPTION || 'off',
+
+  // M3: owner/dashboard auth token for /admin (page + JSON API). Empty =
+  // dev-permissive with a one-time boot warn; REFUSES every /admin route in
+  // production (mirrors wsAuth's fail-closed pattern — never fall open on a
+  // missing secret where it matters). Accepted via ?token= (exchanged for an
+  // httpOnly cookie, then redirected clean), `Authorization: Bearer`, or the
+  // cookie itself. Compared with a constant-time hash compare, never a raw
+  // string ===.
+  ADMIN_TOKEN: process.env.ADMIN_TOKEN || '',
 };

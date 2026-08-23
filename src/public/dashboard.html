@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Erica — Call Log</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f7f7f8;
+    --panel: #ffffff;
+    --text: #1a1a1e;
+    --muted: #6b6b74;
+    --border: #e4e4e8;
+    --accent: #7c3aed;
+    --accent-weak: #7c3aed1a;
+    --green: #16a34a;
+    --green-weak: #16a34a1a;
+    --gray: #6b6b74;
+    --gray-weak: #6b6b7420;
+    --red: #dc2626;
+    --red-weak: #dc262620;
+    --blue: #2563eb;
+    --blue-weak: #2563eb1a;
+    --amber: #d97706;
+    --amber-weak: #d9770620;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101014;
+      --panel: #1a1a20;
+      --text: #f0f0f2;
+      --muted: #9a9aa4;
+      --border: #2c2c34;
+      --accent-weak: #7c3aed2a;
+      --green-weak: #16a34a2a;
+      --gray-weak: #6b6b7430;
+      --red-weak: #dc262630;
+      --blue-weak: #2563eb2a;
+      --amber-weak: #d977062a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    padding: 16px 16px 8px;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 5;
+  }
+  h1 {
+    font-size: 1.15rem;
+    margin: 0 0 2px;
+    font-weight: 600;
+  }
+  .sub {
+    color: var(--muted);
+    font-size: 0.8rem;
+    margin: 0;
+  }
+  main {
+    padding: 8px 12px 40px;
+    max-width: 760px;
+    margin: 0 auto;
+  }
+  .tiles-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin: 16px 4px 6px;
+  }
+  .tiles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .tile {
+    flex: 1 1 130px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 12px;
+    min-width: 110px;
+  }
+  .tile .val {
+    font-size: 1.25rem;
+    font-weight: 700;
+    line-height: 1.15;
+  }
+  .tile .label {
+    font-size: 0.72rem;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 20px 4px 8px;
+    gap: 8px;
+  }
+  .toolbar h2 {
+    font-size: 0.95rem;
+    margin: 0;
+  }
+  button.toggle {
+    font: inherit;
+    font-size: 0.78rem;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  button.toggle[aria-pressed="true"] {
+    background: var(--amber-weak);
+    border-color: var(--amber);
+    color: var(--amber);
+  }
+  .empty {
+    color: var(--muted);
+    font-size: 0.85rem;
+    padding: 20px 4px;
+    text-align: center;
+  }
+  details.call {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+  details.call summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  details.call summary::-webkit-details-marker { display: none; }
+  .row-time {
+    font-size: 0.78rem;
+    color: var(--muted);
+    min-width: 62px;
+  }
+  .row-caller {
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 78px;
+  }
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    display: inline-block;
+  }
+  .badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 999px;
+    text-transform: capitalize;
+  }
+  .badge.o-booked, .badge.o-rescheduled { background: var(--green-weak); color: var(--green); }
+  .badge.o-cancelled, .badge.o-none, .badge.o-completed { background: var(--gray-weak); color: var(--gray); }
+  .badge.o-spam, .badge.o-blocked { background: var(--red-weak); color: var(--red); }
+  .badge.o-transferred { background: var(--blue-weak); color: var(--blue); }
+  .badge.o-info { background: var(--accent-weak); color: var(--accent); }
+  .row-duration, .row-cost {
+    font-size: 0.76rem;
+    color: var(--muted);
+  }
+  .row-flags {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-left: auto;
+  }
+  .chip {
+    font-size: 0.68rem;
+    background: var(--amber-weak);
+    color: var(--amber);
+    padding: 2px 7px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .detail {
+    border-top: 1px solid var(--border);
+    padding: 12px;
+    font-size: 0.85rem;
+  }
+  .detail .loading { color: var(--muted); }
+  .detail h3 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--muted);
+    margin: 14px 0 6px;
+  }
+  .detail h3:first-child { margin-top: 0; }
+  .booking-card {
+    background: var(--green-weak);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 0.85rem;
+  }
+  .tools-timeline { display: flex; flex-direction: column; gap: 4px; }
+  .tool-line { display: flex; gap: 8px; align-items: center; font-size: 0.82rem; }
+  .tool-ok, .tool-fail {
+    width: 8px; height: 8px; border-radius: 50%; flex: none;
+  }
+  .tool-ok { background: var(--green); }
+  .tool-fail { background: var(--red); }
+  .chat { display: flex; flex-direction: column; gap: 6px; }
+  .bubble {
+    max-width: 80%;
+    padding: 8px 12px;
+    border-radius: 14px;
+    font-size: 0.85rem;
+    line-height: 1.35;
+  }
+  .bubble.caller {
+    align-self: flex-start;
+    background: var(--gray-weak);
+    border-bottom-left-radius: 4px;
+  }
+  .bubble.erica {
+    align-self: flex-end;
+    background: var(--accent-weak);
+    border-bottom-right-radius: 4px;
+  }
+  audio { width: 100%; margin-top: 4px; }
+  .meta-line { color: var(--muted); font-size: 0.78rem; }
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.72rem;
+    padding: 20px 0 8px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Erica — Call Log</h1>
+  <p class="sub" id="refreshedAt">Loading…</p>
+</header>
+<main>
+  <div class="tiles-label">Last 24 hours</div>
+  <div class="tiles" id="tiles24h"></div>
+
+  <div class="tiles-label">Last 7 days</div>
+  <div class="tiles" id="tiles7d"></div>
+
+  <div class="toolbar">
+    <h2>Calls</h2>
+    <button class="toggle" id="flagToggle" type="button" aria-pressed="false">Needs review</button>
+  </div>
+  <div id="callList"></div>
+</main>
+<footer>Auto-refreshes every 30s · paused while a call is open</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  var state = { calls: [], filterFlagged: false, refreshTimer: null };
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function fmtTime(ts) {
+    var d = new Date(ts);
+    return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function fmtDuration(ms) {
+    if (!ms) return '—';
+    var s = Math.round(ms / 1000);
+    var m = Math.floor(s / 60);
+    var rem = s % 60;
+    return m + ':' + (rem < 10 ? '0' : '') + rem;
+  }
+
+  function fmtCost(usd) {
+    return usd === undefined || usd === null ? '—' : '$' + usd.toFixed(2);
+  }
+
+  function fmtMoney(n) {
+    return '$' + (n || 0).toFixed(2);
+  }
+
+  function tile(val, label) {
+    var div = document.createElement('div');
+    div.className = 'tile';
+    var v = document.createElement('div');
+    v.className = 'val';
+    v.textContent = val;
+    var l = document.createElement('div');
+    l.className = 'label';
+    l.textContent = label;
+    div.appendChild(v);
+    div.appendChild(l);
+    return div;
+  }
+
+  function renderTiles(el, totals) {
+    el.innerHTML = '';
+    if (!totals) return;
+    el.appendChild(tile(totals.calls, 'Calls'));
+    el.appendChild(tile(totals.bookings + ' · ' + fmtMoney(totals.revenue), 'Booked'));
+    el.appendChild(tile(totals.afterHours, 'After-hours'));
+    el.appendChild(tile(totals.spamDeclined + totals.webhookBlocked, 'Spam blocked'));
+    el.appendChild(tile(fmtMoney(totals.totalEstCostUsd), 'Est. cost'));
+    el.appendChild(tile(totals.revenuePerDollar === null ? '—' : totals.revenuePerDollar.toFixed(1) + 'x', 'Revenue / $'));
+  }
+
+  async function loadStats() {
+    var res = await Promise.all([
+      fetch('/admin/api/stats?days=1').then(function (r) { return r.json(); }),
+      fetch('/admin/api/stats?days=7').then(function (r) { return r.json(); }),
+    ]);
+    renderTiles(document.getElementById('tiles24h'), res[0].totals);
+    renderTiles(document.getElementById('tiles7d'), res[1].totals);
+  }
+
+  async function loadCalls() {
+    var res = await fetch('/admin/api/calls?days=7');
+    var data = await res.json();
+    state.calls = data.calls || [];
+    renderCalls();
+  }
+
+  function renderCalls() {
+    var list = document.getElementById('callList');
+    var calls = state.filterFlagged
+      ? state.calls.filter(function (c) { return c.flags && c.flags.length; })
+      : state.calls;
+    list.innerHTML = '';
+    if (!calls.length) {
+      var p = document.createElement('p');
+      p.className = 'empty';
+      p.textContent = 'No calls in this window.';
+      list.appendChild(p);
+      return;
+    }
+    calls.forEach(function (c) { list.appendChild(renderRow(c)); });
+  }
+
+  function outcomeClass(outcome) {
+    return 'o-' + String(outcome || 'none').toLowerCase().replace(/[^a-z-]/g, '-');
+  }
+
+  function renderRow(c) {
+    var d = document.createElement('details');
+    d.className = 'call';
+    d.dataset.callsid = c.callSid;
+
+    var summary = document.createElement('summary');
+
+    var time = document.createElement('span');
+    time.className = 'row-time';
+    time.textContent = fmtTime(c.startTs);
+    summary.appendChild(time);
+
+    var caller = document.createElement('span');
+    caller.className = 'row-caller';
+    caller.innerHTML = (c.fromLast4 ? '…' + esc(c.fromLast4) : 'unknown') +
+      (c.recognized ? ' <span class="dot" title="Known client"></span>' : '');
+    summary.appendChild(caller);
+
+    var badge = document.createElement('span');
+    badge.className = 'badge ' + outcomeClass(c.outcome);
+    badge.textContent = c.outcome;
+    summary.appendChild(badge);
+
+    var dur = document.createElement('span');
+    dur.className = 'row-duration';
+    dur.textContent = fmtDuration(c.durationMs);
+    summary.appendChild(dur);
+
+    var cost = document.createElement('span');
+    cost.className = 'row-cost';
+    cost.textContent = fmtCost(c.estCostUsd);
+    summary.appendChild(cost);
+
+    if (c.flags && c.flags.length) {
+      var flagsWrap = document.createElement('span');
+      flagsWrap.className = 'row-flags';
+      c.flags.forEach(function (f) {
+        var chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = f;
+        flagsWrap.appendChild(chip);
+      });
+      summary.appendChild(flagsWrap);
+    }
+
+    d.appendChild(summary);
+
+    var detail = document.createElement('div');
+    detail.className = 'detail';
+    detail.innerHTML = '<span class="loading">Loading…</span>';
+    d.appendChild(detail);
+
+    var loaded = false;
+    d.addEventListener('toggle', function () {
+      if (d.open && !loaded) {
+        loaded = true;
+        loadDetail(c, detail);
+      }
+      pauseOrResumeRefresh();
+    });
+
+    return d;
+  }
+
+  async function loadDetail(c, detail) {
+    var parts = [];
+
+    parts.push('<div class="meta-line">End reason: ' + esc(c.endReason || '—') + '</div>');
+
+    if (c.booking) {
+      parts.push('<h3>Booking</h3><div class="booking-card">' +
+        esc(c.booking.service) + ' — ' + esc(c.booking.date) + ' at ' + esc(c.booking.time) +
+        (c.booking.price !== undefined ? ' · $' + Number(c.booking.price).toFixed(2) : '') +
+        '</div>');
+    }
+
+    if (c.tools && c.tools.length) {
+      parts.push('<h3>Tools</h3><div class="tools-timeline">' +
+        c.tools.map(function (t) {
+          return '<div class="tool-line"><span class="' + (t.ok ? 'tool-ok' : 'tool-fail') + '"></span>' + esc(t.name) + '</div>';
+        }).join('') + '</div>');
+    }
+
+    if (c.hasRecording) {
+      parts.push('<h3>Recording</h3><audio controls preload="none" src="/admin/api/recording/' + encodeURIComponent(c.callSid) + '"></audio>');
+    }
+
+    detail.innerHTML = parts.join('');
+
+    if (c.hasTranscript) {
+      var h3 = document.createElement('h3');
+      h3.textContent = 'Transcript';
+      detail.appendChild(h3);
+      var chat = document.createElement('div');
+      chat.className = 'chat';
+      chat.innerHTML = '<span class="loading">Loading transcript…</span>';
+      detail.appendChild(chat);
+      try {
+        var res = await fetch('/admin/api/transcript/' + encodeURIComponent(c.callSid));
+        var data = await res.json();
+        chat.innerHTML = '';
+        (data.entries || []).forEach(function (entry) {
+          var bubble = document.createElement('div');
+          bubble.className = 'bubble ' + (entry.role === 'erica' ? 'erica' : 'caller');
+          bubble.textContent = entry.text;
+          chat.appendChild(bubble);
+        });
+        if (!data.entries || !data.entries.length) {
+          chat.innerHTML = '<span class="loading">No transcript.</span>';
+        }
+      } catch (err) {
+        chat.innerHTML = '<span class="loading">Transcript unavailable.</span>';
+      }
+    }
+  }
+
+  function pauseOrResumeRefresh() {
+    // Auto-refresh guard: skip re-rendering the list (which would collapse
+    // every open <details>) while any call's detail is expanded.
+  }
+
+  function anyDetailOpen() {
+    return !!document.querySelector('details.call[open]');
+  }
+
+  async function refresh() {
+    if (anyDetailOpen()) return; // paused-while-detail-open guard
+    await Promise.all([loadStats(), loadCalls()]);
+    document.getElementById('refreshedAt').textContent =
+      'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
+  document.getElementById('flagToggle').addEventListener('click', function () {
+    state.filterFlagged = !state.filterFlagged;
+    this.setAttribute('aria-pressed', String(state.filterFlagged));
+    renderCalls();
+  });
+
+  refresh();
+  state.refreshTimer = setInterval(refresh, 30000);
+})();
+</script>
+</body>
+</html>

@@ -509,7 +509,7 @@ the existing scaffolding): enabled → create called once with dual channels +
 sid persisted; RECORD_CALLS='false' → not called; no client → no throw, no
 record; recording API rejection → call proceeds unharmed.
 
-## M3 — [ ] Owner dashboard: audit every call from a phone (P0, code) — depends on M1+M2
+## M3 — [x] worker-M3 2026-08-22T00:00:00Z — Owner dashboard: audit every call from a phone (P0, code) (implemented, awaiting Fable review/commit) — depends on M1+M2
 **Why:** the audit surface. Aryan/Richa open one page and see: what calls came
 in, what happened, what it cost, what it earned, and any call that needs a
 listen. Market table stakes (recordings/transcripts/summaries per call).

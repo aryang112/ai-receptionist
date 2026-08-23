@@ -4,6 +4,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { metadata } from './routes/metadata.js';
 import { twilioVoice } from './routes/twilio.js';
+import { adminRouter } from './routes/admin.js';
 import { setupTwilioRealtimeStream } from './realtime/twilioStream.js';
 import { warnStaleAliases } from './services/booking.js';
 import { rateLimiter } from './middleware/rateLimit.js';
@@ -52,8 +53,18 @@ app.use(
     max: env.API_RATE_LIMIT_MAX,
   })
 );
+// M3: owner/Richa audit dashboard — same stricter rate-limit config as /api
+// (a low-traffic, human-driven surface, unlike /twilio's call volume).
+app.use(
+  '/admin',
+  rateLimiter({
+    windowMs: env.RATE_LIMIT_WINDOW_MS,
+    max: env.API_RATE_LIMIT_MAX,
+  })
+);
 app.use('/api', metadata);
 app.use('/twilio', twilioVoice);
+app.use('/admin', adminRouter);
 
 app.get('/', (_req, res) => {
   res.status(200).type('html').send(`

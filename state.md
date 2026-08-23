@@ -3,6 +3,267 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-22 — M3 IMPLEMENTED (worker agent)
+**Task:** Round 4 M3 — the owner/Richa audit dashboard: one page, opened from
+a phone, showing every call, what happened, cost, revenue, and which calls
+need a listen. Depends on M1 (usage/transcript/endReason) + M2 (recordings),
+both already implemented (awaiting Fable review, not yet committed this
+session — read directly off the working tree, not off any commit).
+**Files (all new except the two mount points):** NEW `src/routes/admin.ts`,
+NEW `src/public/dashboard.html`, NEW `src/tests/admin.route.test.ts`;
+modified `src/config/env.ts` (+`ADMIN_TOKEN`), `src/index.ts` (mount only).
+`business.json`/`.env` are **not in the diff at all** (`git diff --stat`
+empty on both). `twilioStream.ts`/`openaiSession.ts` do not appear in `git
+status` at all — untouched. Grepped the diff for `handleBargeIn`/`markQueue`/
+`bargeInEpoch` → zero hits. `adminRouter` exposes **GET only** — grepped for
+`adminRouter.(post|put|delete|patch)` → zero hits, confirmed read-only.
+
+**1. `env.ts` — `ADMIN_TOKEN` (default `''`).** Same convention as the other
+string-typed env knobs (`env` object field, tests reassign directly).
+
+**2. `src/routes/admin.ts` — auth (`adminAuth` middleware, mirrors
+`wsAuth.verifyStreamToken`'s fail-closed shape exactly):**
+- Empty `ADMIN_TOKEN` + `NODE_ENV==='production'` → every route 401s
+  (`{error:'Admin dashboard is not configured'}`) — fails closed, never
+  falls open on a missing secret where it matters.
+- Empty `ADMIN_TOKEN` + not production → permissive, warns once
+  (`'ADMIN_TOKEN is empty — /admin is unauthenticated (dev only)'`).
+- Configured token: accepts `?token=` (page loads only — see below),
+  `Authorization: Bearer <token>`, or an `admin_token` cookie (checked in
+  that priority order). Compared via `safeTokenEquals` — **SHA-256 hash both
+  sides first, then `timingSafeEqual` on the two fixed 32-byte digests**
+  (per the brief: `timingSafeEqual` throws on a raw length mismatch, and a
+  naive pad would still leak length via timing; hashing first sidesteps
+  both). No `cookie-parser` dependency needed — `res.cookie()` is native to
+  Express's response object; cookie *reading* is a ~10-line manual
+  `Cookie:` header parse (`getCookie()`), since only reading needed a
+  helper.
+- A valid `?token=` hit on the page itself (`req.path === '/'` inside the
+  router, i.e. exactly `GET /admin`) sets an httpOnly cookie
+  (`sameSite:'lax'`, `secure` in production, 30-day maxAge) then
+  `res.redirect('/admin')` — the token never lingers in browser history or
+  access logs after the first load. Sub-routes (`/api/*`) accept `?token=`
+  directly without redirecting (a `fetch()` call, not a navigation — a
+  redirect there would just be a wasted round-trip, the browser resends the
+  cookie automatically on same-origin fetches afterward anyway).
+- An INCORRECT `?token=` still 401s with no cookie set (tested explicitly).
+
+**3. Dashboard HTML path resolution (import.meta-safe, no `__dirname`) —
+verified against BOTH run modes, not assumed:** `tsc`'s `resolveJsonModule`
+copies referenced `.json` *module imports* into `dist/` (confirmed:
+`dist/config/business.json` exists after `npm run build`), but
+`dashboard.html` is static content, not a TS import, so it is **NOT**
+auto-copied — confirmed `dist/public` does not exist post-build. Fixed with
+a two-candidate resolution, first match wins: (a) `path.join(dirname(
+fileURLToPath(import.meta.url)), '..', 'public', 'dashboard.html')` — hits
+directly under `tsx` dev, where the running file IS `src/routes/admin.ts`;
+(b) `path.join(process.cwd(), 'src', 'public', 'dashboard.html')` — the
+fallback for a compiled `node dist/index.js` run (no asset-copy step exists
+in `npm run build` today), since the process is always launched from the
+repo root. **Ran the actual resolution logic standalone against the real
+built `dist/routes/admin.js` location** (`node -e ...`, see verification) —
+confirmed candidate (a) is `false`/misses, candidate (b) is `true`/hits, so
+a compiled prod run finds the real file. Read once at boot into an in-memory
+string; a boot-time read failure logs an error and falls back to a plain
+"Dashboard unavailable" stub rather than crashing the server.
+
+**4. Record join (`buildCallSummaries`) — reads ONLY via `readCalls()` from
+callStore.ts (no hand-rolled JSONL parser, per the brief):** groups all rows
+by `callSid`. A group with a `'blocked'` row and NO `'start'` row (S2
+webhook-rejection — never opened an OpenAI session) becomes its own entry
+(`blocked:true`, `outcome:'blocked'`, `fromLast4` only, `flags:[]` — a
+blocked call already worked as designed, so it's deliberately NOT tagged
+"needs review" the same way a mid-call anomaly is; `blocked:true` already
+marks it distinctly for the UI). A group WITH a `'start'` row builds the
+full summary: `fromLast4` computed server-side via `last4()` (never the full
+number — the group's raw `from` field never leaves this function); `tools`
+mapped to `{name, ok}` only (no raw `detail`); `booking` from the LAST
+booking row in the group; `usage`/`estCostUsd`/`endReason` from the (at most
+one) `'end'` row, all via the same conditional-spread idiom
+`exactOptionalPropertyTypes` forces everywhere else in this codebase.
+
+**Flags — exact strings grepped from `twilioStream.ts` before writing the
+matcher (not assumed from prose):** `setEndReasonOnce` call sites write
+`'silence — no response after check-in'`, `'duration cap'`,
+`'transferred to owner'`, `'caller hung up'`; `endCallNow`'s reason
+parameter carries `'spam decline'` (via `reason === 'spam' ?
+'spam decline' : 'caller confirmed done'`); `this.outcome = 'spam'` is set
+directly. `computeFlags()` matches via case-insensitive `.includes()` on
+these (robust to small wording tweaks upstream, per the brief's own
+`endReason`/`outcome` framing) — `no-outcome` (outcome `'none'`),
+`tool-error` (any tool `ok:false`), `silence-hangup`, `duration-cap`,
+`spam` (outcome `'spam'` OR reason contains `'spam'`), `transfer-failed`
+(a `transfer_to_owner` tool row with `ok:false` specifically, not just any
+failed tool).
+
+**5. `/api/stats` math:** daily buckets keyed by `DateTime.fromMillis(
+startTs, {zone: env.TIMEZONE}).toISODate()`, newest-first. Totals: `calls`
+(includes blocked entries), `outcomes` histogram, `bookings` count +
+`revenue` (sum of `booking.price` across all calls in-window, rounded 2dp),
+`spamDeclined` (outcome `'spam'`) + `webhookBlocked` (S2 `blocked:true`
+rows) counted **separately** (per spec: "spam declined + webhook-blocked
+counts"), `afterHours` (non-blocked calls whose `startTs`, converted to
+salon TZ, falls outside `getOpenClose(dateISO)` — reuses `src/core/hours.ts`
+directly, not a reimplementation), `avgDurationMs` (non-blocked calls with
+`durationMs>0` only — a blocked call's `durationMs` is always 0 and would
+skew the average toward zero), `totalEstCostUsd` (sum, 4dp), `revenuePerDollar`
+(`revenue/cost`, **null** — not `Infinity`/`0` — when cost is 0, tested
+explicitly).
+⚠️ **Interpretation note, not a bug:** the spec's "today + 7-day" stat tiles
+are implemented as **rolling windows** (`/api/stats?days=1` and `?days=7`,
+i.e. last-24h and last-7-days), not calendar-day boundaries — the endpoint
+itself filters via `Date.now() - days*24h`, matching `/api/calls`'s own
+`days` semantics (kept consistent between both endpoints on purpose).
+Labeled "Last 24 hours" / "Last 7 days" in the dashboard UI rather than
+"Today" specifically so the label stays literally accurate. Flagging for
+Fable in case a true calendar-day tile is wanted instead (the `daily[]`
+array in the stats response already has the calendar-day breakdown needed
+to build that with zero new backend work).
+
+**6. `/api/recording/:callSid` proxy:** looks up the `'recording'` row for
+that `callSid`; 404 if none. Builds the Twilio media URL
+(`https://api.twilio.com/2010-04-01/Accounts/<SID>/Recordings/<RSID>.mp3`),
+fetches with a `Basic` auth header built inline (`Buffer.from('SID:TOKEN')
+.toString('base64')` — the credential string is never assigned to a
+standalone variable that could get logged), pipes the response body via
+`Readable.fromWeb(twilioRes.body).pipe(res)` with `Content-Type: audio/
+mpeg`. A non-OK Twilio response logs `{callSid, status}` — **never** the
+Authorization header or credentials — and 502s. `try/catch` around the
+whole handler; checks `res.headersSent` before writing an error response so
+a mid-stream failure can't double-send. Verified end-to-end with a REAL
+`ReadableStream` (not a shallow mock) piped through the actual
+`Readable.fromWeb` code path — see Tests.
+
+**7. `index.ts` mount:** `/admin` gets its OWN call to the same
+`rateLimiter({windowMs: env.RATE_LIMIT_WINDOW_MS, max: env.
+API_RATE_LIMIT_MAX})` factory `/api` already uses (same config, a separate
+bucket-map instance — matches how `/twilio` and `/api` are each already
+independently wired one call each; reuses the established PATTERN, not a
+shared singleton instance). `adminRouter` mounted after it, alongside `/api`
+and `/twilio`.
+
+**Tests — NEW `src/tests/admin.route.test.ts` (21 tests),** supertest +
+a standalone `express()` app mounting only `adminRouter` (same technique as
+`twilio.route.test.ts` — **supertest was ALREADY a devDependency**
+(`^7.1.4`, plus `@types/supertest`) contrary to the task brief's caution to
+check first; no new dependency added). `env.CALL_STORE_PATH` pointed at a
+per-test tmp `.jsonl` fixture (`os.tmpdir()`) — confirmed by reading
+`callStore.ts` first that `CALL_STORE_PATH` is read at CALL time inside
+`append()`/`readCalls()`, not snapshotted at module load, so a plain static
+top-level `import { adminRouter }` + per-test `env.CALL_STORE_PATH =
+tmpFile` works with no dynamic-import/module-reset dance needed (unlike
+`blocklist.test.ts`'s pattern, which resets a *different* kind of
+module-level cache for a different reason).
+- **Auth (8 tests):** production+empty-token refuses `/admin` AND
+  `/admin/api/calls`; dev/test+empty-token passes through; configured-token
+  with no creds/wrong Bearer/correct Bearer; `?token=` on the page sets an
+  httpOnly cookie + redirects to `/admin` (asserted on `Set-Cookie` and
+  `Location` headers directly, not just status); an INCORRECT `?token=`
+  401s with **no** `Set-Cookie` header at all; a cookie set by a prior
+  exchange authenticates a JSON API call on its own.
+- **`/api/calls` join (5 tests):** a full fixture (start+2 tools incl. a
+  FAILED `transfer_to_owner`+booking+recording+transcript+end) asserts
+  `fromLast4`/`recognized`/`outcome`/`booking`/`usage`/`estCostUsd`/
+  `hasRecording`/`hasTranscript`/`tools` AND `flags` contains BOTH
+  `tool-error` and `transfer-failed` simultaneously (a genuinely mixed
+  scenario) — plus a direct `JSON.stringify(res.body)` scan proving the
+  full 10-digit number never appears anywhere in the response; a
+  blocked-only entry test; a `no-outcome`+`silence-hangup` flags-from-
+  endReason test; a `days` window boundary test (an old call excluded at
+  `days=1`, included at `days=365`); a newest-first ordering test.
+- **`/api/stats` math (2 tests):** the full revenue/cost/afterHours/spam/
+  webhookBlocked scenario — **`afterHours` is proven against the REAL
+  `getOpenClose()` contract**, not a hardcoded weekday: a test helper
+  (`mostRecentOpenDay`) walks backward from "yesterday" asking
+  `getOpenClose()` itself which day is open, so the test is robust to
+  whatever real calendar date the suite runs on and can never accidentally
+  collide with `business.json`'s `closedDates`/`vacations` (same
+  robustness principle as the codebase's other hours-dependent tests);
+  `outcomes.booked===2`/`spam===1`/`blocked===1` histogram checked too. A
+  second test proves `revenuePerDollar` is `null` (not `0`/`Infinity`) when
+  a call has revenue but no cost data at all.
+- **`/api/transcript/:callSid` (2 tests):** returns entries in order; 404s
+  when absent.
+- **`/api/recording/:callSid` proxy (4 tests):** requires auth (401 with a
+  configured token and no creds); 404 with no recording row; a REAL
+  `ReadableStream` (via the global Web Streams API, not a hand-wavy mock)
+  piped through `vi.stubGlobal('fetch', ...)` — asserts the exact fetch URL
+  AND the exact `Basic` auth header value, asserts the byte-exact streamed
+  body via a custom supertest binary `.parse()`, and asserts (via
+  `JSON.stringify(res.headers)` + the response body text) that the raw
+  Twilio auth token string appears **NOWHERE** in what the browser
+  receives; a Twilio-fetch-failure case (`ok:false`) 502s without throwing.
+
+**Verified:**
+- `npx tsc --noEmit` → clean, zero errors (including the new
+  `exactOptionalPropertyTypes` fixes on `CallSummary`'s optional fields,
+  needed after the repo's format-on-save hook reformatted the type — re-read
+  the file before the follow-up edit, per the tool's own warning).
+- `npm test` → **222/222 passed** (was 201/201 before this task; net +21,
+  all in the new `admin.route.test.ts`). Test files: 30 passed (was 29 — the
+  one new file). Floor was 201 (M2's count) — 222 > 201, satisfied.
+- `TZ=UTC npm test` → **222/222 passed**, same 30 files.
+- `npm run build` → clean `tsc` compile with the new files included
+  (`dist/routes/admin.js` present); used this SAME build to verify the
+  dashboard-path fallback for real (see #3 above) rather than just asserting
+  it in a comment.
+- `git diff --stat -- .env src/config/business.json` → **empty** (neither
+  touched). `git status --short -- src/realtime/twilioStream.ts src/realtime/
+  openaiSession.ts` → **empty** (neither appears at all — genuinely
+  untouched, not just unmodified-looking).
+- Grepped the diff for `handleBargeIn`/`markQueue`/`bargeInEpoch` → zero
+  hits.
+- Grepped `admin.ts` for `adminRouter.(post|put|delete|patch)` → zero hits
+  — confirmed GET-only, no mutation endpoints, per the hard constraint.
+- Grepped `admin.ts` + `dashboard.html` (the actual shipped files, not the
+  test fixtures) for 10-digit sequences → zero hits — no full phone number
+  is hardcoded or interpolated anywhere in the served surface.
+
+**Deviations from spec (all judgment calls within the spec's stated
+flexibility, flagging for Fable's review):**
+1. No boot-time `assertAdminTokenConfigured()`-style hard throw (unlike
+   `wsAuth.assertWsAuthConfigured()`, which crashes boot in production with
+   no `WS_AUTH_SECRET`). The M3 spec's own wording is request-time ("REFUSE
+   THE ROUTES in production"), which `adminAuth` already does on every
+   request — a missing `ADMIN_TOKEN` in production is inert (dashboard
+   401s) rather than crash-the-whole-server fatal, which seemed like the
+   safer default for a NICE-TO-HAVE audit surface vs. the WS stream (a
+   core call-path dependency). Easy 1-line follow-up in `index.ts` if Fable
+   wants exact boot-time parity with wsAuth.
+2. Blocked (S2 webhook-rejected) call entries get `flags:[]`, not a `'spam'`
+   flag — reasoned in the code comment: they already worked exactly as
+   designed (rejected before costing anything), so tagging them "needs
+   review" alongside genuine anomalies felt like it would dilute that
+   filter's usefulness; `blocked:true` already marks them distinctly in the
+   UI. Trivial to add `'spam'` to their flags if Fable disagrees.
+3. Stat-tile windows are rolling (`days=1`/`days=7`), not calendar-day —
+   see the code comment in #5 above; labeled "Last 24 hours"/"Last 7 days"
+   in the UI to stay accurate rather than silently mislabeling a rolling
+   window as "Today".
+4. Noted, not fixed (pre-existing, not introduced by this task):
+   `env.TIMEZONE` (used by `/api/stats` for salon-local day bucketing) and
+   `business.json`'s own `timezone` field (used internally by `hours.ts`'s
+   `getOpenClose`) are two independently-configured values that only
+   happen to coincide by default (`'America/New_York'` both places) — a
+   latent architectural detail already present before M3, surfaced here
+   because this task's after-hours math depends on both agreeing.
+
+**⚠️ LIVE VALIDATION still required (per M2's own state.md entry, not new
+here):** the recording proxy's REST-fetch-and-pipe logic is now unit-tested
+against a real `ReadableStream`, but has never been proven against an
+ACTUAL Twilio recording end-to-end (dashboard → proxy → real
+`.mp3` bytes → browser `<audio>` playback) — that still needs the first
+real recorded call M2 flagged as outstanding. Also: `ADMIN_TOKEN` is still
+empty in `.env` (not set by this task, per "do not touch `.env`") — the
+dashboard is currently dev-permissive; Aryan needs to set `ADMIN_TOKEN` in
+`.env` (and restart) before this is safe to expose outside localhost, and
+the dashboard's mobile layout has only been reviewed by reading the CSS, not
+opened on an actual phone yet.
+
+**Queue status:** M3 marked `[x]` below — implemented, awaiting Fable
+review/commit. Not committed by this worker (per ritual — no
+`git add`/commit).
+
 ## 2026-08-22 — M2 IMPLEMENTED (worker agent)
 **Task:** Round 4 M2 — dual-channel call recordings via the Twilio REST API,
 env-gated, fire-and-forget. Aryan wants to HEAR the calls (ground truth for
