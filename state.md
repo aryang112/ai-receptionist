@@ -839,6 +839,30 @@ codebase's established per-file convention):
 review/commit. Not committed by this worker (per ritual — no
 `git add`/commit).
 
+## 2026-08-22 (3) — ✅ ROUND 4 COMPLETE: pilot observability (logs, recordings, dashboard, digest) + Vonage rollout plan — handoff (read this first)
+All 4 M-tasks shipped, reviewed, committed. **239/239 tests (was 174 after
+Round 3), tsc clean, both TZs.** ~0.85M worker tokens (M1 261k · M2 189k ·
+M3 223k · M4 182k). Commits: `9b97734` M1 usage/transcript/endReason
+persistence · `3a72832` M2 dual-channel recordings (RECORD_CALLS=true) ·
+`a51c2a8` M3 /admin dashboard (smoke-tested LIVE on :5099 against real call
+history — 10 calls, $45 revenue rendered) · `2f46a56` M4 daily digest SMS +
+Sunday weekly. Plus `41cda15` docs: Round-4 specs + **docs/VONAGE_PILOT.md**
+(3-stage rollout: after-hours forwarding → vacation forward-all → always-on;
+caller-ID passthrough is the day-1 verification).
+**LIVE-VALIDATION QUEUE (added to the checklist):**
+- Set `ADMIN_TOKEN` in .env (dashboard is dev-permissive until then), open
+  /admin?token=… on a phone.
+- One call with `OPENAI_INPUT_TRANSCRIPTION=gpt-4o-mini-transcribe` →
+  greeting plays = session accepted → leave on (caller-side transcript).
+  Default is 'off'; payload byte-identical (snapshot-proven).
+- Confirm the first recording appears in Twilio + plays via /admin proxy.
+- Set `DIGEST_TO=+14433706471,<Aryan's cell>` when ready; digest fires 19:30.
+**DECISIONS FOR ARYAN:** deploy target for the 24/7 pilot (Railway/Fly/
+Render/VPS — VONAGE_PILOT.md "Deployment"); Vonage after-hours rule config;
+rotate the Phorest secret BEFORE any push (still standing). Pre-existing
+dead const noted: twilioStream.ts:61 CORE_SERVICES (unused since an old
+prompt rewrite — cleanup candidate, untouched).
+
 ## 2026-08-22 (2) — ✅ ROUND 3 COMPLETE (Fable orchestrator + Sonnet workers): spam, vacation, call-mix defects — handoff (read this first)
 All 6 Round-3 tasks shipped, reviewed, committed. **174/174 tests (was 124),
 tsc clean, both TZs.** One worker per task, sequential, Fable review-gate on

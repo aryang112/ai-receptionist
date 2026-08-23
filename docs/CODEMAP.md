@@ -77,6 +77,18 @@ Caller dials Twilio number
   cache + write-through `data/blocklist.json` (human-editable = the unblock
   path); never throws. The client guard lives in twilioStream (a Phorest
   client can never be blocklisted).
+- **callStore.ts** — append-only JSONL per-call persistence (`data/calls.jsonl`).
+  Record types: start (from, recognizedClientId, stirVerstat) · tool · booking ·
+  end (outcome, endReason, usage, estCostUsd, assistantTranscript) · transcript
+  (interleaved both-side entries, M1) · recording (recordingSid, M2) · blocked
+  (S2). `readCalls()` is the one sanctioned reader (dashboard + digest).
+- **ownerSms.ts** — `sendOwnerSms(body, to?)` — the extracted owner-SMS core
+  (fire-and-forget, never throws); used by running-late FYI, vacation
+  message-taking, and the digest.
+- **digest.ts** — `buildDailyDigest`/`buildWeeklyDigest` (calls, bookings +
+  $revenue, spam, after-hours captured, est cost — salon-TZ day buckets; null
+  on quiet days) + `maybeSendDigest(now?)` (once-daily send at `DIGEST_TIME`,
+  stamped in `data/digest-state.json`; Sundays append the weekly).
 - **phorest.mock.ts** — mock adapter (tests + USE_MOCK_PHOREST=true).
 - **phorest.ts** — selector (mock vs real by env / NODE_ENV).
 - **phorest.types.ts** — `PhorestPort` interface (CONTRACT — mock & real must match),
@@ -103,19 +115,30 @@ Caller dials Twilio number
 - **twilio.ts** — `/voice` (returns the Stream TwiML + caller-# param + `stir`
   STIR/SHAKEN param, log-only). S2: a blocklisted number gets `<Reject>` here —
   before any OpenAI session opens (repeat robocalls cost ~$0). `/gather` (legacy).
+- **admin.ts** — the OWNER DASHBOARD (M3). Token-auth (`ADMIN_TOKEN`,
+  fail-closed in prod, timing-safe compare), read-only GETs: `/admin` (serves
+  `src/public/dashboard.html` — self-contained mobile-first page),
+  `/admin/api/calls` (joined per-call view: last-4 only, outcome, tools,
+  booking, usage/cost, flags), `/admin/api/stats` (daily buckets: revenue
+  booked, est cost, after-hours capture, spam), `/admin/api/transcript/:sid`,
+  `/admin/api/recording/:sid` (auth-proxied Twilio audio — creds never reach
+  the browser).
 - **appointment.ts**, **metadata.ts**, **health.ts** — REST/health endpoints.
 
 ## src/config/
 - **env.ts** — all env (model, voice, VAD knobs `OPENAI_VAD_*`, `OPENAI_NOISE_REDUCTION`,
   `SERVICE_CACHE_TTL_HOURS`, Phorest creds, `OWNER_PHONE`, `SILENCE_CHECKIN_MS`/
   `SILENCE_HANGUP_MS` (20s/15s watchdog), `MAX_CALL_MINUTES` (10),
-  `BLOCKLIST_PATH`, `SPAM_BLOCK_THRESHOLD` (2)). Defaults are sensible.
+  `BLOCKLIST_PATH`, `SPAM_BLOCK_THRESHOLD` (2), `OPENAI_INPUT_TRANSCRIPTION`
+  (⚠️ default 'off' — session-shape change, flip only after a live call
+  validates it), `RECORD_CALLS` ('true'), `ADMIN_TOKEN` (set in prod!),
+  `DIGEST_ENABLED`/`DIGEST_TIME` ('19:30')/`DIGEST_TO`). Defaults are sensible.
 - **business.json** — salon hours per weekday + closedDates + `vacations`
   (`[{from,to,note}]` — ONE entry closes booking those dates, reroutes transfer
   to SMS message-taking, injects the prompt block; edit this for future
   vacations) + `location` (address for the prompt/hours tool). **Do not change casually.**
 
-## src/tests/  (vitest, 174 tests)
+## src/tests/  (vitest, 239 tests)
 phorest.client.test.ts (URL/range/client_id/timezone/retry regressions),
 hours.test.ts, booking.alias/match.test.ts, slots.test.ts (clean-grid snapping),
 wsAuth, middleware, twilioStream.bargein/contracts, phorest.mock/selector,
