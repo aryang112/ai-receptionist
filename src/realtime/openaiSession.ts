@@ -388,9 +388,13 @@ export class OpenAIRealtimeSession {
    * is the RT-2/RT-3 call-killer. Mirrors the guard already inside
    * scheduleFailedRetry.
    */
-  requestResponse(): void {
-    if (!this.isOpen() || this.activeResponse) return;
+  requestResponse(): boolean {
+    // AUDIT FIX (2026-08-22): report whether the response.create actually
+    // fired, so callers (duration-cap goodbye) can retry instead of hanging
+    // up after a goodbye that was silently dropped mid-conversation.
+    if (!this.isOpen() || this.activeResponse) return false;
     this.sendRaw({ type: 'response.create' });
+    return true;
   }
 
   /**

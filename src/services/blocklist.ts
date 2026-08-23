@@ -31,12 +31,40 @@ function normalizePhone(phone: string): string {
     : digits;
 }
 
-// Loaded lazily on first use and kept warm; a write updates this AND the file
+// AUDIT FIX (2026-08-22, P0 bundle): numbers that must NEVER be spam-recorded
+// or webhook-blocked, no matter what. Under Vonage call-forwarding a
+// misconfigured trunk can substitute ONE common number as every caller's ID —
+// one spam verdict against that number would dead the entire forwarded line
+// at the webhook. Covers our own Twilio number, the owner's phone, and the
+// env allowlist SPAM_NEVER_BLOCK (comma-separated; put the Vonage/salon
+// number(s) there before Stage 1). Recomputed per call — cheap, and it keeps
+// env-mutating tests honest.
+function allowlisted(normalized: string): boolean {
+  const raw = [env.TWILIO_NUMBER, env.OWNER_PHONE, ...env.SPAM_NEVER_BLOCK];
+  return raw.some((n) => n && normalizePhone(n) === normalized);
+}
+
+// Loaded lazily and kept warm; a write updates this AND the file
 // (write-through), so isBlocked() never has to hit disk on the hot path.
+// AUDIT FIX (2026-08-22): the cache is mtime-aware — a manual edit of
+// data/blocklist.json (the documented unblock path) now takes effect on a
+// RUNNING process at the next read instead of being invisible until restart
+// and then silently clobbered by the next write-through.
 let cache: BlocklistData | null = null;
+let cacheMtimeMs: number | null = null;
 
 function loadCache(): BlocklistData {
-  if (cache) return cache;
+  let mtimeMs: number | null = null;
+  try {
+    mtimeMs = fs.statSync(env.BLOCKLIST_PATH).mtimeMs;
+  } catch {
+    // File missing — first run, or someone deleted it (a legitimate "unblock
+    // everyone" move). Treat as empty; drop any stale cache.
+    cache = {};
+    cacheMtimeMs = null;
+    return cache;
+  }
+  if (cache && cacheMtimeMs === mtimeMs) return cache;
   try {
     const raw = fs.readFileSync(env.BLOCKLIST_PATH, 'utf8');
     const parsed: unknown = JSON.parse(raw);
@@ -44,10 +72,12 @@ function loadCache(): BlocklistData {
       parsed && typeof parsed === 'object' && !Array.isArray(parsed)
         ? (parsed as BlocklistData)
         : {};
+    cacheMtimeMs = mtimeMs;
   } catch {
-    // Missing file (first run), unreadable, or malformed JSON — start empty.
-    // Never throw: a corrupt blocklist must not take down call handling.
+    // Unreadable or malformed JSON — start empty. Never throw: a corrupt
+    // blocklist must not take down call handling.
     cache = {};
+    cacheMtimeMs = null;
   }
   return cache;
 }
@@ -58,7 +88,10 @@ function persist(data: BlocklistData): void {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
   } catch (err) {
-    logger.warn({ err }, 'blocklist: failed to persist — spam count kept in memory only');
+    logger.warn(
+      { err },
+      'blocklist: failed to persist — spam count kept in memory only'
+    );
   }
 }
 
@@ -72,6 +105,13 @@ export function recordSpamOutcome(phone: string): void {
   try {
     const normalized = normalizePhone(phone);
     if (!normalized || normalized.length !== 10) return;
+    if (allowlisted(normalized)) {
+      logger.warn(
+        { last4: normalized.slice(-4) },
+        'blocklist: allowlisted number got a spam outcome — NOT recording'
+      );
+      return;
+    }
     const data = loadCache();
     const existing = data[normalized];
     data[normalized] = {
@@ -89,6 +129,7 @@ export function isBlocked(phone: string): boolean {
   try {
     const normalized = normalizePhone(phone);
     if (!normalized) return false;
+    if (allowlisted(normalized)) return false;
     const data = loadCache();
     const entry = data[normalized];
     return !!entry && entry.count >= env.SPAM_BLOCK_THRESHOLD;
@@ -104,4 +145,5 @@ export function isBlocked(phone: string): boolean {
  */
 export function __resetBlocklistCacheForTests(): void {
   cache = null;
+  cacheMtimeMs = null;
 }

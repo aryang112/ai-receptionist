@@ -84,16 +84,21 @@ export function buildInstructions(
     vacation.from <= todayISO &&
     todayISO <= vacation.to
   );
+  // AUDIT FIX (2026-08-22, P1): the transfer-becomes-a-text instruction is
+  // ONLY true while the vacation is ACTIVE (the handler gate is active-only).
+  // During the upcoming window it told the model to promise "I'll text her
+  // right now" while transfer_to_owner still live-dialed Richa — so the
+  // upcoming variant now says transfers work normally until she leaves.
   const vacationBlock = vacation
     ? `
 
 ═══ VACATION (Richa is away) ═══
 ${
   vacationActive
-    ? `Richa is away right now, back ${DateTime.fromISO(vacation.reopenISO, { zone: env.TIMEZONE }).toFormat('MMMM d')}.`
-    : `Richa will be away ${DateTime.fromISO(vacation.from, { zone: env.TIMEZONE }).toFormat('MMMM d')}–${DateTime.fromISO(vacation.to, { zone: env.TIMEZONE }).toFormat('MMMM d')}, back ${DateTime.fromISO(vacation.reopenISO, { zone: env.TIMEZONE }).toFormat('MMMM d')}.`
-} Availability already excludes those dates — if a caller asks for one, explain warmly and offer the first days after she's back. Keep booking normally for dates after her return.
+    ? `Richa is away right now, back ${DateTime.fromISO(vacation.reopenISO, { zone: env.TIMEZONE }).toFormat('MMMM d')}. The salon is closed while she's away — if a caller asks for one of those dates, explain warmly and offer the first days after she's back. Keep booking normally for dates after her return.
 Erica cannot connect a caller to Richa while she's away — offer to pass a message along instead ("I'll text her right now") and call transfer_to_owner; it delivers the message to her as a text.`
+    : `Richa will be away ${DateTime.fromISO(vacation.from, { zone: env.TIMEZONE }).toFormat('MMMM d')}–${DateTime.fromISO(vacation.to, { zone: env.TIMEZONE }).toFormat('MMMM d')}, back ${DateTime.fromISO(vacation.reopenISO, { zone: env.TIMEZONE }).toFormat('MMMM d')}. The salon is closed those dates — if a caller asks for one, explain warmly and offer the first days after she's back. Until she leaves, everything works normally (including transferring to Richa).`
+}`
     : '';
 
   return `You are Erica, the warm and friendly AI receptionist for Richa's Threading Salon in Parkville, Maryland. You answer calls, book appointments, reschedule, cancel, and help with any questions about the salon.
@@ -551,6 +556,10 @@ export class TwilioRealtimeCall {
   private durationCapToolWaitTimer: NodeJS.Timeout | undefined = undefined;
   private durationCapGraceTimer: NodeJS.Timeout | undefined = undefined;
   private durationCapRetryTimer: NodeJS.Timeout | undefined = undefined;
+  // AUDIT FIX (2026-08-22): bounded cap-hangup attempts (3rd = forced, no
+  // barge-abort) + the mid-grace goodbye retry when a response was in flight.
+  private durationCapHangupAttempts = 0;
+  private durationCapGoodbyeRetryTimer: NodeJS.Timeout | undefined = undefined;
   // Caller looked up by their phone number (caller ID) at call start, so tools
   // answer instantly and Erica can greet them by name. null = not recognized.
   private prefetch: {
@@ -884,9 +893,20 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
    */
   private async recordSpamOutcomeIfNotClient(from: string): Promise<void> {
     try {
-      const client = await phorest
-        .lookupCustomerByPhone(from)
-        .catch(() => null);
+      // AUDIT FIX (2026-08-22, P1): a lookup ERROR is not a lookup MISS. If
+      // Phorest is down we cannot prove the caller isn't a client, so fail
+      // CLOSED (record nothing) — an outage window must never make real
+      // clients blocklistable. Only a clean "no match" proceeds to record.
+      let client: unknown;
+      try {
+        client = await phorest.lookupCustomerByPhone(from);
+      } catch {
+        logger.warn(
+          { last4: from.slice(-4) },
+          'spam outcome: client lookup FAILED — NOT recording (fail closed)'
+        );
+        return;
+      }
       if (client) {
         logger.warn(
           { last4: from.slice(-4) },
@@ -905,6 +925,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       const event = JSON.parse(data.toString()) as TwilioEvent;
       switch (event.event) {
         case 'start': {
+          // AUDIT FIX (2026-08-22, P1): a 'start' arriving after this call
+          // already closed (pre-auth timeout fired, or the socket died) must
+          // not spin up an OpenAI session nothing will ever close.
+          if (this.closed) break;
           this.streamSid = (event as TwilioStartEvent).start.streamSid;
           this.callSid = (event as TwilioStartEvent).start.callSid;
           // Auth gate: verify the short-lived signed token that routes/twilio.ts
@@ -961,6 +985,14 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           // auth gate above, so a rejected stream never spins one up.
           this.createSession(this.streamSid.slice(-8));
           await this.session.connect();
+          // AUDIT FIX (2026-08-22, P1): the caller (typically a robocall) may
+          // hang up DURING the handshake awaits. cleanup() already ran then
+          // (closing the session), so the continuation must STOP — otherwise
+          // it writes a phantom start row the dashboard/digest count, fires a
+          // recording on a dead call, and arms watchdog timers after cleanup
+          // (a per-call interval leak nothing would ever clear). Re-checked
+          // after every await in this handler.
+          if (this.closed) break;
           // Prices come from the get_prices tool on demand (NOT baked into the
           // prompt) — keeps the per-turn token footprint small so long calls
           // don't exhaust the Realtime token-per-minute rate limit.
@@ -968,10 +1000,12 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
             instructions: buildInstructions(),
             tools: TOOL_DEFINITIONS,
           });
-          this.sessionReady = true;
+          if (this.closed) break;
           // The lookup was very likely done during the handshake; await it (700ms
           // cap) then apply its context note now that the session is open.
+          // NOTE: sessionReady deliberately does NOT flip yet — see below.
           await warm;
+          if (this.closed) break;
           this.applyCallerContext();
           // Persist the call start (append-only JSONL; never throws). Do this
           // after warmCallerContext so recognizedClientId reflects a caller-ID
@@ -1002,6 +1036,16 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           // With the greeting's response created first, flushed early speech
           // instead rides the existing live-verified barge-in path (caller
           // talking over the greeting = a normal interruption).
+          // AUDIT FIX (2026-08-22, P1 — A2 residual): sessionReady flips HERE,
+          // not right after configureSession. While it was flipping ~700ms
+          // earlier (during the prefetch wait), handleMedia forwarded LIVE
+          // frames straight to OpenAI in that window, bypassing the buffer —
+          // an impatient "hello?" could still auto-create the first response
+          // and suppress the greeting (and its recording-consent line), and
+          // pre-flip buffered frames flushed AFTER later live frames (out-of-
+          // order audio). Now everything before this line buffers, and is
+          // flushed in order, after the greeting's response.create is queued.
+          this.sessionReady = true;
           // RT-8: replay any caller audio that arrived during the handshake so an
           // early "hello?" isn't swallowed.
           this.flushPendingMedia();
@@ -1216,6 +1260,14 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     const silentMs = now - this.lastActivityAt;
     if (!this.checkInFired) {
       if (silentMs >= env.SILENCE_CHECKIN_MS) {
+        this.session.injectContext(
+          'BACKGROUND (do not read aloud as-is): the line has been quiet for a while. In ONE short, warm sentence, check that the caller is still there — e.g. "Are you still there?" — then stop and wait for them.'
+        );
+        // AUDIT FIX (2026-08-22): only latch the once-per-call check-in when
+        // the response.create actually fired — a drop (response in flight)
+        // now retries on the next 5s tick instead of consuming the one
+        // check-in silently.
+        if (!this.session.requestResponse()) return;
         this.checkInFired = true;
         // Treat the check-in moment as a fresh baseline — the follow-up
         // hangup timer measures silence AFTER this, not from the original
@@ -1226,10 +1278,6 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           { streamSid: this.streamSid, silentMs },
           '🤫 silence check-in'
         );
-        this.session.injectContext(
-          'BACKGROUND (do not read aloud as-is): the line has been quiet for a while. In ONE short, warm sentence, check that the caller is still there — e.g. "Are you still there?" — then stop and wait for them.'
-        );
-        this.session.requestResponse();
       }
       return;
     }
@@ -1255,6 +1303,14 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       this.silenceHangupTimer = setTimeout(() => {
         this.silenceHangupTimer = undefined;
         if (this.closed) return;
+        // AUDIT FIX (2026-08-22, P2): another hangup/handoff owns the call
+        // (e.g. the model's own end_call is mid-drain — its transferring flag
+        // is up). Stand down and let a later silence period re-trigger if the
+        // call somehow continues.
+        if (this.transferring) {
+          this.silenceHangupInitiated = false;
+          return;
+        }
         if (this.lastActivityAt > goodbyeRequestedAt) {
           // Caller spoke while the goodbye was generating/playing — stand
           // down. checkInFired stays latched (the check-in itself is still
@@ -1310,9 +1366,12 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     this.waitForToolCallsThenSayGoodbye(Date.now());
   }
 
-  /** G3: recheck toolCallsInFlight every 500ms, up to a 15s ceiling. */
+  /** G3: recheck toolCallsInFlight every 500ms, up to a 15s ceiling.
+   * AUDIT FIX (2026-08-22, P2): every downstream step of the cap chain also
+   * bails on `transferring` — a handoff to Richa that started after the cap
+   * fired must not be hung up mid-redirect by the cap's goodbye/grace. */
   private waitForToolCallsThenSayGoodbye(startedAt: number) {
-    if (this.closed) return;
+    if (this.closed || this.transferring) return;
     if (this.toolCallsInFlight > 0 && Date.now() - startedAt < 15000) {
       this.durationCapToolWaitTimer = setTimeout(
         () => this.waitForToolCallsThenSayGoodbye(startedAt),
@@ -1330,11 +1389,23 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
    * the hangup fires.
    */
   private sayDurationCapGoodbye() {
-    if (this.closed) return;
+    if (this.closed || this.transferring) return;
     this.session.injectContext(
       'BACKGROUND (do not read aloud as-is): we are at the call time limit. Say ONE short goodbye — e.g. "I have to hop off — call us back anytime and we\'ll pick up right where we left off!" — nothing else.'
     );
-    this.session.requestResponse();
+    // AUDIT FIX (2026-08-22, P2): requestResponse() no-ops while a response
+    // is in flight — likely at the cap, which fires mid-conversation. If the
+    // goodbye didn't fire, retry once mid-grace so the caller hears a goodbye
+    // instead of a silent click; the grace-timer hangup proceeds regardless
+    // (the cap is hard).
+    const fired = this.session.requestResponse();
+    if (!fired) {
+      this.durationCapGoodbyeRetryTimer = setTimeout(() => {
+        this.durationCapGoodbyeRetryTimer = undefined;
+        if (this.closed || this.transferring) return;
+        this.session.requestResponse();
+      }, 1500);
+    }
     this.durationCapGraceTimer = setTimeout(() => {
       this.durationCapGraceTimer = undefined;
       void this.hangupForDurationCap();
@@ -1344,17 +1415,25 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
   /**
    * G3: unlike the silence hangup, caller speech during the goodbye does NOT
    * cancel the cap — it's hard. endCallNow's own bargeInEpoch check can still
-   * abort the REST hangup if the caller talks during its drain; if so, the
-   * cap is still exceeded, so retry once after a short delay.
+   * abort the REST hangup if the caller talks during its drain.
+   * AUDIT FIX (2026-08-22, P2): the old single retry meant two well-timed
+   * interruptions permanently defeated the cap (a nonstop talker — e.g. a
+   * recorded robocall pitch — then burned tokens unbounded, the exact thing
+   * G3 exists to stop). Now: up to 2 normal attempts, then a FINAL attempt
+   * with ignoreBargeIn so the hangup always lands.
    */
   private async hangupForDurationCap() {
-    if (this.closed) return;
-    const result = await this.endCallNow('duration cap');
-    if (result.status === 'aborted') {
+    if (this.closed || this.transferring) return;
+    this.durationCapHangupAttempts += 1;
+    const isFinal = this.durationCapHangupAttempts >= 3;
+    const result = await this.endCallNow(
+      'duration cap',
+      isFinal ? { ignoreBargeIn: true } : undefined
+    );
+    if (result.status === 'aborted' && !isFinal) {
       this.durationCapRetryTimer = setTimeout(() => {
         this.durationCapRetryTimer = undefined;
-        if (this.closed) return;
-        void this.endCallNow('duration cap');
+        void this.hangupForDurationCap();
       }, 2000);
     }
   }
@@ -1471,6 +1550,22 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     // before closing — Phorest/staff schedules can run past the salon's stated
     // hours, and we must never offer a time that ends after close.
     const openClose = getOpenClose(dateISO);
+    // AUDIT FIX (2026-08-22, P0): a CLOSED day (closed weekday, closedDate
+    // holiday, or a business.json vacation range) makes getOpenClose() null.
+    // Phorest knows nothing about business.json closures — it happily returns
+    // a full slate of roster slots for those dates — so null must mean ZERO
+    // open slots, not "skip the hours filter". This single gate closes the
+    // suggest path, the offeredSlots cache, AND both A1 pre-write re-checks
+    // for closed/vacation dates. (Fetch ERRORS still fail open in the A1
+    // callers — that behavior is upstream of here and unchanged.)
+    if (!openClose) {
+      return {
+        service: result.service,
+        date: result.date,
+        slots: [],
+        rawCount,
+      };
+    }
     const durationMin = result.service.durationMin || 0;
     // Parse EXPLICITLY in the salon zone. getAvailability returns ISO strings
     // carrying the salon offset; an unzoned fromISO() renders in the PROCESS
@@ -1484,8 +1579,8 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     // times BEFORE the hours filter so we never speak "2:43 pm". (snapSlotsToGrid)
     const inHours = snapSlotsToGrid(parsedSlots, env.SLOT_GRID_MIN).filter(
       (dt) =>
-        (!openClose || dt >= openClose.open) &&
-        (!openClose || dt.plus({ minutes: durationMin }) <= openClose.close)
+        dt >= openClose.open &&
+        dt.plus({ minutes: durationMin }) <= openClose.close
     );
     return {
       service: result.service,
@@ -2614,12 +2709,15 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           },
           'Transfer suppressed — Richa is on vacation; sending SMS instead'
         );
+        // AUDIT FIX (2026-08-22): dropped the last-clientNames-entry fallback
+        // — it could name a lookup/disambiguation candidate who isn't the
+        // caller. Better an honest 'a caller' than the wrong name in Richa's
+        // text.
         const callerName =
           (this.prefetch?.clientId
             ? this.clientNames.get(this.prefetch.clientId)
             : undefined) ??
           this.prefetch?.firstName ??
-          [...this.clientNames.values()].pop() ??
           'a caller';
         void this.notifyOwnerSms(
           `Hi Richa, it's Erica. While you're away: ${callerName} called — ${payload.reason}. I let them know you're away.`
@@ -2723,8 +2821,22 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
    * caller speaks during the drain, the hangup is aborted, not just delayed.
    */
   private async endCallNow(
-    reason: string
+    reason: string,
+    opts?: { ignoreBargeIn?: boolean }
   ): Promise<{ status: 'ended' | 'aborted' | 'error'; message?: string }> {
+    // AUDIT FIX (2026-08-22, P2): one-shot entry guard. `transferring` is set
+    // by every hangup/handoff owner (a real transfer, or a previous
+    // endCallNow's own drain below), so a second concurrent hangup — silence
+    // grace racing the model's end_call, or the duration cap racing a live
+    // transfer — bails here instead of firing a second REST update against a
+    // call someone else is already ending/redirecting.
+    if (this.closed) return { status: 'ended' };
+    if (this.transferring) {
+      return {
+        status: 'error',
+        message: 'another hangup or transfer is already in progress',
+      };
+    }
     const client = getTwilioClient();
     if (!client || !this.callSid) {
       // No REST client (misconfig): tear down our side; Twilio ends the call
@@ -2758,7 +2870,14 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     await this.waitForPlaybackToDrain(6000);
     // Caller interrupted the goodbye ("oh wait—") → the barge-in cleared the
     // mark queue, which is why the drain resolved. Don't hang up on them.
-    if (this.bargeInEpoch !== epochAtRequest && !this.closed) {
+    // (opts.ignoreBargeIn: the duration cap's FINAL attempt hangs up
+    // regardless — after two barge-aborted goodbyes the cap must still win,
+    // or a nonstop talker (recorded robocall pitch) burns tokens unbounded.)
+    if (
+      !opts?.ignoreBargeIn &&
+      this.bargeInEpoch !== epochAtRequest &&
+      !this.closed
+    ) {
       this.transferring = false;
       logger.info(
         { tool: 'end_call', callSid: this.callSid, reason },
@@ -2820,6 +2939,12 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     const reason = parsed.success
       ? (parsed.data as { reason?: 'done' | 'spam' }).reason
       : undefined;
+    // AUDIT FIX (2026-08-22, P1): remember the pre-spam outcome so an ABORTED
+    // hangup (caller barged in on the decline — "wait, I'm calling about my
+    // appointment!") can roll the tag back. Without this, a mis-tagged call
+    // that recovers still ends 'spam' and a real (not-yet-a-client) caller
+    // accrues blocklist points.
+    const outcomeBeforeSpam = this.outcome;
     if (reason === 'spam') {
       // Set BEFORE endCallNow runs so its `outcome === 'none' -> 'completed'`
       // default (see endCallNow, both the no-REST-client fallback and the
@@ -2830,12 +2955,19 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       reason === 'spam' ? 'spam decline' : 'caller confirmed done'
     );
     if (result.status === 'aborted') {
+      if (reason === 'spam' && this.outcome === 'spam') {
+        this.outcome = outcomeBeforeSpam;
+      }
       return {
         aborted: true,
         note: 'The caller started speaking again — do NOT hang up. Listen and help with whatever they need, then ask "Anything else?" before trying end_call again.',
       };
     }
     if (result.status === 'error') {
+      // Same rollback on error — the call is still live, the verdict may not be.
+      if (reason === 'spam' && this.outcome === 'spam') {
+        this.outcome = outcomeBeforeSpam;
+      }
       return { error: result.message };
     }
     return { ended: true };
@@ -3023,6 +3155,11 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
    * re-trigger onClose into a second failover.
    */
   private async failoverToOwner(reason: string) {
+    // AUDIT FIX (2026-08-22, P2): a fatal-failover call is the single most
+    // operationally important call class — make it visible in calls.jsonl /
+    // the dashboard instead of ending as a bare 'none' with no endReason.
+    this.setEndReasonOnce(`failover: ${reason}`);
+    if (this.outcome === 'none') this.outcome = 'failover';
     const client = getTwilioClient();
     if (client && this.callSid && !this.closed && !this.transferring) {
       this.transferring = true;
@@ -3080,6 +3217,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     if (this.durationCapRetryTimer) {
       clearTimeout(this.durationCapRetryTimer);
       this.durationCapRetryTimer = undefined;
+    }
+    if (this.durationCapGoodbyeRetryTimer) {
+      clearTimeout(this.durationCapGoodbyeRetryTimer);
+      this.durationCapGoodbyeRetryTimer = undefined;
     }
     // Persist the call end exactly once, and only if the call actually started
     // (a socket that closed before Twilio's "start" never wrote a start record).

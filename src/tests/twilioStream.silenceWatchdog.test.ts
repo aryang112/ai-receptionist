@@ -35,7 +35,7 @@ function buildCall() {
   };
   const call: any = new TwilioRealtimeCall(socket);
   const injectContext = vi.fn();
-  const requestResponse = vi.fn();
+  const requestResponse = vi.fn(() => true); // new contract: reports whether response.create fired
   call.session = {
     appendTwilioAudio: () => {},
     truncateActiveResponse: vi.fn(),

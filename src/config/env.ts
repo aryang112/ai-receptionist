@@ -80,6 +80,17 @@ export const env = {
   // Off by default; flip to 'true' only on a tenant where the direct GET works.
   PHOREST_DIRECT_GET_APPT: process.env.PHOREST_DIRECT_GET_APPT === 'true',
 
+  // Numbers that must never be spam-recorded or webhook-blocked (comma-
+  // separated, any format — normalized before compare). Put the Vonage/salon
+  // forwarding number(s) here BEFORE enabling call forwarding: if the trunk
+  // ever substitutes its own number as caller ID, one spam verdict against it
+  // would otherwise block the entire forwarded line. TWILIO_NUMBER and
+  // OWNER_PHONE are always allowlisted implicitly.
+  SPAM_NEVER_BLOCK: (process.env.SPAM_NEVER_BLOCK || '')
+    .split(',')
+    .map((n) => n.trim())
+    .filter(Boolean),
+
   // Append-only call log (JSONL) for the admin surface / auditing.
   CALL_STORE_PATH: process.env.CALL_STORE_PATH || './data/calls.jsonl',
 
