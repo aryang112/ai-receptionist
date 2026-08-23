@@ -558,7 +558,7 @@ correctly (booking + usage + flags); stats revenue/cost math; after-hours
 classification (one in-hours, one evening call); recording proxy requires
 auth + never leaks creds in headers/body (assert on a mocked fetch).
 
-## M4 — [ ] Daily owner digest SMS + Sunday weekly summary (P1, code) — depends on M1
+## M4 — [x] worker-M4 2026-08-22T00:00:00Z — Daily owner digest SMS + Sunday weekly summary (P1, code) (implemented, awaiting Fable review/commit) — depends on M1
 **Why:** Richa/Aryan shouldn't have to open the dashboard to know the pilot is
 working — the market's retention lever is a proactive "here's what Erica
 earned you" note. SMS (not email) — zero new vendors, notifyOwnerSms plumbing

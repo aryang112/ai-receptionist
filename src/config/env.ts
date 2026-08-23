@@ -115,4 +115,19 @@ export const env = {
   // cookie itself. Compared with a constant-time hash compare, never a raw
   // string ===.
   ADMIN_TOKEN: process.env.ADMIN_TOKEN || '',
+
+  // M4: daily owner digest SMS (+ Sunday weekly summary). Default on, sent
+  // once per salon-TZ day at DIGEST_TIME via services/digest.ts's
+  // maybeSendDigest() — index.ts just wires a 60s interval around it.
+  DIGEST_ENABLED: process.env.DIGEST_ENABLED || 'true',
+  // 24h "HH:mm" in salon TZ (env.TIMEZONE) — the earliest the digest can fire
+  // each day. Past-due checks happen on the 60s scheduler tick, not a cron.
+  DIGEST_TIME: process.env.DIGEST_TIME || '19:30',
+  // Comma-separated recipient list. Empty = fall back to OWNER_PHONE alone
+  // (e.g. set to "+14433706471,+1..." to also loop in Aryan).
+  DIGEST_TO: process.env.DIGEST_TO || '',
+  // Same env-tunable-path convention as CALL_STORE_PATH / BLOCKLIST_PATH —
+  // lets tests point the "already sent today" stamp at a tmp fixture.
+  DIGEST_STATE_PATH:
+    process.env.DIGEST_STATE_PATH || './data/digest-state.json',
 };

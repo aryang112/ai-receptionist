@@ -3,6 +3,146 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-22 — M4 IMPLEMENTED (worker agent)
+**Task:** Round 4 M4 — daily owner digest SMS + Sunday weekly summary.
+Depends on M1 (usage/estCostUsd/endReason, implemented, awaiting Fable
+review/commit — read directly off the working tree). Files touched exactly
+match the task's Files list, nothing else: NEW `src/services/ownerSms.ts`,
+NEW `src/services/digest.ts`, modified `src/index.ts` (scheduler wiring),
+`src/config/env.ts` (+4 vars), `src/realtime/twilioStream.ts` (delegation +
+one import — confirmed via `git diff`: 29 lines touched total, all inside
+`notifyOwnerSms`'s body + the new import line). `business.json`/`.env` not
+in the diff at all.
+
+**1. `src/services/ownerSms.ts` — extraction.** `sendOwnerSms(body, to?)` is
+the exact body twilioStream's private `notifyOwnerSms` used to have
+(try/catch, never-throw, `client.messages.create({body, from:
+TWILIO_NUMBER, to})`, same log lines/markers), with one addition: an
+optional `to` param (defaults to `env.OWNER_PHONE`) so the digest can loop
+over `DIGEST_TO`'s multiple recipients. `getTwilioClient()` is its OWN
+6-line memoized instance here (NOT imported from twilioStream.ts) —
+deliberate: twilioStream.ts still has 4 OTHER call sites for its own client
+(recording, transfer dial, fatal-error failover) that are out of scope for
+this task; duplicating the tiny factory keeps twilioStream's diff to
+literally "the notifyOwnerSms delegation + an import" (verified: `git diff
+src/realtime/twilioStream.ts` shows only the import line + the method body
+swapped for `return sendOwnerSms(body);`, nothing else touched — confirmed
+by reading the diff directly, not assumed).
+
+**2. `src/services/digest.ts`:**
+- `buildDailyDigest(forDateISO)` / `buildWeeklyDigest(weekEndISO)` read ONLY
+  via `readCalls()` (no hand-rolled parser). A private `callsForDate(rows,
+  dateISO)` groups by callSid the same way admin.ts's `buildCallSummaries`
+  does (start+blocked-no-start → its own 'blocked' entry; start present →
+  the real call), bucketed by SALON-TZ calendar day (`DateTime.fromMillis(ts,
+  {zone: env.TIMEZONE}).toISODate()` — mind the TZ=UTC gate, verified green).
+  After-hours classification reuses `getOpenClose(dateISO)` from
+  `core/hours.ts` directly, same as M3's `/api/stats` — no reimplementation.
+- Daily digest fields (≤~300 chars, plain text, verified via a live sample —
+  see below): calls handled (non-blocked count), booked count + $revenue
+  (sum `booking.price`), reschedules, cancellations, info calls, spam
+  declined (outcome 'spam') + webhook-blocked (S2 'blocked' rows) COMBINED
+  into one "N spam blocked" clause (deviation — spec listed them as two
+  categories; the terse example text only ever shows one combined number,
+  and 300 chars doesn't comfortably fit both spelled out separately; flagging
+  for Fable — splitting them is a ~10-line change if wanted), after-hours
+  **bookings** captured (a call that's both after-hours AND has a booking —
+  the "would've been missed without Erica" metric), est cost (sum
+  `estCostUsd`, shown only if >0). **Null exactly when zero HANDLED calls
+  that day** — a webhook-blocked-only day is null too (proven by a dedicated
+  test). Every empty category is OMITTED from the text rather than shown as
+  zero (keeps it terse, matches the example's style of only listing
+  non-zero categories).
+- **Deviation flagged for Fable:** the spec's example digest text opens
+  "Erica **yesterday**: ..." but the scheduler spec explicitly says "build
+  digest for **TODAY** (the day being summarized)" sent at DIGEST_TIME
+  (default 19:30, i.e. near/after typical close). I went with **"Erica
+  today:"** to match the scheduler wording (the day summarized IS the day
+  it's sent about) — the "yesterday" in the example read as illustrative
+  prose, not a literal requirement, but easy to flip if Fable intended a
+  next-morning send instead.
+- `buildWeeklyDigest`: sums the SAME per-day grouping over the 7 salon-TZ
+  calendar days ending on `weekEndISO` inclusive, picks the single highest-
+  revenue day (`> 0` only — a $0 week has no "best day" line), same
+  null-on-quiet-week rule as daily (undocumented in the spec but consistent
+  with "don't text on quiet days").
+- `maybeSendDigest(now?: DateTime)` — the testable scheduler core (spec's
+  explicit ask, so `index.ts` just wires a `setInterval`). Guards: env
+  `DIGEST_ENABLED !== 'true'` → no-op; before `DIGEST_TIME` (salon TZ,
+  "HH:mm" parsed defensively, garbage → falls back to 19:30) → no-op;
+  `data/digest-state.json`'s `lastSentISO === todayISO` → no-op (never twice
+  same day). On fire: `buildDailyDigest(todayISO)` → one `sendOwnerSms` per
+  `DIGEST_TO`-recipient (comma-split, trimmed; empty `DIGEST_TO` falls back
+  to `[OWNER_PHONE]`) IF non-null; on a Sunday (`zoned.weekday === 7`),
+  `buildWeeklyDigest(todayISO)` appended as a SECOND message per recipient,
+  same null-guard. State is stamped **even on a quiet day** (both digests
+  null) — documented in-code: otherwise a zero-call day would re-read the
+  whole call store on every 60s tick for the rest of the evening for
+  nothing; the trade-off (a call arriving after a quiet day's check goes
+  unreported until the weekly rollup) is called out as accepted, not a bug.
+  File IO (`loadDigestState`/`persistDigestState`) is never-throw,
+  mkdir+write pattern identical to callStore.ts/blocklist.ts.
+- `index.ts`: `setInterval(() => maybeSendDigest().catch(...), 60_000)`
+  guarded by `NODE_ENV !== 'test'`, `.unref()`'d so it can never hold the
+  process (or a test run) open. Placed right before `server.listen`.
+
+**3. `env.ts` — 4 new vars**, same convention as existing knobs:
+`DIGEST_ENABLED` (default `'true'`), `DIGEST_TIME` (default `'19:30'`),
+`DIGEST_TO` (default `''` → falls back to `OWNER_PHONE`), `DIGEST_STATE_PATH`
+(default `'./data/digest-state.json'`, mirrors `CALL_STORE_PATH`/
+`BLOCKLIST_PATH`'s env-tunable-path convention — added so tests can point
+the "already sent" stamp at a tmp fixture; not explicitly named in the spec
+but required by its own test-design note "tmp digest-state path"). `data/`
+is already gitignored wholesale (verified: `.gitignore` line 8) so the new
+file needs no separate entry.
+
+**Sample rendered output (via `tsx`, a real fixture through the actual
+functions — not hand-typed):**
+```
+DAILY: Erica today: 5 calls — 2 booked ($75), 1 reschedule, 1 info call,
+1 spam block. 1 after-hours booking captured. Est cost $0.34.
+(127 chars)
+
+WEEKLY: Erica this week: 5 calls — 2 booked ($75.00), 1 spam block.
+Best day: Wed ($75.00). Est cost $0.34.
+```
+
+**Tests — NEW `src/tests/ownerSms.test.ts` (5) + `src/tests/digest.test.ts`
+(12), 17 total.** ownerSms: `vi.mock('twilio', ...)` (same pattern as
+twilioStream.recording.test.ts) proves default-to-OWNER_PHONE, explicit `to`
+override, never-throws on missing creds (via `vi.resetModules()` — the
+memoized client from an earlier test in the same file would otherwise mask
+the "no client" branch, same issue twilioStream.recording.test.ts already
+solved this way), never-throws on a rejected Twilio call, never-throws on no
+resolvable recipient. digest: tmp `CALL_STORE_PATH`/`DIGEST_STATE_PATH`
+fixtures (callStore.test.ts pattern) — exact revenue/cost math on a 4-call
+fixture (booking + spam + after-hours + info), null on an empty day, null on
+a webhook-blocked-only day (ts rewritten onto the target date since
+`recordBlocked` stamps `Date.now()`), weekly 7-day sum + best-day pick, null
+on a quiet week; scheduler: `sendOwnerSms` mocked entirely (no Twilio
+involved) — fires only at/past DIGEST_TIME, never twice same day (two ticks,
+one send), quiet day sends nothing but still stamps, `DIGEST_ENABLED=false`
+skips entirely (no send, no stamp file at all), Sunday sends daily+weekly (2
+messages), multi-recipient `DIGEST_TO` sends one message per recipient.
+**Bug caught and fixed by the test suite itself, not shipped:** the first
+draft used a generic `plural()` helper on the word "booked" → "2 bookeds
+($75)" (it's an adjective, not a countable noun) — caught by the exact-text
+assertion, fixed as a literal `${n} booked` in both digest builders.
+
+**Verification:** `npx tsc --noEmit` clean. `npm test`: 239/239 (222
+pre-existing + 17 new; floor was 222, so 239 > 222 ✅). `TZ=UTC npm test`:
+239/239 green. Confirmed twilioStream's TWO existing `notifyOwnerSms` call
+sites (running-late FYI, vacation SMS) are untouched and green — both are
+tested in `twilioStream.vacation.test.ts` by overriding `call.notifyOwnerSms`
+directly on the instance (never reaching the real implementation), so the
+extraction is provably invisible to them; ran the full suite to confirm,
+not just those two files.
+
+**Not done / left for Fable:** M4 does not split spam-declined vs
+webhook-blocked into two digest clauses (combined, see deviation above); no
+live SMS was sent (no real Twilio creds exercised in tests — mirrors every
+other M-series worker's test-only verification standard).
+
 ## 2026-08-22 — M3 IMPLEMENTED (worker agent)
 **Task:** Round 4 M3 — the owner/Richa audit dashboard: one page, opened from
 a phone, showing every call, what happened, cost, revenue, and which calls

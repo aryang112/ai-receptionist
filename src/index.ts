@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import { metadata } from './routes/metadata.js';
 import { twilioVoice } from './routes/twilio.js';
 import { adminRouter } from './routes/admin.js';
+import { maybeSendDigest } from './services/digest.js';
 import { setupTwilioRealtimeStream } from './realtime/twilioStream.js';
 import { warnStaleAliases } from './services/booking.js';
 import { rateLimiter } from './middleware/rateLimit.js';
@@ -78,6 +79,19 @@ app.get('/', (_req, res) => {
 app.get('/health', (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
+
+// M4: daily owner digest SMS (+ Sunday weekly summary) — a 60s poll around a
+// testable core (services/digest.ts's maybeSendDigest), guarded off in tests
+// so the suite never spins up a real timer or touches a real Twilio client.
+// .unref() so this alone never keeps the process (or a test run) alive.
+if (env.NODE_ENV !== 'test') {
+  const digestTimer = setInterval(() => {
+    maybeSendDigest().catch((err) => {
+      logger.warn({ err: String(err) }, 'digest: scheduler tick failed');
+    });
+  }, 60_000);
+  digestTimer.unref();
+}
 
 const PORT = Number(process.env.PORT || 5050);
 const server = http.createServer(app);

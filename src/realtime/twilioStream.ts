@@ -19,6 +19,7 @@ import type { Service } from '../services/phorest.types.js';
 import { phorest } from '../services/phorest.js';
 import { CallStore } from '../services/callStore.js';
 import { recordSpamOutcome } from '../services/blocklist.js';
+import { sendOwnerSms } from '../services/ownerSms.js';
 import type {
   CustomerResult,
   AppointmentSummary,
@@ -2907,32 +2908,12 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
    * Best-effort FYI text to the owner (Richa), sent from the salon's own
    * Twilio number. Never throws and is meant to be fire-and-forget — a failed
    * SMS must not affect the call or delay a tool response.
+   * M4: thin delegate — the actual body now lives in services/ownerSms.ts
+   * (sendOwnerSms) so the daily/weekly digest can reuse it too. Behavior is
+   * byte-identical to before the extraction.
    */
   private async notifyOwnerSms(body: string): Promise<void> {
-    try {
-      const client = getTwilioClient();
-      if (!client || !env.TWILIO_NUMBER || !env.OWNER_PHONE) {
-        logger.warn(
-          { tool: 'owner_sms' },
-          'Owner SMS skipped — Twilio not configured'
-        );
-        return;
-      }
-      const result = await client.messages.create({
-        body,
-        from: env.TWILIO_NUMBER,
-        to: env.OWNER_PHONE,
-      });
-      logger.info(
-        { tool: 'owner_sms', sid: result.sid, status: result.status },
-        '📨 Owner SMS sent'
-      );
-    } catch (error) {
-      logger.warn(
-        { tool: 'owner_sms', error: String(error) },
-        'Owner SMS failed — continuing'
-      );
-    }
+    return sendOwnerSms(body);
   }
 
   private waitForPlaybackToDrain(capMs: number): Promise<void> {
