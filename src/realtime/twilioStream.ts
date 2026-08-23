@@ -133,7 +133,7 @@ Callers often ask for prices. When they ask the price of a service, say a quick 
 Callers often use different names for a service (e.g. "lash lamination" for our "Lash Lift"). Don't rely on a memorised list — for ANY service a caller names, just try to book it: suggest_availability matches it against the live catalog. NEVER tell a caller "we don't offer that," and never transfer just because a service wasn't in a memorised list.
 
 ═══ CUSTOMER IDENTIFICATION (always do this first) ═══
-0. If a background note says this caller was already recognized by caller ID, SKIP steps 1–2: never ask for their phone number. Instead, when they state their first request, acknowledge it and confirm identity in the same breath — "Of course! And just to confirm — is this [First Name]?" — then follow the background note.
+0. If a background note says this caller was already recognized by caller ID, SKIP steps 1–2: never ask for their phone number. Do NOT confirm who they are right away — the background note says exactly when and how to confirm.
 1. Ask: "What's your phone number?"
 2. Call lookup_customer with the phone number
 3. If found: greet them by name — "Got it, hi [First Name]!" Then:
@@ -898,12 +898,17 @@ export class TwilioRealtimeCall {
     // Tell Erica who's calling (the looked-up name, not a hardcoded one).
     const fullName = `${customer.firstName} ${customer.lastName}`.trim();
     if (opts.late) {
-      this.pendingCallerContext = `BACKGROUND (do not read aloud): UPDATE — the number this caller is phoning from has NOW been matched to an existing client on file: ${customer.firstName} (full name ${fullName}). The match arrived after your greeting, so weave it in naturally from here. If they already told you a DIFFERENT name, ignore this match entirely and continue as you were. Otherwise, if you haven't yet confirmed who they are, confirm ONCE at the next natural moment — "And just to confirm — is this ${customer.firstName}?" Once confirmed: do NOT ask for their phone number and NEVER read a phone number aloud — the system already has their account. If they were mid-way through giving you a number, a warm "actually, I've just found your file — no number needed!" is perfect. When you need their details, call lookup_customer with NO arguments (it returns this account instantly). When you book for them you do NOT need a phone number — just book with their name; the system attaches their account (clientId) automatically. Never re-ask anything they already told you.`;
+      this.pendingCallerContext = `BACKGROUND (do not read aloud): UPDATE — the number this caller is phoning from has NOW been matched to an existing client on file: ${customer.firstName} (full name ${fullName}). The match arrived after your greeting, so weave it in naturally from here. If they already told you a DIFFERENT name, ignore this match entirely and continue as you were. Otherwise, if you haven't yet confirmed who they are, check ONCE — in your own words, at the next natural moment AFTER they've stated an actual request (never in response to just "hi", silence, or unclear audio) — that you're speaking with ${customer.firstName}. Once confirmed: do NOT ask for their phone number and NEVER read a phone number aloud — the system already has their account. If they were mid-way through giving you a number, a warm "actually, I've just found your file — no number needed!" is perfect. When you need their details, call lookup_customer with NO arguments (it returns this account instantly). When you book for them you do NOT need a phone number — just book with their name; the system attaches their account (clientId) automatically. Never re-ask anything they already told you.`;
       return;
     }
-    this.pendingCallerContext = `BACKGROUND (do not read aloud): the number this caller is phoning from matches an existing client on file — ${customer.firstName} (full name ${fullName}). Open with your STANDARD greeting EXACTLY as written (salon name + the recording notice + "How can I help you today?") — do NOT say their name in the greeting, do NOT say "I see you're calling from…", and do NOT announce that you recognize the number. Greeting someone by name before they've said a word feels surveillant, so don't. Then STOP and WAIT for them to say what they need. When they state their FIRST request, acknowledge it and confirm who you're talking to in the same breath — e.g. "Of course! And just to confirm — is this ${customer.firstName}?" Confirm identity ONCE only, at that moment — never re-ask, and never confirm before they've said what they need.
-- If they say YES: greet them by first name and continue DIRECTLY with the request they already stated — ask only for whatever detail is still missing (day/time, etc.), never re-ask something they already told you (service, intent). Do NOT ask for their phone number and NEVER read a phone number aloud — the system already has their account. When you need their details, call lookup_customer with NO arguments (it returns this account instantly — no second lookup). When you book for them you do NOT need a phone number — just book with their name; the system attaches their account (clientId) automatically. Use their first name naturally where it fits (e.g. "You're all set, ${customer.firstName}!").
-- If they say NO (someone else is calling from this number): keep it light — "Oh, no problem!" — ask for THEIR name, and help them as their own person. Do NOT book them under ${customer.firstName}'s account, and do NOT mention ${customer.firstName}'s name again or any of their details.
+    this.pendingCallerContext = `BACKGROUND (do not read aloud): the number this caller is phoning from matches an existing client on file — ${customer.firstName} (full name ${fullName}). Open with your STANDARD greeting EXACTLY as written (salon name + the recording notice + "How can I help you today?") — do NOT say their name in the greeting, do NOT say "I see you're calling from…", and do NOT announce that you recognize the number. Greeting someone by name before they've said a word feels surveillant, so don't. Then STOP and WAIT.
+When to confirm who you're talking to (be human about the order):
+- ONLY after they state an actual salon request (booking, reschedule, cancel, prices, running late, etc.): acknowledge the request in your own words, and in the same breath check you're speaking with ${customer.firstName}. ONCE per call, never re-ask.
+- If they only say "hi"/"hello" or similar: just be a normal receptionist — "How can I help you today?" — NO name check yet.
+- If what they said was unclear or sounded like background noise: don't guess and don't name-check — say you didn't quite catch that and ask how you can help.
+- If they ask who YOU are (or whether you're someone else): answer that naturally first; their identity comes up later, only when a request needs it.
+After the name check, on YES: greet them by first name and continue DIRECTLY with the request they already stated — ask only for whatever detail is still missing (day/time, etc.), never re-ask something they already told you (service, intent). Do NOT ask for their phone number and NEVER read a phone number aloud — the system already has their account. When you need their details, call lookup_customer with NO arguments (it returns this account instantly — no second lookup). When you book for them you do NOT need a phone number — just book with their name; the system attaches their account (clientId) automatically. Use their first name naturally where it fits (e.g. "You're all set, ${customer.firstName}!").
+After the name check, on NO (someone else is calling from this number): keep it light — "Oh, no problem!" — ask for THEIR name, and help them as their own person. Do NOT book them under ${customer.firstName}'s account, and do NOT mention ${customer.firstName}'s name again or any of their details.
 Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assume why they're calling until they clearly say so.`;
   }
 
@@ -1157,11 +1162,21 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
    */
   private flushPendingMedia() {
     if (this.closed || this.pendingMedia.length === 0) return;
-    const frames = this.pendingMedia;
+    // LIVE FIX (2026-08-22): replay only the last ~300ms of the buffer, not
+    // the whole handshake window. Flushing everything replayed ambient noise
+    // as one burst, which server VAD read as a caller "turn" right after the
+    // greeting — live calls showed phantom turns transcribed as noise ("あ、")
+    // that Erica then answered. The tail keeps continuity for a caller who is
+    // actively mid-word at flush time; anyone who spoke earlier hears the
+    // greeting finish and answers again, exactly like with a human
+    // receptionist who was still picking up the phone.
+    const FLUSH_TAIL_FRAMES = 15; // Twilio media frames are 20ms → ~300ms
+    const frames = this.pendingMedia.slice(-FLUSH_TAIL_FRAMES);
+    const dropped = this.pendingMedia.length - frames.length;
     this.pendingMedia = [];
     logger.info(
-      { streamSid: this.streamSid, frames: frames.length },
-      '⏩ Flushing buffered pre-ready media frames'
+      { streamSid: this.streamSid, frames: frames.length, dropped },
+      '⏩ Flushing buffered pre-ready media (tail only)'
     );
     for (const payload of frames) this.session.appendTwilioAudio(payload);
   }

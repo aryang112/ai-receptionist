@@ -183,3 +183,13 @@ quality. Sonnet's role in this project is implementing well-specced queue
 tasks (agent_queue.md pattern), with Fable review-gating every diff. Rule:
 before spawning any agent, ask "is this execution of a tight spec, or is it
 judgment?" — judgment never gets downgraded to a cheaper model.
+
+## 🦜 NEVER put a quotable example line inside a prompt/injected note (bitten TWICE) (2026-08-22)
+B1 (live call #3) and again tonight: any verbatim example sentence inside an
+injected background note WILL be parroted, in exactly the wrong context. The
+recognized-caller note's example — "Of course! And just to confirm — is this
+[Name]?" — fired as the model's response to "hello", to background noise, and
+even to "is this Richard?". Rule: instructions describe WHAT to accomplish and
+WHEN ("confirm once, in your own words, after they state a request") — never
+include a ready-made line the model can lift. If an example is unavoidable,
+make it structurally unusable as a reply (describe it, don't quote it).

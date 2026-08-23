@@ -70,16 +70,21 @@ describe('RT-8 — early caller audio is buffered during the OpenAI handshake', 
     expect(appended).toEqual(['AAAA', 'BBBB', 'CCCC']);
   });
 
-  it('caps the pre-ready buffer so a flood cannot grow memory unbounded', () => {
+  it('caps the pre-ready buffer, and flushes only the ~300ms TAIL (2026-08-22 live fix)', () => {
     const { call, appended } = buildCall();
     for (let i = 0; i < 400; i++) call.handleMedia(mediaEvent(`f${i}`));
-    // Capped at PENDING_MEDIA_CAP (250); excess is dropped, not queued.
+    // Memory bound unchanged: capped at PENDING_MEDIA_CAP (250) in the buffer.
     expect(call.pendingMedia).toHaveLength(250);
     call.sessionReady = true;
     call.flushPendingMedia();
-    expect(appended).toHaveLength(250);
-    // Kept the EARLIEST frames (the caller's first words), dropped the tail.
-    expect(appended[0]).toBe('f0');
+    // Live fix: replaying the WHOLE handshake buffer fed stale ambient noise
+    // to server VAD as a burst — phantom caller "turns" right after the
+    // greeting on real calls. Only the last 15 frames (~300ms) are flushed,
+    // preserving continuity for a caller actively mid-word at flush time.
+    expect(appended).toHaveLength(15);
+    expect(appended[0]).toBe('f235'); // the NEWEST tail, not the stale head
+    expect(appended[14]).toBe('f249');
+    expect(call.pendingMedia).toHaveLength(0);
   });
 });
 
