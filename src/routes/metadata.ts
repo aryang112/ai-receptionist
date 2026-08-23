@@ -1,7 +1,7 @@
 // src/routes/metadata.ts
 import express from 'express';
 import { phorest } from '../services/phorest.js';
-import hours from '../config/business.json' 
+import { businessHours as hours } from '../config/businessConfig.js';
 
 export const metadata = express.Router();
 

@@ -34,7 +34,7 @@ import { snapSlotsToGrid } from '../core/slots.js';
 import { verifyStreamToken } from '../security/wsAuth.js';
 import { DateTime } from 'luxon';
 // decodeMuLaw no longer needed here — audio decoding happens in openaiSession
-import businessHours from '../config/business.json';
+import { businessHours } from '../config/businessConfig.js';
 
 // Lazy-initialised so tests don't fail without creds
 let _twilioClient: ReturnType<typeof twilio> | null = null;

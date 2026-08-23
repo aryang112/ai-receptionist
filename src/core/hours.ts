@@ -1,5 +1,5 @@
 import { DateTime } from 'luxon';
-import businessHours from '../config/business.json';
+import { businessHours } from '../config/businessConfig.js';
 
 // business.json is the source of truth for hours (read-only here).
 const TZ = businessHours.timezone || 'America/New_York';
