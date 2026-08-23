@@ -8,6 +8,7 @@ import {
   vi,
 } from 'vitest';
 import WebSocket from 'ws';
+import { env } from '../config/env.js';
 
 // The OpenAI session constructor throws without a key; some import paths reach it.
 process.env.OPENAI_REALTIME_API_KEY ||= 'test-key';
@@ -75,8 +76,18 @@ describe('A2 — greeting race: pre-buffered media must not suppress the greetin
   let startCallSpy: ReturnType<typeof vi.spyOn>;
   let endCallSpy: ReturnType<typeof vi.spyOn>;
 
+  // M2: this test drives the REAL 'start' handler with a real (but
+  // nonexistent) callSid, and this repo's .env carries real Twilio
+  // credentials — so without this, M2's fire-and-forget recording call would
+  // fire an actual network request to Twilio's REST API on every test run.
+  // Disabling RECORD_CALLS for this describe block's scope keeps the test
+  // hermetic; M2's own behavior (enabled/disabled/no-client/rejection) is
+  // covered by twilioStream.recording.test.ts.
+  const originalRecordCalls = env.RECORD_CALLS;
+
   beforeEach(() => {
     vi.useFakeTimers();
+    env.RECORD_CALLS = 'false';
     // Avoid real file writes from CallStore during the 'start'/cleanup paths
     // — same pattern as twilioStream.blocklist.test.ts. Scoped .mockRestore()
     // (not vi.restoreAllMocks()) — a blanket restoreAllMocks() would also
@@ -94,6 +105,7 @@ describe('A2 — greeting race: pre-buffered media must not suppress the greetin
 
   afterEach(() => {
     vi.useRealTimers();
+    env.RECORD_CALLS = originalRecordCalls;
     startCallSpy.mockRestore();
     endCallSpy.mockRestore();
   });

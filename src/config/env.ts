@@ -89,6 +89,14 @@ export const env = {
   BLOCKLIST_PATH: process.env.BLOCKLIST_PATH || './data/blocklist.json',
   SPAM_BLOCK_THRESHOLD: Number(process.env.SPAM_BLOCK_THRESHOLD || 2),
 
+  // M2: dual-channel call recording via the Twilio REST API. Fire-and-forget,
+  // started right after CallStore.startCall in the 'start' handler — never
+  // awaited on the call path, never throws. The greeting already discloses
+  // recording (MD two-party consent — see buildInstructions' GREETING
+  // section). Default on; set to 'false' to disable (e.g. a specific
+  // dev/test scenario).
+  RECORD_CALLS: process.env.RECORD_CALLS || 'true',
+
   // M1: caller-side (input) audio transcription, GA session field
   // `audio.input.transcription.model`. ⚠️ DEFAULT MUST STAY 'off' — this is
   // the RISKY session.update SHAPE class (lessons.md): a bad/rejected field

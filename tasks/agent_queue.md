@@ -488,7 +488,7 @@ harnesses); OPENAI_INPUT_TRANSCRIPTION='off' → session.update payload is
 BYTE-IDENTICAL to today (snapshot/deep-equal test); ='gpt-4o-mini-transcribe'
 → payload contains exactly the one new nested field.
 
-## M2 — [ ] Call recordings via Twilio REST, dual-channel, env-gated (P0, code)
+## M2 — [x] worker-M2 2026-08-23T00:49:11Z — Call recordings via Twilio REST, dual-channel, env-gated (P0, code) (implemented, awaiting Fable review/commit)
 **Why:** Aryan wants to HEAR the calls — the ground truth for "acting weird",
 and the caller-side record while input transcription is still off. The
 greeting already announces recording (MD two-party consent — do NOT remove it).

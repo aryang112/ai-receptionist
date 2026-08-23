@@ -152,6 +152,19 @@ export const CallStore = {
     });
   },
 
+  // M2: the Twilio recording SID for this call's dual-channel REST
+  // recording, started fire-and-forget from the 'start' handler. A separate
+  // record (like 'transcript') so it never has to wait on the Twilio REST
+  // round-trip that creates it, or block/delay the 'end' row.
+  recordRecording(callSid: string, recordingSid: string): void {
+    append({
+      type: 'recording',
+      callSid,
+      ts: Date.now(),
+      recordingSid,
+    });
+  },
+
   endCall(callSid: string, end: EndEntry): void {
     append({
       type: 'end',

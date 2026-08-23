@@ -3,6 +3,165 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-22 — M2 IMPLEMENTED (worker agent)
+**Task:** Round 4 M2 — dual-channel call recordings via the Twilio REST API,
+env-gated, fire-and-forget. Aryan wants to HEAR the calls (ground truth for
+"acting weird") and this covers the caller-side record while
+`OPENAI_INPUT_TRANSCRIPTION` stays 'off' (M1). Implemented exactly per the
+queue spec + Fable's implementation notes given directly in this worker's task
+brief (reuse `getTwilioClient()`, wire right after `CallStore.startCall` in
+the 'start' handler, `.then/.catch`, never awaited). Files: `src/config/env.ts`,
+`src/realtime/twilioStream.ts`, `src/services/callStore.ts` — exactly the
+three files the spec named. `business.json`/`.env`/`openaiSession.ts` are
+**not in the diff at all** (verified — see Verification).
+
+**1. `env.ts` — `RECORD_CALLS` (default `'true'`).** String-typed, same
+convention as `USE_MOCK_PHOREST`/`OPENAI_INPUT_TRANSCRIPTION` (an `env`
+object field tests can reassign directly and restore, not a `process.env`
+boolean parse).
+
+**2. `callStore.ts` — `recordRecording(callSid, recordingSid)`** (new
+`append` type `'recording'`, pure addition, zero lines removed — confirmed
+via `git diff`). A separate record from `'end'`/`'transcript'`, so it never
+has to wait on the Twilio REST round-trip that creates it.
+
+**3. `twilioStream.ts` — the private method + one call site:**
+- New private method `startCallRecording()` (placed next to the file's other
+  fire-and-forget Twilio-REST helper, `notifyOwnerSms`, both thematically
+  similar): `if (env.RECORD_CALLS !== 'true') return;` → `getTwilioClient()`
+  (the EXISTING module-level lazy singleton — reused verbatim, not touched) →
+  if no client or no `this.callSid`, `logger.debug` + return (clean skip,
+  matches "dev without creds") → otherwise
+  `client.calls(callSid).recordings.create({ recordingChannels: 'dual' })`,
+  `.then(r => CallStore.recordRecording(callSid, r.sid))` +
+  `logger.info('🎙️ recording started', sid: last-8)`,
+  `.catch(error => logger.warn('🎙️ recording start failed', ...))`. The
+  method itself is synchronous/`void` — the Promise chain is fired and never
+  returned/awaited, so it cannot delay anything downstream.
+- Call site: **one line**, `this.startCallRecording();`, inserted immediately
+  after the closing `});` of `CallStore.startCall(...)` in the `'start'`
+  handler (twilioStream.ts ~:987) — before `requestGreeting()`, not awaited,
+  nothing else in the handler reordered or touched (confirmed via the diff
+  below — the only other change in this file's `'start'` case is this single
+  new line + its 3-line comment).
+
+**Greeting-disclosure verification (per task instructions — grepped, not
+modified):** `buildInstructions()`'s GREETING section (twilioStream.ts:106)
+still reads: *"Hi, this is Erica, the virtual receptionist at Richa's
+Threading Salon — just so you know, this call may be recorded. How can I
+help you today?"* with the two-party-consent comment ("Maryland is a
+two-party-consent state and we keep a record of the call, so the recording
+notice is not optional"). Confirmed via `grep -n -i "record"
+twilioStream.ts` and reading the surrounding lines — byte-identical, not in
+this diff at all.
+
+**Deviation — required fix to a pre-existing test (same class as A1's
+`twilioStream.booking.test.ts` fix, documented there as precedent):**
+`src/tests/twilioStream.greetingRace.test.ts` (A2) is the **only** existing
+test file that drives the REAL Twilio `'start'` handler via `handleMessage`
+end-to-end (confirmed: grepped every test file for `event: 'start'` —
+one hit). This repo's `.env` carries **real** `TWILIO_ACCOUNT_SID`/
+`TWILIO_AUTH_TOKEN` (verified directly — `node -e` printed `true`/`true`),
+so before this fix, running that test file made `startCallRecording()`
+construct the REAL `twilio()` client and fire an ACTUAL outbound HTTPS
+request to `api.twilio.com/.../Calls/CA_greeting_race/Recordings.json` using
+live production credentials, on every `npm test` run — confirmed live (ran
+the file, saw no `🎙️` log line even after the test finished, meaning the
+real request was still in flight when the process moved on — a genuine,
+non-hermetic side effect, not just a theoretical risk). Fixed with the
+smallest possible change: `env.RECORD_CALLS = 'false'` in that describe
+block's `beforeEach`/restored in `afterEach` (mirrors the `env.
+OPENAI_INPUT_TRANSCRIPTION` mutate-and-restore pattern from M1's
+`openaiSession.test.ts`) — `startCallRecording()`'s FIRST line
+(`env.RECORD_CALLS !== 'true'`) then returns before ever calling
+`getTwilioClient()`, so no client is constructed and no request fires.
+Re-ran the file standalone after the fix: **no `🎙️` log line at all**
+(previously the "no client" debug/skip line also never appeared because a
+REAL truthy client meant the skip branch was never hit — now confirmed
+clean). All of that file's pre-existing assertions are untouched — only the
+one import + two env lines were added. No other existing test file needed a
+change (only this one drives 'start' for real; `twilioStream.vacation/
+silenceWatchdog/durationCap.test.ts` all construct `TwilioRealtimeCall`
+directly and bypass the `'start'` case entirely, per their own `buildCall()`
+harnesses, so they never reach `startCallRecording()` regardless).
+
+**Tests — NEW `src/tests/twilioStream.recording.test.ts` (4 tests),** mocks
+the **`twilio`** npm package's default export itself (`vi.mock('twilio', ()
+=> ({ default: twilioFactoryMock }))`) rather than stubbing an instance
+method — `getTwilioClient()` is a module-level function (not a class method),
+so per Fable's note this was the correct of the two suggested options.
+Mirrors the existing `vi.mock('../realtime/openaiSession.js', …)` pattern in
+`twilioStream.greetingRace.test.ts` for a different dependency:
+- **enabled:** `recordings.create` resolves `{sid: 'REaaaa...'}` →
+  `client.calls('CA_enabled_test')` called once, `.recordings.create({
+  recordingChannels: 'dual' })` called once, and (via `vi.waitFor`, since the
+  method is fire-and-forget) `CallStore.recordRecording` called once with the
+  exact callSid + sid.
+- **`RECORD_CALLS='false'`:** `startCallRecording()` doesn't throw and never
+  touches `client.calls`/`recordings.create`/`CallStore.recordRecording` at
+  all (asserted after a microtask flush).
+- **recording API rejection:** `recordings.create` rejects → no throw,
+  `CallStore.recordRecording` never called, `logger.warn` called with
+  `{tool:'record_call'}` + `'🎙️ recording start failed'` (via `vi.waitFor`
+  on the warn spy, since the assertion needs the `.catch()` handler to have
+  actually run, not just the rejection to exist).
+- **no Twilio client (missing creds):** the trickiest case — `getTwilioClient
+  ()`'s `_twilioClient` is a **module-scope singleton memoized on first
+  truthy-creds call**, and the earlier tests in this same file already
+  primed it truthy (pointing at the mock). Testing "no client" against that
+  SAME module instance is structurally impossible once any prior test in the
+  file constructed one. Fixed correctly (not worked around): temporarily
+  blank `process.env.TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`, `vi.
+  resetModules()`, dynamically re-import `twilioStream.js`/`callStore.js`/
+  `env.js` fresh (the mocked `'twilio'` factory still applies post-reset —
+  `vi.mock` registrations survive `resetModules()`), assert the shared
+  `twilioFactoryMock` was **never invoked** (proving `getTwilioClient()`
+  short-circuited on the creds check before ever calling `twilio(sid,
+  token)`, not that it called it and got null back some other way), then
+  restore `process.env` + reset modules again in a `finally`.
+
+**Verified:**
+- `npx tsc --noEmit` → clean, zero errors.
+- `npm test` → **201/201 passed** (was 197/197 before this task; net +4, all
+  in the new `twilioStream.recording.test.ts`). Test files: 29 passed (was
+  28 — the one new file). Floor was 197 — 201 > 197, satisfied.
+- `TZ=UTC npm test` → **201/201 passed**, same 29 files.
+- No existing test deleted or `.skip`ped; `twilioStream.greetingRace.test.ts`
+  modified (not added/removed — its own 2 tests still pass, count unchanged)
+  for the reason documented above.
+- `git diff --stat -- src/config/business.json .env` → **empty** (neither
+  touched). `openaiSession.ts` does not appear in `git status --short` at
+  all — not touched.
+- Grepped the full `twilioStream.ts` diff for `handleBargeIn`/`markQueue`/
+  `bargeInEpoch` → zero hits — barge-in untouched. Re-read the `'start'`
+  handler diff directly: the only change besides the new comment + one call
+  line is the addition itself — every statement before and after (`await
+  warm`, `applyCallerContext()`, `startedAtMs` stamp, `CallStore.startCall`,
+  `requestGreeting()`, `flushPendingMedia()`, watchdog/duration-cap arming)
+  keeps its exact original order and position (confirmed via `git diff`
+  showing zero `-` lines in that region — a pure one-line insertion).
+- Ran `npm test 2>&1 | grep -i "record_call\|🎙️"` on the FULL suite: only
+  markers from the new `twilioStream.recording.test.ts` file appear (one
+  "recording started", one "skipped — no client" debug line) plus the
+  pre-existing unrelated `"🎙️ Waiting for caller audio..."` line from
+  `greetingRace.test.ts` (a different, older log marker on the same emoji,
+  not a recording attempt) — confirming no other test in the suite triggers
+  a stray recording call.
+
+**⚠️ LIVE VALIDATION REQUIRED (per task instructions, not yet done):** the
+first real recorded call must be confirmed to (1) actually appear in the
+Twilio console as a dual-channel recording tied to that Call SID, and (2)
+play successfully through the M3 dashboard's recording proxy once M3 is
+built (`GET /admin/api/recording/:callSid` — M3 is not yet implemented this
+session). `RECORD_CALLS` stays at its default `'true'` in `.env` since,
+unlike M1's session-shape risk, this is a plain REST side-call with no
+session.update surface — but the Twilio-console/dashboard-proxy round-trip
+itself is still unverified against a real recording.
+
+**Queue status:** M2 marked `[x]` below — implemented, awaiting Fable
+review/commit. Not committed by this worker (per ritual — no
+`git add`/commit).
+
 ## 2026-08-22 — M1 IMPLEMENTED (worker agent)
 **Task:** Round 4 M1 — persist the full story of every call: token usage (for
 cost), the CALLER's side of the transcript (not just Erica's), and WHY the

@@ -984,6 +984,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
             startedAt: this.startedAtMs,
             stirVerstat: callerStir,
           });
+          // M2: fire-and-forget dual-channel recording via the Twilio REST
+          // API. NEVER awaited — must not delay the greeting below — and the
+          // method itself never throws (see its own doc comment).
+          this.startCallRecording();
           // Erica greets first, in her own voice (no separate Polly handoff).
           // No response can exist yet at this point in the handshake, so this
           // bare response.create is safe as-is (requestGreeting is intentionally
@@ -2862,6 +2866,43 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
    * before the transfer redirect so the "let me get Richa for you" line isn't cut
    * off mid-sentence by the <Dial>. Polls cheaply; never rejects.
    */
+  /**
+   * M2: start a dual-channel recording for this call via the Twilio REST API.
+   * Fire-and-forget — called synchronously (never awaited) from the 'start'
+   * handler right after CallStore.startCall, so it must never delay the
+   * greeting. Never throws: no Twilio client (dev without creds) or no
+   * callSid yet is a clean, silent skip; a REST rejection is caught and
+   * logged at warn. The greeting already discloses recording (MD two-party
+   * consent — see buildInstructions' GREETING section, untouched by this task).
+   */
+  private startCallRecording(): void {
+    if (env.RECORD_CALLS !== 'true') return;
+    const client = getTwilioClient();
+    if (!client || !this.callSid) {
+      logger.debug(
+        { tool: 'record_call' },
+        '🎙️ Recording skipped — no Twilio client or callSid'
+      );
+      return;
+    }
+    const callSid = this.callSid;
+    client
+      .calls(callSid)
+      .recordings.create({ recordingChannels: 'dual' })
+      .then((recording) => {
+        CallStore.recordRecording(callSid, recording.sid);
+        logger.info(
+          { tool: 'record_call', sid: recording.sid.slice(-8) },
+          '🎙️ recording started'
+        );
+      })
+      .catch((error) => {
+        logger.warn(
+          { tool: 'record_call', error: this.formatError(error) },
+          '🎙️ recording start failed'
+        );
+      });
+  }
   /**
    * Best-effort FYI text to the owner (Richa), sent from the salon's own
    * Twilio number. Never throws and is meant to be fire-and-forget — a failed
