@@ -214,6 +214,18 @@ type BlockedRow = {
   from?: string;
   stirVerstat?: string;
 };
+// ANALYTICS AUDIT FIX (2026-08-22, P2): appended when a caller-ID match
+// resolves AFTER the call's 'start' row has already been persisted (the
+// c4b9c7d late-prefetch upgrade) — see twilioStream.ts's
+// adoptRecognizedCaller. Its mere presence in a call's group means the
+// call is recognized even though the start row's recognizedClientId is
+// (permanently) empty.
+type RecognizedRow = {
+  type: 'recognized';
+  callSid: string;
+  ts: number;
+  clientId: string;
+};
 type AnyRow =
   | StartRow
   | ToolRow
@@ -222,6 +234,7 @@ type AnyRow =
   | TranscriptRow
   | RecordingRow
   | BlockedRow
+  | RecognizedRow
   | { type: string; callSid?: string; ts?: number; [k: string]: unknown };
 
 /** Never expose a full phone number over HTTP — last 4 digits only. */
@@ -240,6 +253,18 @@ export type CallSummary = {
   outcome: string;
   endReason?: string | undefined;
   tools: Array<{ name: string; ok: boolean }>;
+  // ANALYTICS AUDIT FIX (2026-08-22, P1): a call can book MULTIPLE services
+  // (multiple 'booking' rows) — `bookings` is the full ordered list (always
+  // present, empty when none). `booking` is kept as an ALIAS to the last
+  // row for dashboard.html's existing single-booking detail card (its
+  // render was left untouched — see admin.ts's /api/stats revenue fix for
+  // the matching sum-not-last-row correction).
+  bookings: Array<{
+    service: string;
+    price?: number | undefined;
+    date: string;
+    time: string;
+  }>;
   booking?:
     | {
         service: string;
@@ -303,6 +328,7 @@ function buildCallSummaries(rows: AnyRow[]): CallSummary[] {
         durationMs: 0,
         outcome: 'blocked',
         tools: [],
+        bookings: [],
         hasRecording: false,
         hasTranscript: false,
         blocked: true,
@@ -316,11 +342,29 @@ function buildCallSummaries(rows: AnyRow[]): CallSummary[] {
     const tools = group
       .filter((r): r is ToolRow => r.type === 'tool')
       .map((t) => ({ name: t.name, ok: t.ok }));
-    const bookingRow = [...group]
-      .reverse()
-      .find((r) => r.type === 'booking') as BookingRow | undefined;
+    // ANALYTICS AUDIT FIX (2026-08-22, P1): collect EVERY booking row for
+    // this call — a call can book multiple services in one visit, and the
+    // old `[...group].reverse().find(...)` silently dropped every row but
+    // the last, under-counting revenue in /api/stats. `bookings` carries
+    // the full list; `booking` stays as an alias to the LAST row for
+    // dashboard.html's existing single-booking detail card.
+    const bookingRows = group.filter(
+      (r): r is BookingRow => r.type === 'booking'
+    );
+    const bookings = bookingRows.map((b) => ({
+      service: b.service,
+      ...(b.price !== undefined ? { price: b.price } : {}),
+      date: b.date,
+      time: b.time,
+    }));
+    const lastBooking = bookings[bookings.length - 1];
     const hasRecording = group.some((r) => r.type === 'recording');
     const hasTranscript = group.some((r) => r.type === 'transcript');
+    // ANALYTICS AUDIT FIX (2026-08-22, P2): a caller-ID match that resolved
+    // AFTER this call's start row was persisted (late-prefetch upgrade)
+    // never lands in start.recognizedClientId — check for a 'recognized'
+    // row too (see twilioStream.ts's adoptRecognizedCaller).
+    const recognizedRow = group.some((r) => r.type === 'recognized');
 
     const outcome = end?.outcome ?? 'none';
     const endReason = end?.endReason;
@@ -329,23 +373,13 @@ function buildCallSummaries(rows: AnyRow[]): CallSummary[] {
       callSid,
       startTs: start.ts,
       fromLast4: last4(start.from),
-      recognized: !!start.recognizedClientId,
+      recognized: !!start.recognizedClientId || recognizedRow,
       durationMs: end?.durationMs ?? 0,
       outcome,
       ...(endReason ? { endReason } : {}),
       tools,
-      ...(bookingRow
-        ? {
-            booking: {
-              service: bookingRow.service,
-              ...(bookingRow.price !== undefined
-                ? { price: bookingRow.price }
-                : {}),
-              date: bookingRow.date,
-              time: bookingRow.time,
-            },
-          }
-        : {}),
+      bookings,
+      ...(lastBooking ? { booking: lastBooking } : {}),
       ...(end?.usage ? { usage: end.usage } : {}),
       ...(end?.estCostUsd !== undefined ? { estCostUsd: end.estCostUsd } : {}),
       hasRecording,
@@ -404,6 +438,17 @@ adminRouter.get('/api/stats', (req, res) => {
   let totalEstCostUsd = 0;
 
   for (const c of calls) {
+    outcomes[c.outcome] = (outcomes[c.outcome] ?? 0) + 1;
+    if (c.outcome === 'spam') spamDeclined += 1;
+
+    // ANALYTICS AUDIT FIX (2026-08-22, P1): a webhook-blocked row never
+    // opened an OpenAI session — it's reported separately as
+    // `webhookBlocked` below, and must NOT inflate the `calls` totals or
+    // the daily buckets (it still appears in /api/calls). Everything below
+    // this guard (day bucket, revenue, after-hours, duration, cost) is
+    // per-call data a blocked row never has.
+    if (c.blocked) continue;
+
     const dt = DateTime.fromMillis(c.startTs, { zone: env.TIMEZONE });
     const dateISO = dt.toISODate() ?? 'unknown';
     let bucket = dayMap.get(dateISO);
@@ -419,26 +464,24 @@ adminRouter.get('/api/stats', (req, res) => {
     }
     bucket.calls += 1;
 
-    outcomes[c.outcome] = (outcomes[c.outcome] ?? 0) + 1;
-
-    if (c.booking) {
+    // ANALYTICS AUDIT FIX (2026-08-22, P1): sum EVERY booking row for this
+    // call (a call can book multiple services) — "bookings"/"booked" is a
+    // count of ROWS, not calls, and revenue is the sum of every row's
+    // price. The old code read only the last booking row per call.
+    for (const b of c.bookings) {
       bookings += 1;
       bucket.bookings += 1;
-      const price = c.booking.price ?? 0;
+      const price = b.price ?? 0;
       revenue += price;
       bucket.revenue += price;
     }
 
-    if (c.outcome === 'spam') spamDeclined += 1;
+    const openClose = getOpenClose(dateISO);
+    const isAfterHours =
+      !openClose || dt < openClose.open || dt >= openClose.close;
+    if (isAfterHours) afterHours += 1;
 
-    if (!c.blocked) {
-      const openClose = getOpenClose(dateISO);
-      const isAfterHours =
-        !openClose || dt < openClose.open || dt >= openClose.close;
-      if (isAfterHours) afterHours += 1;
-    }
-
-    if (!c.blocked && c.durationMs > 0) {
+    if (c.durationMs > 0) {
       totalDurationMs += c.durationMs;
       durationSamples += 1;
     }
@@ -450,6 +493,7 @@ adminRouter.get('/api/stats', (req, res) => {
   }
 
   const webhookBlocked = calls.filter((c) => c.blocked).length;
+  const nonBlockedCalls = calls.length - webhookBlocked;
   const avgDurationMs =
     durationSamples > 0 ? Math.round(totalDurationMs / durationSamples) : 0;
   const revenuePerDollar =
@@ -463,7 +507,10 @@ adminRouter.get('/api/stats', (req, res) => {
     days,
     daily: daysList,
     totals: {
-      calls: calls.length,
+      // ANALYTICS AUDIT FIX (2026-08-22, P1): excludes webhook-blocked rows
+      // (reported separately below as webhookBlocked) — matches digest.ts's
+      // definition of "calls" (handled calls only).
+      calls: nonBlockedCalls,
       outcomes,
       bookings,
       revenue: Math.round(revenue * 100) / 100,

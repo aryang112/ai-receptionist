@@ -1,14 +1,16 @@
 // src/services/digest.ts
 //
-// M4: the daily owner digest SMS + Sunday weekly summary. Richa/Aryan
+// M4: the daily owner digest SMS + Monday weekly summary. Richa/Aryan
 // shouldn't have to open the /admin dashboard (M3) to know the pilot is
-// working — this is the proactive "here's what Erica did for you today" text.
+// working — this is the proactive "here's what Erica did for you yesterday"
+// text, sent the following morning (ANALYTICS AUDIT FIX, 2026-08-22, P1 —
+// a same-evening send would permanently miss every call after send time).
 //
 // Reads ONLY via readCalls() from callStore.ts (never a hand-rolled JSONL
 // parser — same rule M3's admin.ts followed). A day's window is a
 // salon-timezone CALENDAR day (luxon, env.TIMEZONE — sourced from
 // business.json at boot, same as core/hours.ts), not a rolling 24h window,
-// so the digest text reads naturally ("Erica today: 6 calls...").
+// so the digest text reads naturally ("Erica yesterday: 6 calls...").
 import fs from 'node:fs';
 import path from 'node:path';
 import { DateTime } from 'luxon';
@@ -34,7 +36,13 @@ type AnyRow = {
 type DigestCall = {
   blocked: boolean;
   outcome: string;
-  bookingPrice: number | undefined;
+  // ANALYTICS AUDIT FIX (2026-08-22, P1): a call can book MULTIPLE services
+  // (multiple 'booking' rows) — bookingRevenue is the SUM of every row's
+  // price, bookingCount is the number of booking ROWS (not calls), matching
+  // admin.ts's /api/stats fix. A call with zero bookings has bookingCount 0
+  // and bookingRevenue 0.
+  bookingRevenue: number;
+  bookingCount: number;
   estCostUsd: number | undefined;
   afterHours: boolean;
 };
@@ -69,7 +77,8 @@ function callsForDate(rows: AnyRow[], dateISO: string): DigestCall[] {
       out.push({
         blocked: true,
         outcome: 'blocked',
-        bookingPrice: undefined,
+        bookingRevenue: 0,
+        bookingCount: 0,
         estCostUsd: undefined,
         afterHours: false,
       });
@@ -86,9 +95,18 @@ function callsForDate(rows: AnyRow[], dateISO: string): DigestCall[] {
     const end = group.find((r) => r.type === 'end') as
       | { outcome?: string; estCostUsd?: number }
       | undefined;
-    const bookingRow = [...group]
-      .reverse()
-      .find((r) => r.type === 'booking') as { price?: number } | undefined;
+    // ANALYTICS AUDIT FIX (2026-08-22, P1): collect EVERY booking row for
+    // this call, not just the last one — a call can book multiple services
+    // in one visit, and the old `[...group].reverse().find(...)` silently
+    // dropped every row but the last, under-counting both revenue and the
+    // booked count.
+    const bookingRows = group.filter((r) => r.type === 'booking') as Array<{
+      price?: number;
+    }>;
+    const bookingRevenue = bookingRows.reduce(
+      (sum, b) => sum + (b.price ?? 0),
+      0
+    );
 
     const openClose = getOpenClose(dateISO);
     const afterHours =
@@ -97,7 +115,8 @@ function callsForDate(rows: AnyRow[], dateISO: string): DigestCall[] {
     out.push({
       blocked: false,
       outcome: end?.outcome ?? 'none',
-      bookingPrice: bookingRow?.price,
+      bookingRevenue,
+      bookingCount: bookingRows.length,
       estCostUsd: end?.estCostUsd,
       afterHours,
     });
@@ -114,24 +133,40 @@ function round4(n: number): number {
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
 }
+/**
+ * ANALYTICS AUDIT FIX (2026-08-22, P2): whole-dollar amounts render with no
+ * decimals ("$75"), fractional ones with exactly 2 ("$75.50") — never the
+ * bare-float "$75.5" a plain template-literal interpolation produced.
+ */
+function fmtMoney(n: number): string {
+  const r = round2(n);
+  return Number.isInteger(r) ? `$${r}` : `$${r.toFixed(2)}`;
+}
 
 /**
  * Plain-text daily digest for `forDateISO` (salon-TZ calendar day). Returns
  * null when zero HANDLED calls happened that day — a webhook-blocked-only
  * day (S2 spam rejects, never opened a session) still counts as quiet, so
  * Richa doesn't get texted for a day nothing actually talked to Erica.
- * ≤ ~300 chars, no markdown.
+ * ≤ ~300 chars, no markdown. `label` controls the opening phrase ("Erica
+ * `${label}`: ...") — the scheduler (maybeSendDigest) always passes
+ * 'yesterday' since it summarizes the PREVIOUS salon-TZ day (ANALYTICS
+ * AUDIT FIX, 2026-08-22, P1); defaults to 'today' for direct/adhoc callers.
  */
-export function buildDailyDigest(forDateISO: string): string | null {
+export function buildDailyDigest(
+  forDateISO: string,
+  label: string = 'today'
+): string | null {
   const rows = readCalls() as AnyRow[];
   const calls = callsForDate(rows, forDateISO);
   const handled = calls.filter((c) => !c.blocked);
   if (handled.length === 0) return null;
 
-  const bookedCalls = handled.filter((c) => c.bookingPrice !== undefined);
-  const revenue = round2(
-    bookedCalls.reduce((sum, c) => sum + (c.bookingPrice ?? 0), 0)
-  );
+  // ANALYTICS AUDIT FIX (2026-08-22, P1): "booked" now counts booking ROWS
+  // (a call can book multiple services), not calls-with-a-booking — matches
+  // admin.ts's /api/stats fix so the two surfaces agree.
+  const bookedRows = handled.reduce((sum, c) => sum + c.bookingCount, 0);
+  const revenue = round2(handled.reduce((sum, c) => sum + c.bookingRevenue, 0));
   const rescheduled = handled.filter((c) => c.outcome === 'rescheduled').length;
   const cancelled = handled.filter((c) => c.outcome === 'cancelled').length;
   const info = handled.filter((c) => c.outcome === 'info').length;
@@ -139,7 +174,7 @@ export function buildDailyDigest(forDateISO: string): string | null {
   const webhookBlocked = calls.filter((c) => c.blocked).length;
   const spamTotal = spamDeclined + webhookBlocked;
   const afterHoursBooked = handled.filter(
-    (c) => c.afterHours && c.bookingPrice !== undefined
+    (c) => c.afterHours && c.bookingCount > 0
   ).length;
   const estCost = round4(
     handled.reduce((sum, c) => sum + (c.estCostUsd ?? 0), 0)
@@ -147,14 +182,13 @@ export function buildDailyDigest(forDateISO: string): string | null {
 
   const parts: string[] = [];
   // "booked" is an adjective here, not a countable noun — never pluralize it.
-  if (bookedCalls.length > 0)
-    parts.push(`${bookedCalls.length} booked ($${revenue})`);
+  if (bookedRows > 0) parts.push(`${bookedRows} booked (${fmtMoney(revenue)})`);
   if (rescheduled > 0) parts.push(plural(rescheduled, 'reschedule'));
   if (cancelled > 0) parts.push(plural(cancelled, 'cancellation'));
   if (info > 0) parts.push(`${plural(info, 'info call')}`);
   if (spamTotal > 0) parts.push(`${plural(spamTotal, 'spam block')}`);
 
-  let msg = `Erica today: ${plural(handled.length, 'call')}`;
+  let msg = `Erica ${label}: ${plural(handled.length, 'call')}`;
   if (parts.length > 0) msg += ` — ${parts.join(', ')}`;
   msg += '.';
   if (afterHoursBooked > 0) {
@@ -189,12 +223,12 @@ export function buildWeeklyDigest(weekEndISO: string): string | null {
     const handled = calls.filter((c) => !c.blocked);
     totalHandled += handled.length;
 
+    // ANALYTICS AUDIT FIX (2026-08-22, P1): sum ALL booking rows for the
+    // day (not just one per call) — same fix as buildDailyDigest/admin.ts.
     let dayRevenue = 0;
     for (const c of handled) {
-      if (c.bookingPrice !== undefined) {
-        totalBooked += 1;
-        dayRevenue += c.bookingPrice;
-      }
+      totalBooked += c.bookingCount;
+      dayRevenue += c.bookingRevenue;
       if (c.outcome === 'spam') totalSpam += 1;
       totalCost += c.estCostUsd ?? 0;
     }
@@ -208,16 +242,14 @@ export function buildWeeklyDigest(weekEndISO: string): string | null {
 
   if (totalHandled === 0) return null;
 
-  let msg = `Erica this week: ${plural(totalHandled, 'call')} — ${totalBooked} booked ($${round2(
-    totalRevenue
-  ).toFixed(2)})`;
+  let msg = `Erica this week: ${plural(totalHandled, 'call')} — ${totalBooked} booked (${fmtMoney(totalRevenue)})`;
   if (totalSpam > 0) msg += `, ${plural(totalSpam, 'spam block')}`;
   msg += '.';
   if (bestDay) {
     const label = DateTime.fromISO(bestDay.dateISO, {
       zone: env.TIMEZONE,
     }).toFormat('ccc');
-    msg += ` Best day: ${label} ($${round2(bestDay.revenue).toFixed(2)}).`;
+    msg += ` Best day: ${label} (${fmtMoney(bestDay.revenue)}).`;
   }
   if (totalCost > 0) msg += ` Est cost $${round4(totalCost).toFixed(2)}.`;
 
@@ -256,7 +288,7 @@ function persistDigestState(state: DigestState): void {
   }
 }
 
-/** "HH:mm" → [hour, minute], falling back to the 19:30 default on garbage input. */
+/** "HH:mm" → [hour, minute], falling back to the 08:30 default on garbage input. */
 function parseDigestTime(value: string): [number, number] {
   const m = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
   if (m) {
@@ -264,7 +296,7 @@ function parseDigestTime(value: string): [number, number] {
     const mm = Number(m[2]);
     if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59) return [hh, mm];
   }
-  return [19, 30];
+  return [8, 30];
 }
 
 function digestRecipients(): string[] {
@@ -278,15 +310,27 @@ function digestRecipients(): string[] {
 
 /**
  * The testable scheduler core. Fires (sends SMS) at most once per
- * salon-TZ calendar day, only once `now` is at/past DIGEST_TIME. On Sundays,
- * appends the weekly summary as a second message. Guarded internally by
- * DIGEST_ENABLED — index.ts's setInterval calls this unconditionally.
+ * salon-TZ calendar day, only once `now` is at/past DIGEST_TIME — and, per
+ * the ANALYTICS AUDIT FIX (2026-08-22, P1), the digest it sends covers
+ * YESTERDAY (a full salon-TZ calendar day), not the still-in-progress
+ * "today". A same-day-evening send (the old default) permanently excluded
+ * every call after the send time — including the entire after-hours pilot
+ * window — from any digest at all. When yesterday was a Sunday (i.e. this
+ * fires on a Monday morning), the weekly summary is appended as a second
+ * message, covering the 7 salon-TZ days ending on that Sunday (Mon..Sun
+ * inclusive) — so a Sunday-evening call is no longer excluded from both the
+ * daily AND the next weekly's window. Guarded internally by DIGEST_ENABLED
+ * — index.ts's setInterval calls this unconditionally.
  *
- * Note: the "already ran today" stamp is written even on a quiet day (both
- * digests null) — otherwise a zero-call day would re-read the whole call
- * store on every 60s tick for the rest of the day for no reason. A late
- * call arriving AFTER a quiet day's digest check goes unreported until the
- * weekly rollup — an accepted trade-off, not a bug.
+ * Note: the "already ran today" stamp key is unchanged — it is stamped
+ * against the day the check RUNS (today), not the day being summarized
+ * (yesterday), so a restart after DIGEST_TIME still sends yesterday's
+ * digest later the same day (state.lastSentISO !== today's date yet).
+ * The stamp is written even on a quiet day (both digests null) —
+ * otherwise a zero-call day would re-read the whole call store on every
+ * 60s tick for the rest of the day for no reason. A late call arriving
+ * AFTER a quiet day's digest check goes unreported until the weekly
+ * rollup — an accepted trade-off, not a bug.
  */
 export async function maybeSendDigest(
   now: DateTime = DateTime.now()
@@ -312,16 +356,24 @@ export async function maybeSendDigest(
     return;
   }
 
-  const daily = buildDailyDigest(todayISO);
+  const yesterday = zoned.minus({ days: 1 });
+  const yesterdayISO = yesterday.toISODate();
+  if (!yesterdayISO) {
+    persistDigestState({ lastSentISO: todayISO });
+    return;
+  }
+
+  const daily = buildDailyDigest(yesterdayISO, 'yesterday');
   if (daily) {
     for (const to of recipients) {
       await sendOwnerSms(daily, to);
     }
   }
 
-  if (zoned.weekday === 7) {
-    // luxon: 7 = Sunday
-    const weekly = buildWeeklyDigest(todayISO);
+  if (yesterday.weekday === 7) {
+    // luxon: 7 = Sunday — yesterday was Sunday, so this is Monday morning
+    // and the just-completed week (Mon..Sun) is ready to roll up.
+    const weekly = buildWeeklyDigest(yesterdayISO);
     if (weekly) {
       for (const to of recipients) {
         await sendOwnerSms(weekly, to);

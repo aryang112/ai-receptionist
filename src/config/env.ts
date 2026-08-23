@@ -127,13 +127,19 @@ export const env = {
   // string ===.
   ADMIN_TOKEN: process.env.ADMIN_TOKEN || '',
 
-  // M4: daily owner digest SMS (+ Sunday weekly summary). Default on, sent
+  // M4: daily owner digest SMS (+ Monday weekly summary). Default on, sent
   // once per salon-TZ day at DIGEST_TIME via services/digest.ts's
-  // maybeSendDigest() — index.ts just wires a 60s interval around it.
+  // maybeSendDigest() — index.ts just wires a 60s interval around it. The
+  // digest summarizes YESTERDAY (a full salon-TZ calendar day), sent the
+  // following morning — a same-day-evening send would permanently miss any
+  // call after the send time (the after-hours pilot's PRIME window) and, on
+  // Sundays, every late call would fall outside the next weekly's window too
+  // (ANALYTICS AUDIT FIX, 2026-08-22, P1).
   DIGEST_ENABLED: process.env.DIGEST_ENABLED || 'true',
-  // 24h "HH:mm" in salon TZ (env.TIMEZONE) — the earliest the digest can fire
-  // each day. Past-due checks happen on the 60s scheduler tick, not a cron.
-  DIGEST_TIME: process.env.DIGEST_TIME || '19:30',
+  // 24h "HH:mm" in salon TZ (env.TIMEZONE) — the earliest the PREVIOUS day's
+  // digest can fire each morning. Past-due checks happen on the 60s
+  // scheduler tick, not a cron.
+  DIGEST_TIME: process.env.DIGEST_TIME || '08:30',
   // Comma-separated recipient list. Empty = fall back to OWNER_PHONE alone
   // (e.g. set to "+14433706471,+1..." to also loop in Aryan).
   DIGEST_TO: process.env.DIGEST_TO || '',

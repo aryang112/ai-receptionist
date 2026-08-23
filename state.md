@@ -3,6 +3,129 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-22 — ANALYTICS AUDIT FIXES (worker agent)
+**Task:** Fable's ANALYTICS audit triaged 6 P1/P2 fixes (digest semantics,
+revenue under-count, calls-definition drift, cost-estimate modality split,
+late-recognition amendment, digest $-formatting). Implemented exactly these
+six, nothing else. Files touched: `src/config/env.ts`, `src/services/
+digest.ts`, `src/routes/admin.ts`, `src/services/callStore.ts`,
+`src/realtime/twilioStream.ts`, `src/realtime/openaiSession.ts` + 4 test
+files (`admin.route.test.ts`, `digest.test.ts`, `twilioStream.m1.test.ts`,
+`openaiSession.test.ts`). Did NOT touch `.env`/`business.json`/
+`configureSession`'s OpenAI session.update payload (confirmed via
+`git diff` — openaiSession.ts's only 2 hunks are the `RealtimeUsage` type
+and the `onUsage` emit inside `handleEvent`'s `response.done` case).
+
+**1. Digest yesterday-semantics (P1).** `env.DIGEST_TIME` default
+19:30→**08:30**. `maybeSendDigest` now computes `yesterday =
+zoned.minus({days:1})`, calls `buildDailyDigest(yesterdayISO, 'yesterday')`
+(new 2nd param, default `'today'` for direct/adhoc callers — message opens
+"Erica yesterday: …"), and fires the weekly when **yesterday** was Sunday
+(`yesterday.weekday === 7`, i.e. the check runs Monday morning), covering
+the 7 days ending on that Sunday. The "already sent" stamp key is
+UNCHANGED — still keyed to the day the check *runs* (today), not the day
+summarized — so a restart hours after DIGEST_TIME still sends yesterday's
+digest (new test: `'a restart well after DIGEST_TIME ... still sends
+yesterday's digest'`). Rewrote the whole `maybeSendDigest` scheduler test
+suite (12→15 tests: was keyed to same-day 19:30 triggers, now keyed to a
+TRIGGER_DAY = DAY+1 at 08:30 pattern).
+
+**2. Multi-service revenue under-count (P1).** Both `admin.ts`'s
+`buildCallSummaries` (~line 344) and `digest.ts`'s `callsForDate` (~line
+89) did `[...group].reverse().find(type==='booking')` — only the LAST
+booking row per call counted. Now collect ALL booking rows per call;
+revenue = sum of every row's price; "booked"/`bookings` count = number of
+booking ROWS, not calls (digest text, `/api/stats` totals + daily buckets).
+**Dashboard.html decision:** kept the `booking` field as an ALIAS to the
+LAST booking row (untouched dashboard.html render) and ADDED a new
+always-present `bookings` array with every row — did NOT touch
+dashboard.html. `CallSummary.bookings: Array<{service,price?,date,time}>`.
+New tests: admin.route.test.ts (2-booking-row fixture → stats revenue sums
+both, `/api/calls` exposes `bookings` array + `booking` alias = last row),
+digest.test.ts (2-booking-row fixture → "2 booked ($55.50)").
+
+**3. Calls-definition drift (P1).** `/api/stats` counted webhook-blocked
+rows in `totals.calls` and the daily buckets while the digest excluded
+them. Now the per-call loop `continue`s past blocked rows before touching
+the day-bucket/booking/afterHours/duration/cost logic — a blocked-only day
+no longer even creates a `daily[]` entry. `totals.calls` = `calls.length -
+webhookBlocked` (was `calls.length`). `outcomes.blocked` (diagnostic
+breakdown) and `webhookBlocked` (separate total) unaffected — blocked rows
+still appear in `/api/calls`. New tests: blocked-only-day fixture → `calls:
+0`, no daily entry; updated the existing stats-math test's `t.calls`
+assertion 4→3.
+
+**4. Cost-estimate modality split (P1).** `onUsage` (openaiSession.ts) now
+defensively reads `input_token_details.{text_tokens,audio_tokens}`,
+`output_token_details.{text_tokens,audio_tokens}`, and
+`input_token_details.cached_tokens_details.{text_tokens,audio_tokens}` —
+each conditionally spread onto the emitted `RealtimeUsage` (absent stays
+absent, never coerced to 0; confirmed backward-compatible via an exact-shape
+test with only the pre-fix 4 fields). `twilioStream.ts`'s `usageAccum` sums
+each split field only when a turn reports it. `estimateCostUsd` prices per
+modality (3 new constants: `REALTIME_TEXT_INPUT_USD_PER_M`=4,
+`REALTIME_TEXT_CACHED_INPUT_USD_PER_M`=0.4, `REALTIME_TEXT_OUTPUT_USD_PER_M`
+=16 — audio's existing 3 constants unchanged, reused for the audio portion
+of a split call AND as the full fallback formula) whenever ALL 4 top-level
+split fields (`input/outputText/AudioTokens`) are present; otherwise falls
+back to the ORIGINAL all-audio formula byte-for-byte (verified: fallback
+test's math matches the pre-fix test exactly) — never NaN, including on a
+PARTIAL split (dedicated test). New tests: openaiSession.test.ts (+2,
+split-present exact emit, split-absent exact emit matching old shape),
+twilioStream.m1.test.ts (+4: accumulator split-sum, split-present cost
+math, split-absent fallback, partial-split fallback never NaN).
+
+**5. Late-recognition amendment (P2).** Callers recognized AFTER
+`CallStore.startCall` (the c4b9c7d late-prefetch race) were `recognized:
+false` forever — the start row's `recognizedClientId` is already written
+and never revisited. New `CallStore.recordRecognized(callSid, clientId)`
+(type `'recognized'` row, never throws — same write-through pattern as
+every other CallStore method). `adoptRecognizedCaller` (twilioStream.ts)
+calls it exactly when `this.startedAtMs !== null` (i.e. the start row
+already exists) — the immediate/non-late match path is unaffected since
+`startedAtMs` is still null when it runs (recognizedClientId gets set
+directly on the start row as before). `admin.ts`'s join: `recognized:
+!!start.recognizedClientId || group.some(r => r.type === 'recognized')`.
+New test: fixture with a late `'recognized'` row (start has no
+recognizedClientId) → `recognized: true` in `/api/calls`.
+
+**6. Digest $-formatting (P2).** New `fmtMoney(n)` in digest.ts: whole
+dollars render with no decimals (`$75`), fractional with exactly 2
+(`$75.50`) — replaces the old bare `$${revenue}` (which rendered `$75.5`)
+AND the old universal `.toFixed(2)` (which rendered `$80.00` even for whole
+dollars) — applied consistently in BOTH daily and weekly. Updated the
+existing weekly fixture test's assertions (`$80.00`→`$80`, `$60.00`→`$60`);
+new dedicated test asserts `$75.50` (never `$75.5)`).
+
+**Sample daily+weekly text (via `tsx`, live through the actual functions,
+isolated tmp CALL_STORE_PATH/DIGEST_STATE_PATH — confirmed the project's
+real `data/calls.jsonl` was untouched before/after: 3108 lines both times):**
+```
+DAILY: Erica yesterday: 3 calls — 3 booked ($75.50), 1 spam block. 1 after-hours booking captured. Est cost $0.16.
+WEEKLY: Erica this week: 4 calls — 4 booked ($135.50), 1 spam block. Best day: Wed ($75.50). Est cost $0.21.
+```
+(3 booked = 2 rows from one call + 1 from another — demonstrates fix 2;
+"yesterday" label — fix 1; `$75.50`/`$135.50` exact-2dp — fix 6.)
+
+**Verification:** `npx tsc --noEmit` clean. `npm test`: 261/261 (249
+pre-existing + 12 new: +3 admin.route.test.ts, +3 digest.test.ts, +4
+twilioStream.m1.test.ts, +2 openaiSession.test.ts). `TZ=UTC npm test`:
+261/261 green.
+
+**Deviations flagged:**
+- Fix 4's spec said "constants block gets the FOUR rates" — only 3 new
+  TEXT-modality constants were needed (input/cached/output); the 3 AUDIO
+  rates already existed pre-fix and were left unrenamed/unchanged (used
+  both for the audio portion of a split call and as the full fallback
+  formula). Flagging the count mismatch rather than inventing an unused 4th
+  constant.
+- No other deviations — all six fixes match their exact specs including
+  the `booking`-alias-vs-dashboard.html-rewrite choice (kept the alias).
+
+**Not done:** did not touch dashboard.html, `.env`, `business.json`, or
+`configureSession`'s session.update payload. Did not commit/push/`git add`
+per instructions — working tree left as diffs only.
+
 ## 2026-08-22 — M4 IMPLEMENTED (worker agent)
 **Task:** Round 4 M4 — daily owner digest SMS + Sunday weekly summary.
 Depends on M1 (usage/estCostUsd/endReason, implemented, awaiting Fable

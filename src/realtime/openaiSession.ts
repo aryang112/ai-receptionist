@@ -15,6 +15,23 @@ export type RealtimeUsage = {
   outputTokens: number;
   cachedTokens: number;
   totalTokens: number;
+  // ANALYTICS AUDIT FIX (2026-08-22, P1): the text/audio MODALITY split, read
+  // defensively off response.usage.{input,output}_token_details — most
+  // re-billed context is TEXT (priced far below audio), so an all-audio
+  // cost estimate overstates spend. Undefined when the API response didn't
+  // include the split (older responses, or a field OpenAI hasn't shipped
+  // yet) — twilioStream.ts's estimateCostUsd falls back to the all-audio
+  // formula in that case, never NaN.
+  inputTextTokens?: number;
+  inputAudioTokens?: number;
+  outputTextTokens?: number;
+  outputAudioTokens?: number;
+  // Sub-split of the cached portion of inputTextTokens/inputAudioTokens
+  // (input_token_details.cached_tokens_details.{text,audio}_tokens) — even
+  // more defensive, this nested field may not exist even when the top-level
+  // split does.
+  cachedTextTokens?: number;
+  cachedAudioTokens?: number;
 };
 
 export type RealtimeHandlers = {
@@ -635,12 +652,42 @@ export class OpenAIRealtimeSession {
             },
             '📊 turn tokens'
           );
+          // ANALYTICS AUDIT FIX (2026-08-22, P1): read the text/audio
+          // modality split defensively — these nested fields may be absent
+          // (older/partial API responses), so every read is `?.` and every
+          // pass-through is conditional (an absent field must stay absent
+          // on RealtimeUsage, never coerced to 0 — twilioStream.ts's
+          // estimateCostUsd uses presence, not value, to decide whether the
+          // split is usable).
+          const inputTextTokens = usage.input_token_details?.text_tokens as
+            | number
+            | undefined;
+          const inputAudioTokens = usage.input_token_details?.audio_tokens as
+            | number
+            | undefined;
+          const outputTextTokens = usage.output_token_details?.text_tokens as
+            | number
+            | undefined;
+          const outputAudioTokens = usage.output_token_details?.audio_tokens as
+            | number
+            | undefined;
+          const cachedTextTokens = usage.input_token_details
+            ?.cached_tokens_details?.text_tokens as number | undefined;
+          const cachedAudioTokens = usage.input_token_details
+            ?.cached_tokens_details?.audio_tokens as number | undefined;
+
           // M1: same numbers as the log line above, for cost/dashboard persistence.
           this.handlers.onUsage?.({
             inputTokens: input,
             outputTokens: usage.output_tokens ?? 0,
             cachedTokens: cached,
             totalTokens: usage.total_tokens ?? 0,
+            ...(inputTextTokens !== undefined ? { inputTextTokens } : {}),
+            ...(inputAudioTokens !== undefined ? { inputAudioTokens } : {}),
+            ...(outputTextTokens !== undefined ? { outputTextTokens } : {}),
+            ...(outputAudioTokens !== undefined ? { outputAudioTokens } : {}),
+            ...(cachedTextTokens !== undefined ? { cachedTextTokens } : {}),
+            ...(cachedAudioTokens !== undefined ? { cachedAudioTokens } : {}),
           });
         } else {
           this.log.info({ eventType: event.type }, 'OpenAI response completed');

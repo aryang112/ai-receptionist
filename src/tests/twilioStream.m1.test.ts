@@ -74,12 +74,8 @@ describe('M1 — pushTranscriptEntry: interleaving + caps', () => {
       'Tuesday',
     ]);
     // ts is non-decreasing across the pushes.
-    expect(call.transcript[1].ts).toBeGreaterThanOrEqual(
-      call.transcript[0].ts
-    );
-    expect(call.transcript[2].ts).toBeGreaterThanOrEqual(
-      call.transcript[1].ts
-    );
+    expect(call.transcript[1].ts).toBeGreaterThanOrEqual(call.transcript[0].ts);
+    expect(call.transcript[2].ts).toBeGreaterThanOrEqual(call.transcript[1].ts);
   });
 
   it('ignores an empty-string transcript (nothing meaningful said)', () => {
@@ -161,6 +157,95 @@ describe('M1 — accumulateUsage + estimateCostUsd', () => {
       cachedTokens: 1000,
     });
     expect(cached).toBeLessThan(uncached);
+  });
+
+  // ANALYTICS AUDIT FIX (2026-08-22, P1): text/audio modality cost split.
+  it('accumulateUsage sums the text/audio modality split when turns report it', () => {
+    const { call } = buildCall();
+    call.accumulateUsage({
+      inputTokens: 1000,
+      outputTokens: 200,
+      cachedTokens: 400,
+      totalTokens: 1200,
+      inputTextTokens: 700,
+      inputAudioTokens: 300,
+      outputTextTokens: 150,
+      outputAudioTokens: 50,
+      cachedTextTokens: 400,
+      cachedAudioTokens: 0,
+    });
+    call.accumulateUsage({
+      inputTokens: 2000,
+      outputTokens: 300,
+      cachedTokens: 1000,
+      totalTokens: 2300,
+      inputTextTokens: 1500,
+      inputAudioTokens: 500,
+      outputTextTokens: 250,
+      outputAudioTokens: 50,
+      cachedTextTokens: 900,
+      cachedAudioTokens: 100,
+    });
+    expect(call.usageAccum).toEqual({
+      inputTokens: 3000,
+      outputTokens: 500,
+      cachedTokens: 1400,
+      turns: 2,
+      inputTextTokens: 2200,
+      inputAudioTokens: 800,
+      outputTextTokens: 400,
+      outputAudioTokens: 100,
+      cachedTextTokens: 1300,
+      cachedAudioTokens: 100,
+    });
+  });
+
+  it('estimateCostUsd prices per modality when the text/audio split is present (mixed text+audio)', () => {
+    const { call } = buildCall();
+    // text: 1000 in (200 cached, 800 uncached), 300 out
+    // audio: 500 in (100 cached, 400 uncached), 100 out
+    // (800*4 + 200*0.4 + 400*32 + 100*0.4 + 300*16 + 100*64) / 1e6
+    // = (3200 + 80 + 12800 + 40 + 4800 + 6400) / 1e6 = 27320/1e6 = 0.0273 (rounded 4dp)
+    const cost = call.estimateCostUsd({
+      inputTokens: 1500,
+      outputTokens: 400,
+      cachedTokens: 300,
+      inputTextTokens: 1000,
+      inputAudioTokens: 500,
+      outputTextTokens: 300,
+      outputAudioTokens: 100,
+      cachedTextTokens: 200,
+      cachedAudioTokens: 100,
+    });
+    expect(cost).toBeCloseTo(0.0273, 10);
+  });
+
+  it('estimateCostUsd falls back to the all-audio formula when the split is absent — never NaN, matches the pre-fix math', () => {
+    const { call } = buildCall();
+    // Identical inputs/expected output to the pre-fix "applies the cached
+    // discount" case above — the fallback formula must be byte-identical.
+    const cost = call.estimateCostUsd({
+      inputTokens: 3000,
+      outputTokens: 500,
+      cachedTokens: 1400,
+    });
+    expect(cost).toBeCloseTo(0.0838, 10);
+    expect(Number.isNaN(cost)).toBe(false);
+  });
+
+  it('estimateCostUsd falls back (never NaN) when the split is only PARTIALLY present', () => {
+    const { call } = buildCall();
+    // inputAudioTokens/outputAudioTokens missing — hasSplit requires all 4
+    // top-level fields, so this must take the fallback path, not crash.
+    const cost = call.estimateCostUsd({
+      inputTokens: 1000,
+      outputTokens: 200,
+      cachedTokens: 100,
+      inputTextTokens: 600,
+      outputTextTokens: 150,
+    });
+    expect(Number.isNaN(cost)).toBe(false);
+    expect(cost).toBeGreaterThan(0);
   });
 });
 

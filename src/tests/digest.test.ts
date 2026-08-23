@@ -224,18 +224,78 @@ describe('buildDailyDigest / buildWeeklyDigest (M4)', () => {
     const weekly = buildWeeklyDigest(DAY);
     expect(weekly).not.toBeNull();
     expect(weekly).toContain('2 calls');
-    expect(weekly).toContain('2 booked ($80.00)');
+    // ANALYTICS AUDIT FIX (2026-08-22, P2): whole-dollar amounts render with
+    // no decimals — "$80", not "$80.00".
+    expect(weekly).toContain('2 booked ($80)');
     // day2 ($60) beats day1 ($20) — best day should be day2's weekday label.
     const day2Label = DateTime.fromISO(day2, { zone: env.TIMEZONE }).toFormat(
       'ccc'
     );
-    expect(weekly).toContain(`Best day: ${day2Label} ($60.00)`);
+    expect(weekly).toContain(`Best day: ${day2Label} ($60)`);
   });
 
   it('weekly digest returns null when the whole 7-day window is quiet', () => {
     expect(buildWeeklyDigest(QUIET_DAY)).toBeNull();
   });
+
+  it('ANALYTICS AUDIT FIX: a call with TWO booking rows sums revenue across both, not just the last', () => {
+    const sid = nextCallSid();
+    CallStore.startCall({ callSid: sid, startedAt: tsAt(DAY, '15:00') });
+    CallStore.recordBooking(sid, {
+      service: 'Brow Threading',
+      price: 25,
+      date: DAY,
+      time: '15:15',
+    });
+    CallStore.recordBooking(sid, {
+      service: 'Lash Lift',
+      price: 30.5,
+      date: DAY,
+      time: '15:45',
+    });
+    CallStore.endCall(sid, {
+      endedAt: tsAt(DAY, '15:05'),
+      durationMs: 60000,
+      outcome: 'booked',
+      estCostUsd: 0.05,
+    });
+
+    const digest = buildDailyDigest(DAY);
+    expect(digest).not.toBeNull();
+    // 2 booking ROWS on ONE call — "2 booked", not "1 booked".
+    expect(digest).toContain('2 booked ($55.50)');
+  });
+
+  it('ANALYTICS AUDIT FIX: fractional revenue renders with exactly 2 decimals ("$75.50", never "$75.5")', () => {
+    const sid = nextCallSid();
+    CallStore.startCall({ callSid: sid, startedAt: tsAt(DAY, '16:00') });
+    CallStore.recordBooking(sid, {
+      service: 'Full Face',
+      price: 75.5,
+      date: DAY,
+      time: '16:15',
+    });
+    CallStore.endCall(sid, {
+      endedAt: tsAt(DAY, '16:05'),
+      durationMs: 60000,
+      outcome: 'booked',
+      estCostUsd: 0.03,
+    });
+
+    const digest = buildDailyDigest(DAY);
+    expect(digest).toContain('$75.50');
+    expect(digest).not.toContain('$75.5)'); // never the bare-float form
+  });
 });
+
+// ANALYTICS AUDIT FIX (2026-08-22, P1): the scheduler now summarizes
+// YESTERDAY, sent the FOLLOWING morning — TRIGGER_DAY is the day the check
+// runs ("today" from the scheduler's point of view); DAY (2026-08-19,
+// Wednesday) is the day being summarized ("yesterday"). Default DIGEST_TIME
+// is now '08:30'.
+const TRIGGER_DAY = DateTime.fromISO(DAY, { zone: 'America/New_York' })
+  .plus({ days: 1 })
+  .toISODate()!; // 2026-08-20, Thursday
 
 describe('maybeSendDigest scheduler core (M4)', () => {
   let origEnabled: string;
@@ -252,7 +312,7 @@ describe('maybeSendDigest scheduler core (M4)', () => {
 
   beforeEach(() => {
     env.DIGEST_ENABLED = 'true';
-    env.DIGEST_TIME = '19:30';
+    env.DIGEST_TIME = '08:30';
     env.DIGEST_TO = '';
     env.OWNER_PHONE = '+14433706471';
     sendOwnerSmsMock.mockClear();
@@ -294,8 +354,8 @@ describe('maybeSendDigest scheduler core (M4)', () => {
 
   it('does NOT fire before DIGEST_TIME', async () => {
     seedOneBookedCall(DAY);
-    const before = DateTime.fromISO(DAY, { zone: env.TIMEZONE }).set({
-      hour: 19,
+    const before = DateTime.fromISO(TRIGGER_DAY, { zone: env.TIMEZONE }).set({
+      hour: 8,
       minute: 0,
     });
 
@@ -304,10 +364,10 @@ describe('maybeSendDigest scheduler core (M4)', () => {
     expect(sendOwnerSmsMock).not.toHaveBeenCalled();
   });
 
-  it('fires once past DIGEST_TIME and stamps digest-state', async () => {
+  it('fires once past DIGEST_TIME and covers YESTERDAY, stamping TODAY (the trigger day)', async () => {
     seedOneBookedCall(DAY);
-    const atDue = DateTime.fromISO(DAY, { zone: env.TIMEZONE }).set({
-      hour: 19,
+    const atDue = DateTime.fromISO(TRIGGER_DAY, { zone: env.TIMEZONE }).set({
+      hour: 8,
       minute: 30,
     });
 
@@ -316,15 +376,36 @@ describe('maybeSendDigest scheduler core (M4)', () => {
     expect(sendOwnerSmsMock).toHaveBeenCalledTimes(1);
     expect(sendOwnerSmsMock.mock.calls[0]?.[1]).toBe('+14433706471');
     expect(sendOwnerSmsMock.mock.calls[0]?.[0]).toContain('booked');
+    // ANALYTICS AUDIT FIX: opens with "Erica yesterday" — the call happened
+    // on DAY, the check ran on TRIGGER_DAY (DAY+1).
+    expect(sendOwnerSmsMock.mock.calls[0]?.[0]).toContain('Erica yesterday');
 
+    // Stamp key is unchanged: the day the CHECK ran (TRIGGER_DAY), not the
+    // day summarized (DAY).
     const state = JSON.parse(fs.readFileSync(tmpDigestState, 'utf8'));
-    expect(state.lastSentISO).toBe(DAY);
+    expect(state.lastSentISO).toBe(TRIGGER_DAY);
+  });
+
+  it("a restart well after DIGEST_TIME (no prior stamp for today) still sends yesterday's digest", async () => {
+    // Simulates a process restart: no digest-state file exists yet, and
+    // `now` is hours past DIGEST_TIME on TRIGGER_DAY — the stamp check
+    // (lastSentISO !== todayISO) is untouched by the yesterday-semantics
+    // fix, so this must still fire exactly once.
+    seedOneBookedCall(DAY);
+    const wellAfterDue = DateTime.fromISO(TRIGGER_DAY, {
+      zone: env.TIMEZONE,
+    }).set({ hour: 14, minute: 0 });
+
+    await maybeSendDigest(wellAfterDue);
+
+    expect(sendOwnerSmsMock).toHaveBeenCalledTimes(1);
+    expect(sendOwnerSmsMock.mock.calls[0]?.[0]).toContain('Erica yesterday');
   });
 
   it('never sends twice the same day, even on a later tick', async () => {
     seedOneBookedCall(DAY);
-    const atDue = DateTime.fromISO(DAY, { zone: env.TIMEZONE }).set({
-      hour: 19,
+    const atDue = DateTime.fromISO(TRIGGER_DAY, { zone: env.TIMEZONE }).set({
+      hour: 8,
       minute: 30,
     });
     const laterTick = atDue.plus({ minutes: 5 });
@@ -336,24 +417,30 @@ describe('maybeSendDigest scheduler core (M4)', () => {
     expect(sendOwnerSmsMock).toHaveBeenCalledTimes(1); // still just once
   });
 
-  it('a quiet day (no handled calls) does not send, but still stamps so it does not re-check all evening', async () => {
-    const atDue = DateTime.fromISO(QUIET_DAY, { zone: env.TIMEZONE }).set({
-      hour: 19,
-      minute: 30,
-    });
+  it('a quiet yesterday (no handled calls) does not send, but still stamps so it does not re-check all day', async () => {
+    // QUIET_DAY itself has nothing seeded; trigger the check the day AFTER
+    // QUIET_DAY so "yesterday" (from the check's perspective) is the quiet one.
+    const triggerAfterQuiet = DateTime.fromISO(QUIET_DAY, {
+      zone: env.TIMEZONE,
+    })
+      .plus({ days: 1 })
+      .toISODate()!;
+    const atDue = DateTime.fromISO(triggerAfterQuiet, {
+      zone: env.TIMEZONE,
+    }).set({ hour: 8, minute: 30 });
 
     await maybeSendDigest(atDue);
 
     expect(sendOwnerSmsMock).not.toHaveBeenCalled();
     const state = JSON.parse(fs.readFileSync(tmpDigestState, 'utf8'));
-    expect(state.lastSentISO).toBe(QUIET_DAY);
+    expect(state.lastSentISO).toBe(triggerAfterQuiet);
   });
 
   it('DIGEST_ENABLED=false short-circuits entirely (no send, no stamp)', async () => {
     env.DIGEST_ENABLED = 'false';
     seedOneBookedCall(DAY);
-    const atDue = DateTime.fromISO(DAY, { zone: env.TIMEZONE }).set({
-      hour: 19,
+    const atDue = DateTime.fromISO(TRIGGER_DAY, { zone: env.TIMEZONE }).set({
+      hour: 8,
       minute: 30,
     });
 
@@ -363,31 +450,36 @@ describe('maybeSendDigest scheduler core (M4)', () => {
     expect(fs.existsSync(tmpDigestState)).toBe(false);
   });
 
-  it('Sunday appends the weekly summary as a second message', async () => {
-    // Find the Sunday in the same week as DAY (2026-08-19 is a Wednesday →
-    // 2026-08-23 is the Sunday). Seed a booking that lands inside that
-    // 7-day window so the weekly digest is non-null too.
+  it('Monday morning (yesterday was Sunday) appends the weekly summary as a second message', async () => {
+    // ANALYTICS AUDIT FIX (2026-08-22, P1): the weekly now fires when
+    // YESTERDAY was Sunday (i.e. the check runs Monday morning), covering
+    // the 7 salon-TZ days ending on that Sunday — not "today is Sunday"
+    // (the old behavior, which excluded Sunday-evening calls from both the
+    // daily AND the next weekly's window).
     const sunday = DateTime.fromISO(DAY, { zone: env.TIMEZONE })
       .set({ weekday: 7 })
       .toISODate()!;
+    const monday = DateTime.fromISO(sunday, { zone: env.TIMEZONE })
+      .plus({ days: 1 })
+      .toISODate()!;
     seedOneBookedCall(sunday);
-    const atDue = DateTime.fromISO(sunday, { zone: env.TIMEZONE }).set({
-      hour: 19,
+    const atDue = DateTime.fromISO(monday, { zone: env.TIMEZONE }).set({
+      hour: 8,
       minute: 30,
     });
 
     await maybeSendDigest(atDue);
 
     expect(sendOwnerSmsMock).toHaveBeenCalledTimes(2);
-    expect(sendOwnerSmsMock.mock.calls[0]?.[0]).toContain('Erica today');
+    expect(sendOwnerSmsMock.mock.calls[0]?.[0]).toContain('Erica yesterday');
     expect(sendOwnerSmsMock.mock.calls[1]?.[0]).toContain('Erica this week');
   });
 
   it('DIGEST_TO with multiple recipients sends one SMS per recipient', async () => {
     env.DIGEST_TO = '+14105551111, +14105552222';
     seedOneBookedCall(DAY);
-    const atDue = DateTime.fromISO(DAY, { zone: env.TIMEZONE }).set({
-      hour: 19,
+    const atDue = DateTime.fromISO(TRIGGER_DAY, { zone: env.TIMEZONE }).set({
+      hour: 8,
       minute: 30,
     });
 

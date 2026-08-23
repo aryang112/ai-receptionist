@@ -57,6 +57,15 @@ const PRE_AUTH_TIMEOUT_MS = 10_000;
 const REALTIME_INPUT_USD_PER_M = 32;
 const REALTIME_CACHED_INPUT_USD_PER_M = 0.4;
 const REALTIME_OUTPUT_USD_PER_M = 64;
+// ANALYTICS AUDIT FIX (2026-08-22, P1): most re-billed context in a call is
+// TEXT, not audio (the system prompt, tool results, conversation history are
+// all text tokens) — pricing everything at the audio rates above overstated
+// cost. TEXT-modality ESTIMATE, same source/vintage as the audio rates
+// above; used by estimateCostUsd ONLY when the response carries the
+// text/audio split (falls back to the all-audio formula otherwise).
+const REALTIME_TEXT_INPUT_USD_PER_M = 4;
+const REALTIME_TEXT_CACHED_INPUT_USD_PER_M = 0.4;
+const REALTIME_TEXT_OUTPUT_USD_PER_M = 16;
 
 const CORE_SERVICES = env.PHOREST_PREFERRED_SERVICE_IDS.length
   ? env.PHOREST_PREFERRED_SERVICE_IDS.join(', ')
@@ -623,11 +632,21 @@ export class TwilioRealtimeCall {
   // M1: per-call token usage, summed across every turn that reported one
   // (openaiSession's onUsage, fired alongside the existing 📊 turn tokens
   // log). Feeds estimateCostUsd() and the dashboard's per-call cost column.
+  // ANALYTICS AUDIT FIX (2026-08-22, P1): the text/audio modality split
+  // fields stay UNDEFINED (never default to 0) until at least one turn
+  // actually reports them — estimateCostUsd uses their presence, not their
+  // value, to decide whether the per-modality pricing is usable.
   private usageAccum: {
     inputTokens: number;
     outputTokens: number;
     cachedTokens: number;
     turns: number;
+    inputTextTokens?: number;
+    inputAudioTokens?: number;
+    outputTextTokens?: number;
+    outputAudioTokens?: number;
+    cachedTextTokens?: number;
+    cachedAudioTokens?: number;
   } = { inputTokens: 0, outputTokens: 0, cachedTokens: 0, turns: 0 };
   // M1: why the call ended (silence hangup / duration cap / spam decline /
   // caller confirmed done / caller hung up / transferred to owner). Set
@@ -850,6 +869,19 @@ export class TwilioRealtimeCall {
       { tool: 'prefetch', clientId: customer.clientId, late: !!opts.late },
       'Caller recognized by phone — warming context'
     );
+    // ANALYTICS AUDIT FIX (2026-08-22, P2): if this call's 'start' row has
+    // ALREADY been persisted (startedAtMs is set), the match resolved too
+    // late for CallStore.startCall's recognizedClientId field — that field
+    // is already written and never revisited. Append a standalone
+    // 'recognized' row so admin.ts's join still counts the call as
+    // recognized instead of permanently reporting recognized:false. Never
+    // throws (CallStore.recordRecognized is write-through/best-effort like
+    // every other CallStore method). The non-late/immediate-match path
+    // (startedAtMs still null here) needs no extra row — recognizedClientId
+    // gets set directly when startCall runs below.
+    if (this.startedAtMs !== null && this.callSid) {
+      CallStore.recordRecognized(this.callSid, customer.clientId);
+    }
     // Warm their upcoming appointments so reschedule/cancel is instant later.
     phorest
       .listAppointments(customer.clientId)
@@ -1471,19 +1503,98 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     this.usageAccum.outputTokens += usage.outputTokens;
     this.usageAccum.cachedTokens += usage.cachedTokens;
     this.usageAccum.turns += 1;
+
+    // ANALYTICS AUDIT FIX (2026-08-22, P1): sum the modality split too, but
+    // only when THIS turn reported it — a field that's never been seen
+    // stays undefined (estimateCostUsd reads presence as "split available
+    // for this whole call", so a mix of split/unsplit turns falls back
+    // safely rather than silently under-summing).
+    if (usage.inputTextTokens !== undefined) {
+      this.usageAccum.inputTextTokens =
+        (this.usageAccum.inputTextTokens ?? 0) + usage.inputTextTokens;
+    }
+    if (usage.inputAudioTokens !== undefined) {
+      this.usageAccum.inputAudioTokens =
+        (this.usageAccum.inputAudioTokens ?? 0) + usage.inputAudioTokens;
+    }
+    if (usage.outputTextTokens !== undefined) {
+      this.usageAccum.outputTextTokens =
+        (this.usageAccum.outputTextTokens ?? 0) + usage.outputTextTokens;
+    }
+    if (usage.outputAudioTokens !== undefined) {
+      this.usageAccum.outputAudioTokens =
+        (this.usageAccum.outputAudioTokens ?? 0) + usage.outputAudioTokens;
+    }
+    if (usage.cachedTextTokens !== undefined) {
+      this.usageAccum.cachedTextTokens =
+        (this.usageAccum.cachedTextTokens ?? 0) + usage.cachedTextTokens;
+    }
+    if (usage.cachedAudioTokens !== undefined) {
+      this.usageAccum.cachedAudioTokens =
+        (this.usageAccum.cachedAudioTokens ?? 0) + usage.cachedAudioTokens;
+    }
   }
 
   /**
-   * M1: ESTIMATE only — gpt-realtime audio rates (module constants above)
-   * applied to this call's accumulated usage. Uncached input bills the full
-   * rate, cached input the discounted rate, output its own rate. Rounded to
-   * 4dp — a typical call costs low single-digit cents, so fractions matter.
+   * M1: ESTIMATE only — gpt-realtime rates (module constants above) applied
+   * to this call's accumulated usage.
+   *
+   * ANALYTICS AUDIT FIX (2026-08-22, P1): when the text/audio modality split
+   * is available (every one of inputTextTokens/inputAudioTokens/
+   * outputTextTokens/outputAudioTokens is present), price each modality at
+   * its own rate — most re-billed context is TEXT, priced far below audio,
+   * so the old all-audio formula overstated cost. cachedTextTokens/
+   * cachedAudioTokens (if present) split the CACHED portion out of the
+   * input totals; if only the aggregate cachedTokens is known, the leftover
+   * after subtracting cachedText is treated as cached audio (a reasonable
+   * estimate — text/audio cached rates are currently identical anyway).
+   * FALLS BACK to the original all-audio formula whenever the split isn't
+   * fully present — never NaN, never silently wrong on an unsplit response.
+   * Rounded to 4dp — a typical call costs low single-digit cents.
    */
   private estimateCostUsd(usage: {
     inputTokens: number;
     outputTokens: number;
     cachedTokens: number;
+    inputTextTokens?: number;
+    inputAudioTokens?: number;
+    outputTextTokens?: number;
+    outputAudioTokens?: number;
+    cachedTextTokens?: number;
+    cachedAudioTokens?: number;
   }): number {
+    const hasSplit =
+      usage.inputTextTokens !== undefined &&
+      usage.inputAudioTokens !== undefined &&
+      usage.outputTextTokens !== undefined &&
+      usage.outputAudioTokens !== undefined;
+
+    if (hasSplit) {
+      const cachedText = usage.cachedTextTokens ?? 0;
+      const cachedAudio =
+        usage.cachedAudioTokens ?? Math.max(0, usage.cachedTokens - cachedText);
+      const uncachedText = Math.max(
+        0,
+        (usage.inputTextTokens ?? 0) - cachedText
+      );
+      const uncachedAudio = Math.max(
+        0,
+        (usage.inputAudioTokens ?? 0) - cachedAudio
+      );
+
+      const cost =
+        (uncachedText * REALTIME_TEXT_INPUT_USD_PER_M +
+          cachedText * REALTIME_TEXT_CACHED_INPUT_USD_PER_M +
+          uncachedAudio * REALTIME_INPUT_USD_PER_M +
+          cachedAudio * REALTIME_CACHED_INPUT_USD_PER_M +
+          (usage.outputTextTokens ?? 0) * REALTIME_TEXT_OUTPUT_USD_PER_M +
+          (usage.outputAudioTokens ?? 0) * REALTIME_OUTPUT_USD_PER_M) /
+        1e6;
+      return Math.round(cost * 10000) / 10000;
+    }
+
+    // Fallback: no modality split available — the original all-audio
+    // estimate, unchanged.
     const uncachedInput = Math.max(0, usage.inputTokens - usage.cachedTokens);
     const cost =
       (uncachedInput * REALTIME_INPUT_USD_PER_M +

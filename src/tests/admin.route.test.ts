@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+  afterAll,
+  vi,
+} from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import fs from 'node:fs';
@@ -115,7 +123,11 @@ const fullCallRows = [
     callSid: 'CA_full',
     ts: recentTs + 5000,
     entries: [
-      { role: 'caller', text: 'Hi, I need a brow appointment', ts: recentTs + 100 },
+      {
+        role: 'caller',
+        text: 'Hi, I need a brow appointment',
+        ts: recentTs + 100,
+      },
       { role: 'erica', text: 'Sure! What day works?', ts: recentTs + 200 },
     ],
   },
@@ -125,7 +137,12 @@ const fullCallRows = [
     ts: recentTs + 6000,
     durationMs: 45000,
     outcome: 'booked',
-    usage: { inputTokens: 1000, outputTokens: 400, cachedTokens: 200, turns: 3 },
+    usage: {
+      inputTokens: 1000,
+      outputTokens: 400,
+      cachedTokens: 200,
+      turns: 3,
+    },
     estCostUsd: 0.05,
     endReason: 'caller confirmed done',
   },
@@ -261,7 +278,9 @@ describe('admin — GET /admin/api/calls joins per callSid', () => {
     writeFixture(fullCallRows);
     const res = await request(app).get('/admin/api/calls?days=1');
     expect(res.status).toBe(200);
-    const call = res.body.calls.find((c: { callSid: string }) => c.callSid === 'CA_full');
+    const call = res.body.calls.find(
+      (c: { callSid: string }) => c.callSid === 'CA_full'
+    );
     expect(call).toBeDefined();
     expect(call.fromLast4).toBe('1234');
     expect(call.recognized).toBe(true);
@@ -301,7 +320,9 @@ describe('admin — GET /admin/api/calls joins per callSid', () => {
   it('a webhook-blocked call (no start record) becomes its own entry, last-4 only', async () => {
     writeFixture([blockedRow]);
     const res = await request(app).get('/admin/api/calls?days=1');
-    const call = res.body.calls.find((c: { callSid: string }) => c.callSid === 'CA_blocked');
+    const call = res.body.calls.find(
+      (c: { callSid: string }) => c.callSid === 'CA_blocked'
+    );
     expect(call).toBeDefined();
     expect(call.blocked).toBe(true);
     expect(call.outcome).toBe('blocked');
@@ -310,10 +331,44 @@ describe('admin — GET /admin/api/calls joins per callSid', () => {
     expect(raw).not.toContain('4105559999');
   });
 
+  it('ANALYTICS AUDIT FIX: a late "recognized" row (start had no recognizedClientId) still reports recognized:true', async () => {
+    writeFixture([
+      {
+        type: 'start',
+        callSid: 'CA_laterecog',
+        ts: recentTs,
+        from: '+14105556666',
+        // No recognizedClientId — the caller-ID lookup hadn't landed yet
+        // when CallStore.startCall ran (c4b9c7d late-prefetch race).
+      },
+      {
+        type: 'recognized',
+        callSid: 'CA_laterecog',
+        ts: recentTs + 800,
+        clientId: 'client_42',
+      },
+      {
+        type: 'end',
+        callSid: 'CA_laterecog',
+        ts: recentTs + 30000,
+        durationMs: 30000,
+        outcome: 'info',
+      },
+    ]);
+    const res = await request(app).get('/admin/api/calls?days=1');
+    const call = res.body.calls.find(
+      (c: { callSid: string }) => c.callSid === 'CA_laterecog'
+    );
+    expect(call).toBeDefined();
+    expect(call.recognized).toBe(true);
+  });
+
   it('no-outcome + silence-hangup flags derive from outcome/endReason', async () => {
     writeFixture(silenceCallRows);
     const res = await request(app).get('/admin/api/calls?days=1');
-    const call = res.body.calls.find((c: { callSid: string }) => c.callSid === 'CA_silence');
+    const call = res.body.calls.find(
+      (c: { callSid: string }) => c.callSid === 'CA_silence'
+    );
     expect(call.flags).toEqual(
       expect.arrayContaining(['no-outcome', 'silence-hangup'])
     );
@@ -372,7 +427,12 @@ describe('admin — GET /admin/api/stats math', () => {
         estCostUsd: 0.1,
       },
       // after-hours booked call: $60 revenue, $0.05 cost — captured after-hours booking
-      { type: 'start', callSid: 'CA_after', ts: afterHoursTs, from: '+14105552222' },
+      {
+        type: 'start',
+        callSid: 'CA_after',
+        ts: afterHoursTs,
+        from: '+14105552222',
+      },
       {
         type: 'booking',
         callSid: 'CA_after',
@@ -391,7 +451,12 @@ describe('admin — GET /admin/api/stats math', () => {
         estCostUsd: 0.05,
       },
       // spam decline, no revenue
-      { type: 'start', callSid: 'CA_spam', ts: inHoursTs + 10000, from: '+14105553333' },
+      {
+        type: 'start',
+        callSid: 'CA_spam',
+        ts: inHoursTs + 10000,
+        from: '+14105553333',
+      },
       {
         type: 'end',
         callSid: 'CA_spam',
@@ -402,14 +467,22 @@ describe('admin — GET /admin/api/stats math', () => {
         estCostUsd: 0.01,
       },
       // webhook-blocked, never opened a session
-      { type: 'blocked', callSid: 'CA_blocked2', ts: inHoursTs + 15000, from: '+14105554444' },
+      {
+        type: 'blocked',
+        callSid: 'CA_blocked2',
+        ts: inHoursTs + 15000,
+        from: '+14105554444',
+      },
     ];
     writeFixture(rows);
 
     const res = await request(app).get('/admin/api/stats?days=30');
     expect(res.status).toBe(200);
     const t = res.body.totals;
-    expect(t.calls).toBe(4);
+    // ANALYTICS AUDIT FIX (2026-08-22, P1): `calls` excludes the
+    // webhook-blocked row (CA_blocked2) — it's reported separately as
+    // webhookBlocked. 3 non-blocked calls (CA_in, CA_after, CA_spam), not 4.
+    expect(t.calls).toBe(3);
     expect(t.bookings).toBe(2);
     expect(t.revenue).toBeCloseTo(100, 5);
     expect(t.afterHours).toBe(1);
@@ -417,14 +490,106 @@ describe('admin — GET /admin/api/stats math', () => {
     expect(t.webhookBlocked).toBe(1);
     expect(t.totalEstCostUsd).toBeCloseTo(0.16, 5);
     expect(t.revenuePerDollar).toBeCloseTo(100 / 0.16, 1);
+    // outcomes is a diagnostic breakdown (unaffected by the calls-total
+    // fix) — a blocked row's outcome is still counted here.
     expect(t.outcomes.booked).toBe(2);
     expect(t.outcomes.spam).toBe(1);
     expect(t.outcomes.blocked).toBe(1);
   });
 
+  it('ANALYTICS AUDIT FIX: a blocked-only day never inflates `calls` or appears in the daily buckets', async () => {
+    const day = mostRecentOpenDay('America/New_York');
+    const dateISO = day.toISODate()!;
+    const oc = getOpenClose(dateISO)!;
+    const inHoursTs = oc.open.plus({ hours: 1 }).toMillis();
+
+    writeFixture([
+      {
+        type: 'blocked',
+        callSid: 'CA_onlyblocked',
+        ts: inHoursTs,
+        from: '+14105557777',
+      },
+    ]);
+
+    const res = await request(app).get('/admin/api/stats?days=30');
+    expect(res.body.totals.calls).toBe(0);
+    expect(res.body.totals.webhookBlocked).toBe(1);
+    expect(
+      res.body.daily.find((d: { date: string }) => d.date === dateISO)
+    ).toBeUndefined();
+  });
+
+  it('ANALYTICS AUDIT FIX: a call with TWO booking rows sums revenue across both, not just the last', async () => {
+    const day = mostRecentOpenDay('America/New_York');
+    const dateISO = day.toISODate()!;
+    const oc = getOpenClose(dateISO)!;
+    const inHoursTs = oc.open.plus({ hours: 1 }).toMillis();
+
+    writeFixture([
+      {
+        type: 'start',
+        callSid: 'CA_multi',
+        ts: inHoursTs,
+        from: '+14105558888',
+      },
+      {
+        type: 'booking',
+        callSid: 'CA_multi',
+        ts: inHoursTs + 1000,
+        service: 'Brow Threading',
+        price: 25,
+        date: dateISO,
+        time: '1:00 PM',
+      },
+      {
+        type: 'booking',
+        callSid: 'CA_multi',
+        ts: inHoursTs + 2000,
+        service: 'Lash Lift',
+        price: 30,
+        date: dateISO,
+        time: '1:30 PM',
+      },
+      {
+        type: 'end',
+        callSid: 'CA_multi',
+        ts: inHoursTs + 3000,
+        durationMs: 90000,
+        outcome: 'booked',
+        estCostUsd: 0.1,
+      },
+    ]);
+
+    const statsRes = await request(app).get('/admin/api/stats?days=30');
+    expect(statsRes.body.totals.bookings).toBe(2); // 2 booking ROWS, one call
+    expect(statsRes.body.totals.revenue).toBeCloseTo(55, 5);
+
+    const callsRes = await request(app).get('/admin/api/calls?days=30');
+    const call = callsRes.body.calls.find(
+      (c: { callSid: string }) => c.callSid === 'CA_multi'
+    );
+    expect(call.bookings).toHaveLength(2);
+    expect(call.bookings.map((b: { price: number }) => b.price)).toEqual([
+      25, 30,
+    ]);
+    // `booking` alias (dashboard.html's existing detail card) is the LAST row.
+    expect(call.booking).toEqual({
+      service: 'Lash Lift',
+      price: 30,
+      date: dateISO,
+      time: '1:30 PM',
+    });
+  });
+
   it('revenuePerDollar is null when there is no cost data (null-safe divide)', async () => {
     writeFixture([
-      { type: 'start', callSid: 'CA_nocost', ts: recentTs, from: '+14105550001' },
+      {
+        type: 'start',
+        callSid: 'CA_nocost',
+        ts: recentTs,
+        from: '+14105550001',
+      },
       {
         type: 'booking',
         callSid: 'CA_nocost',
@@ -498,17 +663,24 @@ describe('admin — GET /admin/api/recording/:callSid proxy', () => {
         controller.close();
       },
     });
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, body: stream });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, body: stream });
     vi.stubGlobal('fetch', fetchMock);
 
     const res = await request(app)
       .get('/admin/api/recording/CA_full')
       .buffer(true)
-      .parse((res2: NodeJS.EventEmitter, cb: (err: Error | null, body: Buffer) => void) => {
-        const chunks: Buffer[] = [];
-        res2.on('data', (c: Buffer) => chunks.push(c));
-        res2.on('end', () => cb(null, Buffer.concat(chunks)));
-      });
+      .parse(
+        (
+          res2: NodeJS.EventEmitter,
+          cb: (err: Error | null, body: Buffer) => void
+        ) => {
+          const chunks: Buffer[] = [];
+          res2.on('data', (c: Buffer) => chunks.push(c));
+          res2.on('end', () => cb(null, Buffer.concat(chunks)));
+        }
+      );
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toBe('audio/mpeg');
@@ -523,14 +695,17 @@ describe('admin — GET /admin/api/recording/:callSid proxy', () => {
       'https://api.twilio.com/2010-04-01/Accounts/AC_test_sid/Recordings/RE_full_1.mp3'
     );
     const expectedAuth =
-      'Basic ' + Buffer.from('AC_test_sid:test_auth_token_123').toString('base64');
+      'Basic ' +
+      Buffer.from('AC_test_sid:test_auth_token_123').toString('base64');
     expect(calledOpts.headers.Authorization).toBe(expectedAuth);
 
     // The response the BROWSER sees never contains the raw creds anywhere.
     const rawHeaders = JSON.stringify(res.headers);
     expect(rawHeaders).not.toContain('test_auth_token_123');
     expect(rawHeaders.toLowerCase()).not.toContain('basic ');
-    expect((res.body as Buffer).toString('utf8')).not.toContain('test_auth_token_123');
+    expect((res.body as Buffer).toString('utf8')).not.toContain(
+      'test_auth_token_123'
+    );
   });
 
   it('a Twilio fetch failure surfaces a 502 without throwing', async () => {

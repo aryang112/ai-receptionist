@@ -536,6 +536,65 @@ describe('M1 — onUserTranscript / onAssistantTranscript / onUsage handler wiri
     });
     expect(onUsage).not.toHaveBeenCalled();
   });
+
+  // ANALYTICS AUDIT FIX (2026-08-22, P1): text/audio modality split.
+  it('fires onUsage WITH the text/audio modality split when the response carries input_token_details/output_token_details', async () => {
+    const onUsage = vi.fn();
+    const { session } = buildSession({ onUsage });
+    await fire(session, {
+      type: 'response.done',
+      response: {
+        id: 'resp_1',
+        status: 'completed',
+        usage: {
+          input_tokens: 1500,
+          output_tokens: 400,
+          total_tokens: 1900,
+          input_token_details: {
+            cached_tokens: 300,
+            text_tokens: 1000,
+            audio_tokens: 500,
+            cached_tokens_details: { text_tokens: 200, audio_tokens: 100 },
+          },
+          output_token_details: { text_tokens: 300, audio_tokens: 100 },
+        },
+      },
+    });
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith({
+      inputTokens: 1500,
+      outputTokens: 400,
+      cachedTokens: 300,
+      totalTokens: 1900,
+      inputTextTokens: 1000,
+      inputAudioTokens: 500,
+      outputTextTokens: 300,
+      outputAudioTokens: 100,
+      cachedTextTokens: 200,
+      cachedAudioTokens: 100,
+    });
+  });
+
+  it('fires onUsage WITHOUT split fields when input_token_details/output_token_details are absent (defensive — no crash, no fabricated 0s)', async () => {
+    const onUsage = vi.fn();
+    const { session } = buildSession({ onUsage });
+    await fire(session, {
+      type: 'response.done',
+      response: {
+        id: 'resp_1',
+        status: 'completed',
+        usage: { input_tokens: 500, output_tokens: 120, total_tokens: 620 },
+      },
+    });
+    // Exact match — no inputTextTokens/inputAudioTokens/etc keys at all when
+    // the API response didn't include them (matches the OLD exact-shape
+    // test above, proving the fix is fully backward compatible).
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith({
+      inputTokens: 500,
+      outputTokens: 120,
+      cachedTokens: 0,
+      totalTokens: 620,
+    });
+  });
 });
 
 describe('M1 — configureSession session.update payload (OPENAI_INPUT_TRANSCRIPTION env gate)', () => {

@@ -128,6 +128,23 @@ export const CallStore = {
     });
   },
 
+  // ANALYTICS AUDIT FIX (2026-08-22, P2): a caller-ID match that resolves
+  // AFTER this call's 'start' row has already been persisted (the
+  // c4b9c7d late-prefetch upgrade — see twilioStream.ts's
+  // adoptRecognizedCaller) never lands in the start row's
+  // recognizedClientId (it's already written). This is the amendment
+  // record so the call is never permanently mis-reported as unrecognized —
+  // admin.ts's join treats a call as recognized if the start row has
+  // recognizedClientId OR one of these rows exists.
+  recordRecognized(callSid: string, clientId: string): void {
+    append({
+      type: 'recognized',
+      callSid,
+      ts: Date.now(),
+      clientId,
+    });
+  },
+
   recordToolCall(callSid: string, entry: ToolCallEntry): void {
     append({
       type: 'tool',

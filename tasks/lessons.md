@@ -174,3 +174,12 @@ the org tier 2026-08-22 (org-level spend tier — the Project Limits pencil can
 only LOWER). If silence-at-90s ever returns, check `⚖️ TPM remaining` in the
 logs FIRST before debugging code. Prompt trim (todo 3.4) still worthwhile —
 it cuts the per-turn burn on every tier.
+
+## 🧠 Model tiers: Sonnet is for CODING WORKERS only — audits/reviews are Fable's job (2026-08-22)
+Aryan's correction after Fable delegated a pre-prod functional audit to three
+Sonnet agents: analysis-grade work (audits, code review, defect hunts,
+architecture judgment) must run on Fable — the model quality IS the audit
+quality. Sonnet's role in this project is implementing well-specced queue
+tasks (agent_queue.md pattern), with Fable review-gating every diff. Rule:
+before spawning any agent, ask "is this execution of a tight spec, or is it
+judgment?" — judgment never gets downgraded to a cheaper model.
