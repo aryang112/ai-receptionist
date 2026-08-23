@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { DateTime } from 'luxon';
 import { buildInstructions } from '../realtime/twilioStream.js';
 import businessHours from '../config/business.json';
+import type { Service } from '../services/phorest.types.js';
 
 const at = (iso: string) => DateTime.fromISO(iso, { zone: 'America/New_York' });
 
@@ -67,5 +68,61 @@ describe('buildInstructions — SPAM & TELEMARKETING (S1)', () => {
     expect(policyIdx).toBeGreaterThan(-1);
     expect(spamIdx).toBeGreaterThan(policyIdx);
     expect(generalIdx).toBeGreaterThan(spamIdx);
+  });
+});
+
+// H1: the tool-only hours/prices design was a workaround for the old 40k TPM
+// ceiling (lifted 2026-08-22) — both are now hot-loaded straight into the
+// prompt so Erica answers instantly instead of "let me check that for you…"
+// on every hours/price question.
+describe('buildInstructions — HOURS (H1)', () => {
+  it('renders a weekly HOURS line generated from business.json, plus a closed date', () => {
+    const instructions = buildInstructions();
+    expect(instructions).toContain('HOURS:');
+    // business.json: mon: ["12:00-17:00"] → "Mon 12 PM–5 PM"
+    expect(instructions).toContain('Mon 12 PM–5 PM');
+    // business.json: sun: [] → "Sun closed"
+    expect(instructions).toContain('Sun closed');
+    // business.json closedDates[0] must appear verbatim (sourced, not hand-typed)
+    expect(instructions).toContain(businessHours.closedDates[0]!);
+  });
+
+  it('softens the BUSINESS HOURS line — keeps "never guess", drops the always-use-the-tool mandate', () => {
+    const instructions = buildInstructions();
+    expect(instructions).toMatch(/BUSINESS HOURS:.*never guess/i);
+    expect(instructions).not.toContain(
+      'Always use the get_business_hours tool'
+    );
+  });
+});
+
+describe('buildInstructions — SERVICES & PRICES catalog (H1)', () => {
+  const FIXTURE_SERVICES: Service[] = [
+    { id: 's1', name: 'Eyebrow Threading', price: 15, durationMin: 15 },
+    { id: 's2', name: 'Lash Lift', price: 65, durationMin: 45 },
+    { id: 's3', name: '3) Bikini Wax', price: 30, durationMin: 20 },
+  ];
+
+  it('with a services array: alphabetized "Name — $price (Nmin)" lines, leading codes stripped, quote-only-from-list rule', () => {
+    const instructions = buildInstructions(undefined, FIXTURE_SERVICES);
+
+    const bikiniIdx = instructions.indexOf('Bikini Wax — $30 (20min)');
+    const browIdx = instructions.indexOf('Eyebrow Threading — $15 (15min)');
+    const lashIdx = instructions.indexOf('Lash Lift — $65 (45min)');
+    expect(bikiniIdx).toBeGreaterThan(-1);
+    expect(browIdx).toBeGreaterThan(bikiniIdx); // alphabetical: Bikini < Eyebrow < Lash
+    expect(lashIdx).toBeGreaterThan(browIdx);
+
+    expect(instructions).not.toMatch(/3\)\s*Bikini/); // leading "3) " code stripped
+    expect(instructions).toMatch(/never guess a price/i);
+    // the tool-first fallback wording must NOT still be present
+    expect(instructions).not.toContain('call get_prices WITH the serviceName');
+  });
+
+  it('with services=null (default), the SERVICES & PRICES section is byte-identical to the pre-H1 tool-first text', () => {
+    const instructions = buildInstructions();
+    expect(instructions).toContain(
+      `Callers often ask for prices. When they ask the price of a service, say a quick filler ("Let me check that for you…") and call get_prices WITH the serviceName they asked about — it returns that service's exact price and duration. Only omit serviceName if they ask broadly "what services do you offer." Quote ONLY what get_prices returns; NEVER guess or make up a price. Read service names naturally (ignore any leading numbers/codes like "3)").`
+    );
   });
 });

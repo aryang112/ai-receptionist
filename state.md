@@ -3,6 +3,112 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-23 — H1 IMPLEMENTED (worker agent)
+**Task:** H1 — hot-load hours + the price catalog into the prompt (replaces
+the tool-only design that was a workaround for the old 40k TPM ceiling, lifted
+2026-08-22). Files touched exactly match the task's Files list, nothing else:
+`src/realtime/twilioStream.ts` (`buildInstructions()` + the `'start'` handler
+call site), `src/tests/twilioStream.prompt.test.ts`. Also exported `fmtTime`
+from `src/core/hours.ts` (one-word change, `function fmtTime` →
+`export function fmtTime`) per Fable's implementation note — the new HOURS
+line reuses hours.ts's exact 12-hour rendering instead of a second copy that
+could drift. Did NOT touch `.env`, `business.json`, `get_prices`/
+`get_business_hours` handlers, `toolSchemas.ts`, or `openaiSession.ts`
+(confirmed via `git diff --stat`: only `src/core/hours.ts` (4 lines),
+`src/realtime/twilioStream.ts`, and the test file changed).
+
+**1. `buildInstructions(now?, services?: Service[] | null)`.** New optional
+2nd param, same defaulting style as `now` (`= null`). `null`/absent → the
+SERVICES & PRICES section renders BYTE-IDENTICAL to the pre-H1 tool-first
+text (locked in by a dedicated test comparing the exact string). Non-null →
+replaces that paragraph with the full alphabetized catalog + a
+quote-only-from-list rule.
+
+**2. New HOURS block**, inserted right after the LOCATION line, generated
+FROM `business.json`'s `hours.{mon..sun}` arrays (never hand-typed) via two
+new local helpers in twilioStream.ts (`formatDayHours`, `buildHoursLine`) that
+call hours.ts's exported `fmtTime` per-range, joining multi-range days with
+"and" and rendering an empty array as "closed"; `closedDates` appended as
+"Closed on: <dates>". The pre-existing `BUSINESS HOURS:` line was softened
+per spec — kept "never guess", dropped the "always use the tool" mandate:
+old: `"Always use the get_business_hours tool when asked about hours. Never
+guess."` → new: `"Never guess — hours are listed below and answered instantly
+from them. Use get_business_hours only when something's unclear."`
+
+**Exact rendered HOURS block** (from the real `business.json`, any `now`
+outside the Sept 1–9 vacation window):
+```
+HOURS: Mon 12 PM–5 PM · Tue 12 PM–7 PM · Wed 12 PM–7 PM · Thu 12 PM–7 PM · Fri 12 PM–7 PM · Sat 10 AM–6 PM · Sun closed. Closed on: 2026-11-26, 2026-12-25. Use this together with the current date & time above to answer instantly whether we're open, closed, or open right now — no tool call, no filler needed. Call get_business_hours only if something's unclear.
+```
+
+**3. SERVICES & PRICES catalog** — when `services` is provided: alphabetized
+(post leading-code-strip), `"Name — $price (Nmin)"` per line, whole dollars
+with no decimals / fractional with exactly 2dp (`fmtPrice`), "skip nothing"
+per spec (unlike `get_prices`' own $0/admin-row filter — deliberately NOT
+reused, to honor "skip nothing"). New rule text (no quotable example
+sentences — describes behavior only, per the parroting lesson): "Full live
+price list below — quote a price directly and instantly from it, no filler,
+no tool call. If a caller names a service that isn't on this list, or you're
+not sure which line matches, call get_prices instead — never guess a price."
+**3 sample price lines** (from an 18-item realistic fixture catalog):
+```
+Bikini Wax — $30 (20min)
+Full Leg Wax — $55.50 (40min)
+Lash Lift — $65 (45min)
+```
+
+**4. 'start' handler race-resolve (unchanged guard positions).** Added
+`const servicesPromise = Promise.race([phorest.listServices(), 250ms→null])
+.catch(() => null)` immediately after `const warm =
+this.prepareCallerContext(callerFrom)` (independent, parallel kick-off — no
+session I/O, same pattern as the caller-ID lookup) — resolved with `await
+servicesPromise` right before `configureSession`, result passed to
+`buildInstructions(undefined, services)`. All 4 pre-existing `if
+(this.closed) break;` guards in the handler are untouched, in their exact
+original positions; ONE new guard was added right after the new `await
+servicesPromise` (before configureSession — no new await added AFTER
+configureSession, confirmed by reading the handler top-to-bottom post-edit).
+Updated the now-stale comment above the old `instructions: buildInstructions()`
+call (previously claimed prices were "NOT baked into the prompt" — no longer
+true).
+
+**Prompt token-growth estimate (chars/4):**
+- Baseline (no catalog / cold-cache fallback) vs pre-H1: the new HOURS line +
+  softened BUSINESS HOURS line add ~412 chars (~103 tokens) — this applies to
+  EVERY call regardless of catalog warmth, since HOURS is unconditional.
+- Warm catalog on top of that (18-item realistic fixture): the alphabetized
+  list replaces the tool-first paragraph, net **+304 chars (~76 tokens)**
+  over the no-catalog fallback (a small 5-item test fixture was actually
+  *shorter* than the old paragraph — growth scales with real catalog size).
+- Combined (HOURS + warm 18-item catalog) vs the original pre-H1 prompt: **~716
+  chars, ~179 tokens** — small relative to the ~4000-token base prompt, well
+  within the TPM headroom freed by the 2026-08-22 tier raise.
+
+**Live-validation note:** no session.update SHAPE change (instructions
+remain a plain string field) — but per lessons.md, the acceptance bar for any
+prompt-carrying-new-behavior deploy is still "first live call: greeting
+plays." Confirm on the first post-deploy call that Erica answers an "are you
+open" and a price question INSTANTLY (no "let me check" filler, no tool
+call) when the catalog was warm.
+
+**Verification:** `npx tsc --noEmit` clean. `npm test`: 265/265 (261
+pre-existing + 4 new, all in `twilioStream.prompt.test.ts`: HOURS line +
+softened BUSINESS-HOURS test, fixture-catalog alphabetized/format/rule test,
+null→byte-identical-fallback test — file went 6→10 tests). `TZ=UTC npm test`:
+265/265 green.
+
+**Deviations:** none from the H1 spec. One file outside the literal "Files"
+list was touched (`src/core/hours.ts`, +3/-1 lines: added an `export`
+keyword + a one-line comment) — explicitly sanctioned by Fable's
+"CRITICAL IMPLEMENTATION NOTES" ("export a small formatter from hours.ts...
+prefer reusing/exporting hours.ts's fmtTime-style logic so the two never
+drift") to avoid a second, driftable copy of the 12-hour time formatter.
+
+**Not done:** did not commit/push/`git add` per instructions — working tree
+left as diffs only. Did not touch `.env`, `business.json`, `get_prices`/
+`get_business_hours` handlers, `toolSchemas.ts`, or any `session.update`
+shape.
+
 ## 2026-08-22 — ANALYTICS AUDIT FIXES (worker agent)
 **Task:** Fable's ANALYTICS audit triaged 6 P1/P2 fixes (digest semantics,
 revenue under-count, calls-definition drift, cost-estimate modality split,

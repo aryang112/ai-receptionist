@@ -593,6 +593,52 @@ right); null on a no-call day; scheduler stamps + doesn't double-send (fake
 timers + tmp state file); ownerSms extraction — running-late + vacation tests
 still green untouched.
 
+## H1 — [x] worker-H1 2026-08-23T00:00:00Z — Hot-load hours + price catalog into the prompt (P1, code + prompt) — Aryan-approved 2026-08-23 (implemented, awaiting Fable review/commit)
+**Why:** the tool-only design for hours/prices was a workaround for the old 40k
+TPM ceiling (lifted 2026-08-22). Live calls now show the wart it left: "let me
+check that for you…" for every price question, twice in a row, and no instant
+"are you open right now?" answer. Aryan approved hot-loading both. The catalog
+is ALREADY warmed at boot (index.ts logs "Service catalog warmed") and
+TTL-cached 24h (`phorest.listServices()`, SERVICE_CACHE_TTL_HOURS) — this is
+prompt assembly, not new fetching.
+**Files:** `src/realtime/twilioStream.ts` (`buildInstructions()` + the 'start'
+handler call site), `src/tests/twilioStream.prompt.test.ts`.
+**Spec:**
+- `buildInstructions(now?, services?: Service[] | null)` — new optional param
+  (null/absent = no catalog available; keep the existing `now` injection
+  pattern).
+- **HOURS block** (new, right after the LOCATION line), generated FROM
+  business.json (never hand-written text): one compact line listing each
+  weekday's hours ("Mon 12 PM–5 PM · Tue 12 PM–7 PM · … · Sun closed") +
+  "Closed on: <closedDates>". Rule text: answer open/closed/"are you open
+  right now" questions INSTANTLY from this plus the CURRENT DATE & TIME above
+  — no tool call, no filler. get_business_hours remains for anything unclear.
+  SOFTEN the existing "BUSINESS HOURS: Always use the get_business_hours
+  tool" line accordingly (it currently says never guess/always tool — keep
+  "never guess", drop "always tool").
+- **SERVICES & PRICES**: when `services` is provided, add the full catalog to
+  the section — one line per service, alphabetized, "Name — $price (Nmin)"
+  (formatting consistent, no leading codes; skip nothing). Rule text: quote
+  prices ONLY from this list, instantly — no filler, no tool; if a caller
+  names a service that is NOT in the list (or you're unsure which line they
+  mean), call get_prices instead; NEVER guess a price. When `services` is
+  null → keep the CURRENT tool-first wording verbatim (graceful fallback).
+- Call site (the 'start' handler, right before configureSession): resolve the
+  catalog with a tight race guard so a cold cache can NEVER delay pickup:
+  `Promise.race([phorest.listServices(), 250ms → null])`, `.catch(() =>
+  null)`. Pass the result to buildInstructions. Warm case = instant resolve
+  from cache; cold/failed case = fallback prompt, identical to today.
+- No session.update SHAPE changes (instructions are text — safe class). Do
+  not touch get_prices/get_business_hours handlers or schemas.
+**Accept:** tsc clean; ALL existing tests green + new ones (floor 261), also
+TZ=UTC. New tests (twilioStream.prompt.test.ts pattern): HOURS line present +
+generated from business.json values (assert a weekday's hours + "Sun closed"
++ a closedDate); with a fixture services array → price lines present,
+alphabetized, exact "$X (Ymin)" format + the quote-only-from-list rule; with
+null → section byte-identical to today's tool-first text; existing prompt
+tests untouched. State in state.md: prompt token growth estimate (chars/4),
+and that the first live call validates as usual (greeting plays).
+
 ---
 
 ## Orchestration notes (for the session leader)

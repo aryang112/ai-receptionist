@@ -28,6 +28,7 @@ import {
   getHoursStatus,
   getOpenClose,
   getActiveOrUpcomingVacation,
+  fmtTime,
 } from '../core/hours.js';
 import { snapSlotsToGrid } from '../core/slots.js';
 import { verifyStreamToken } from '../security/wsAuth.js';
@@ -71,10 +72,85 @@ const CORE_SERVICES = env.PHOREST_PREFERRED_SERVICE_IDS.length
   ? env.PHOREST_PREFERRED_SERVICE_IDS.join(', ')
   : 'Brow Threading, Eyebrow Tinting';
 
+const HOURS_DAY_LABELS: Array<[string, keyof typeof businessHours.hours]> = [
+  ['Mon', 'mon'],
+  ['Tue', 'tue'],
+  ['Wed', 'wed'],
+  ['Thu', 'thu'],
+  ['Fri', 'fri'],
+  ['Sat', 'sat'],
+  ['Sun', 'sun'],
+];
+
+/** "HH:MM" → a bare DateTime carrying just that wall-clock time, so hours.ts's
+ * exported `fmtTime` can render it ("12 PM", "5:30 PM") without drifting from
+ * how getHoursStatus renders the same business.json ranges. */
+function hhmmToDt(hhmm: string): DateTime {
+  const [h, m] = hhmm.split(':').map(Number);
+  return DateTime.fromObject({ hour: h ?? 0, minute: m ?? 0 });
+}
+
+/** One weekday's ranges → "12 PM–5 PM" (multi-range days joined with "and"),
+ * or "closed" for an empty array. */
+function formatDayHours(ranges: string[]): string {
+  if (!ranges.length) return 'closed';
+  return ranges
+    .map((r) => {
+      const [start, end] = r.split('-');
+      return `${fmtTime(hhmmToDt(start!))}–${fmtTime(hhmmToDt(end!))}`;
+    })
+    .join(' and ');
+}
+
+/** H1: the compact weekly HOURS line for the prompt, generated FROM
+ * business.json's mon..sun arrays (never hand-typed, so it can't drift from
+ * the actual configured hours) + the closedDates list. */
+function buildHoursLine(): string {
+  const days = HOURS_DAY_LABELS.map(
+    ([label, key]) =>
+      `${label} ${formatDayHours(businessHours.hours[key] ?? [])}`
+  ).join(' · ');
+  const closed = businessHours.closedDates.length
+    ? ` Closed on: ${businessHours.closedDates.join(', ')}.`
+    : '';
+  return `${days}.${closed}`;
+}
+
+/** H1: strip Phorest's "3) " style ordinal prefixes for the hot-loaded price
+ * list — same cosmetic strip get_prices applies (kept as a local copy here so
+ * this task doesn't touch get_prices' own formatter, per the hard constraint). */
+function stripLeadingServiceCode(name: string): string {
+  return name.replace(/^\s*\d+[a-z]?\)\s*/i, '').trim();
+}
+
+/** Whole dollars render with no decimals ($18), fractional with exactly 2 ($18.50). */
+function fmtPrice(n: number): string {
+  return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
+}
+
+/** H1: the full live catalog as one alphabetized line per service —
+ * "Name — $price (Nmin)". Deliberately skips nothing (unlike get_prices'
+ * own $0/admin-row filter) — the spec is "skip nothing" for this list. */
+function buildPriceLines(services: Service[]): string {
+  return services
+    .map((s) => ({
+      name: stripLeadingServiceCode(s.name),
+      price: s.price,
+      durationMin: s.durationMin,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((s) => `${s.name} — ${fmtPrice(s.price)} (${s.durationMin}min)`)
+    .join('\n');
+}
+
 export function buildInstructions(
   // Injectable for tests (same pattern as getHoursStatus) — defaults to the
   // real current salon time.
-  now: DateTime = DateTime.now().setZone(env.TIMEZONE)
+  now: DateTime = DateTime.now().setZone(env.TIMEZONE),
+  // H1: the warmed/TTL-cached Phorest catalog, or null when unavailable
+  // (cold cache raced past its cap, or the fetch failed) — null keeps the
+  // existing tool-first SERVICES & PRICES wording verbatim.
+  services: Service[] | null = null
 ): string {
   // Inject the authoritative current salon date/time so "today"/"tomorrow" and
   // any relative dates are computed correctly — never left to the model's own
@@ -110,6 +186,16 @@ Erica cannot connect a caller to Richa while she's away — offer to pass a mess
 }`
     : '';
 
+  // H1: full catalog present → replace the tool-first price paragraph with
+  // the hot-loaded, alphabetized list + its own quote-only-from-list rule.
+  // Absent (cold cache raced past its cap, or fetch failed) → keep the
+  // existing tool-first wording verbatim, unchanged from before this task.
+  const servicesSection = services
+    ? `Full live price list below — quote a price directly and instantly from it, no filler, no tool call. If a caller names a service that isn't on this list, or you're not sure which line matches, call get_prices instead — never guess a price.
+
+${buildPriceLines(services)}`
+    : `Callers often ask for prices. When they ask the price of a service, say a quick filler ("Let me check that for you…") and call get_prices WITH the serviceName they asked about — it returns that service's exact price and duration. Only omit serviceName if they ask broadly "what services do you offer." Quote ONLY what get_prices returns; NEVER guess or make up a price. Read service names naturally (ignore any leading numbers/codes like "3)").`;
+
   return `You are Erica, the warm and friendly AI receptionist for Richa's Threading Salon in Parkville, Maryland. You answer calls, book appointments, reschedule, cancel, and help with any questions about the salon.
 
 CURRENT DATE & TIME: Right now it is ${now.toFormat("cccc, MMMM d, yyyy 'at' h:mm a")} at the salon (timezone ${env.TIMEZONE}). When a caller says "today" use the date ${todayISO}; "tomorrow" is ${tomorrowISO}. ALWAYS compute appointment dates from this — never guess today's date, month, or year. Pass every date to tools as YYYY-MM-DD.
@@ -122,13 +208,15 @@ GREETING: Open the call yourself, immediately and warmly. Identify as the virtua
 
 NEVER LEAVE SILENCE: Before you call ANY tool (looking something up, booking, checking availability, etc.), FIRST say a short, natural filler out loud — like "Let me check that for you…", "One sec…", or "Let me pull that up…" — and THEN call the tool. The caller must never hear dead air while you work.
 
-BUSINESS HOURS: Always use the get_business_hours tool when asked about hours. Never guess.
+BUSINESS HOURS: Never guess — hours are listed below and answered instantly from them. Use get_business_hours only when something's unclear.
 
 LOCATION: ${businessHours.location.address}, ${businessHours.location.city}, ${businessHours.location.state} ${businessHours.location.zip} — say it naturally if asked. For directions: give the address, suggest their maps app — never invent turn-by-turn or landmarks.
+
+HOURS: ${buildHoursLine()} Use this together with the current date & time above to answer instantly whether we're open, closed, or open right now — no tool call, no filler needed. Call get_business_hours only if something's unclear.
 ${vacationBlock}
 
 ═══ SERVICES & PRICES ═══
-Callers often ask for prices. When they ask the price of a service, say a quick filler ("Let me check that for you…") and call get_prices WITH the serviceName they asked about — it returns that service's exact price and duration. Only omit serviceName if they ask broadly "what services do you offer." Quote ONLY what get_prices returns; NEVER guess or make up a price. Read service names naturally (ignore any leading numbers/codes like "3)").
+${servicesSection}
 
 Callers often use different names for a service (e.g. "lash lamination" for our "Lash Lift"). Don't rely on a memorised list — for ANY service a caller names, just try to book it: suggest_availability matches it against the live catalog. NEVER tell a caller "we don't offer that," and never transfer just because a service wasn't in a memorised list.
 
@@ -1018,6 +1106,16 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
             ?.stir;
           this.callerFrom = callerFrom;
           const warm = this.prepareCallerContext(callerFrom);
+          // H1: race the (warm, TTL-cached) Phorest catalog fetch alongside
+          // the caller-ID lookup above — independent of it, kicked off early
+          // so the round-trip overlaps the OpenAI handshake below. A tight
+          // 250ms cap means a cold cache can NEVER delay pickup: warm case
+          // resolves instantly, cold/failed case falls back to the existing
+          // tool-first prompt wording (buildInstructions' services=null path).
+          const servicesPromise: Promise<Service[] | null> = Promise.race([
+            phorest.listServices(),
+            new Promise<null>((resolve) => setTimeout(resolve, 250, null)),
+          ]).catch(() => null);
           // Build the session now that streamSid is known — RT-9 tags every
           // session log line with the last 8 of the streamSid. Only after the
           // auth gate above, so a rejected stream never spins one up.
@@ -1031,11 +1129,15 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           // (a per-call interval leak nothing would ever clear). Re-checked
           // after every await in this handler.
           if (this.closed) break;
-          // Prices come from the get_prices tool on demand (NOT baked into the
-          // prompt) — keeps the per-turn token footprint small so long calls
-          // don't exhaust the Realtime token-per-minute rate limit.
+          // H1 (2026-08-23): hours + the price catalog are now hot-loaded
+          // into the prompt (tool-only was a workaround for the old 40k TPM
+          // ceiling, lifted 2026-08-22) — resolve the race started above so
+          // configureSession gets the catalog if it landed in time.
+          // get_prices/get_business_hours remain for anything unclear.
+          const services = await servicesPromise;
+          if (this.closed) break;
           await this.session.configureSession({
-            instructions: buildInstructions(),
+            instructions: buildInstructions(undefined, services),
             tools: TOOL_DEFINITIONS,
           });
           if (this.closed) break;

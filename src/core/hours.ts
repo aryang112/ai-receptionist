@@ -45,7 +45,9 @@ const rangeStart = (date: DateTime, range: string) =>
 const rangeEnd = (date: DateTime, range: string) =>
   atTime(date, range.split('-')[1]!);
 
-function fmtTime(dt: DateTime): string {
+// H1: exported so twilioStream.ts's prompt HOURS-block formatter reuses the
+// exact same 12-hour rendering instead of a second copy that could drift.
+export function fmtTime(dt: DateTime): string {
   return dt.minute === 0 ? dt.toFormat('h a') : dt.toFormat('h:mm a');
 }
 
