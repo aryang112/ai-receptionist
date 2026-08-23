@@ -1,5 +1,14 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from 'vitest';
 import WebSocket from 'ws';
+import { env } from '../config/env.js';
 
 // The constructor throws without an API key; set one before importing env/session.
 process.env.OPENAI_REALTIME_API_KEY = 'test-key';
@@ -436,5 +445,162 @@ describe('G2 requestResponse — guarded response creation for out-of-band trigg
     const session: any = new OpenAIRealtimeSession({});
     // Never connected — isOpen() is false.
     expect(() => session.requestResponse()).not.toThrow();
+  });
+});
+
+describe('M1 — onUserTranscript / onAssistantTranscript / onUsage handler wiring', () => {
+  it('fires onUserTranscript with the transcript text on the USER SAID event', async () => {
+    const onUserTranscript = vi.fn();
+    const { session } = buildSession({ onUserTranscript });
+    await fire(session, {
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'I need a lash lift Tuesday',
+    });
+    expect(onUserTranscript).toHaveBeenCalledExactlyOnceWith(
+      'I need a lash lift Tuesday'
+    );
+  });
+
+  it('does NOT fire onUserTranscript when the event carries no transcript string', async () => {
+    const onUserTranscript = vi.fn();
+    const { session } = buildSession({ onUserTranscript });
+    await fire(session, {
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: undefined,
+    });
+    expect(onUserTranscript).not.toHaveBeenCalled();
+  });
+
+  it('fires onAssistantTranscript on both ERICA SAID event name variants', async () => {
+    const onAssistantTranscript = vi.fn();
+    const { session } = buildSession({ onAssistantTranscript });
+    await fire(session, {
+      type: 'response.audio_transcript.done',
+      transcript: 'Sure, Tuesday at 2pm works!',
+    });
+    await fire(session, {
+      type: 'response.output_audio_transcript.done',
+      transcript: 'Anything else I can help with?',
+    });
+    expect(onAssistantTranscript).toHaveBeenCalledTimes(2);
+    expect(onAssistantTranscript).toHaveBeenNthCalledWith(
+      1,
+      'Sure, Tuesday at 2pm works!'
+    );
+    expect(onAssistantTranscript).toHaveBeenNthCalledWith(
+      2,
+      'Anything else I can help with?'
+    );
+  });
+
+  it('fires onAssistantTranscript with an empty string when transcript is missing (matches the existing log fallback)', async () => {
+    const onAssistantTranscript = vi.fn();
+    const { session } = buildSession({ onAssistantTranscript });
+    await fire(session, {
+      type: 'response.audio_transcript.done',
+      transcript: undefined,
+    });
+    expect(onAssistantTranscript).toHaveBeenCalledExactlyOnceWith('');
+  });
+
+  it('fires onUsage with the same numbers as the 📊 turn tokens log, applying the ?? 0 fallbacks', async () => {
+    const onUsage = vi.fn();
+    const { session } = buildSession({ onUsage });
+    await fire(session, {
+      type: 'response.done',
+      response: {
+        id: 'resp_1',
+        status: 'completed',
+        usage: {
+          input_tokens: 500,
+          output_tokens: 120,
+          total_tokens: 620,
+          input_token_details: { cached_tokens: 300 },
+        },
+      },
+    });
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith({
+      inputTokens: 500,
+      outputTokens: 120,
+      cachedTokens: 300,
+      totalTokens: 620,
+    });
+  });
+
+  it('does NOT fire onUsage when the response carries no usage field', async () => {
+    const onUsage = vi.fn();
+    const { session } = buildSession({ onUsage });
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_1', status: 'completed' },
+    });
+    expect(onUsage).not.toHaveBeenCalled();
+  });
+});
+
+describe('M1 — configureSession session.update payload (OPENAI_INPUT_TRANSCRIPTION env gate)', () => {
+  const originalTranscription = env.OPENAI_INPUT_TRANSCRIPTION;
+  afterEach(() => {
+    env.OPENAI_INPUT_TRANSCRIPTION = originalTranscription;
+  });
+
+  /** The exact pre-M1 audio.input shape — no `transcription` key at all. */
+  function expectedAudioInputWithoutTranscription() {
+    return {
+      format: { type: 'audio/pcmu' },
+      noise_reduction: { type: env.OPENAI_NOISE_REDUCTION },
+      turn_detection: {
+        type: 'server_vad',
+        threshold: env.OPENAI_VAD_THRESHOLD,
+        prefix_padding_ms: env.OPENAI_VAD_PREFIX_MS,
+        silence_duration_ms: env.OPENAI_VAD_SILENCE_MS,
+      },
+    };
+  }
+
+  it("OPENAI_INPUT_TRANSCRIPTION='off' (the default) sends a session.update payload BYTE-IDENTICAL to the pre-M1 shape — no transcription field anywhere", async () => {
+    env.OPENAI_INPUT_TRANSCRIPTION = 'off';
+    const { session, sent } = buildSession();
+    await session.configureSession({ instructions: 'INSTRUCTIONS', tools: [] });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toEqual({
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        model: env.OPENAI_REALTIME_MODEL,
+        output_modalities: ['audio'],
+        instructions: 'INSTRUCTIONS',
+        tools: [],
+        truncation: { type: 'retention_ratio', retention_ratio: 0.8 },
+        audio: {
+          input: expectedAudioInputWithoutTranscription(),
+          output: {
+            format: { type: 'audio/pcmu' },
+            voice: env.OPENAI_REALTIME_VOICE,
+          },
+        },
+      },
+    });
+    // Belt-and-suspenders: assert the key itself is absent, not just falsy.
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        sent[0].session.audio.input,
+        'transcription'
+      )
+    ).toBe(false);
+  });
+
+  it("OPENAI_INPUT_TRANSCRIPTION='gpt-4o-mini-transcribe' adds EXACTLY one new nested field (audio.input.transcription) — everything else unchanged", async () => {
+    env.OPENAI_INPUT_TRANSCRIPTION = 'gpt-4o-mini-transcribe';
+    const { session, sent } = buildSession();
+    await session.configureSession({ instructions: 'INSTRUCTIONS', tools: [] });
+
+    const audioInput = sent[0].session.audio.input;
+    expect(audioInput.transcription).toEqual({
+      model: 'gpt-4o-mini-transcribe',
+    });
+    const { transcription, ...rest } = audioInput;
+    expect(rest).toEqual(expectedAudioInputWithoutTranscription());
   });
 });

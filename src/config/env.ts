@@ -88,4 +88,14 @@ export const env = {
   // manually editing the file (object keyed by number) is the unblock path.
   BLOCKLIST_PATH: process.env.BLOCKLIST_PATH || './data/blocklist.json',
   SPAM_BLOCK_THRESHOLD: Number(process.env.SPAM_BLOCK_THRESHOLD || 2),
+
+  // M1: caller-side (input) audio transcription, GA session field
+  // `audio.input.transcription.model`. ⚠️ DEFAULT MUST STAY 'off' — this is
+  // the RISKY session.update SHAPE class (lessons.md): a bad/rejected field
+  // kills every call at pickup. 'off' means configureSession's payload is
+  // byte-identical to before this field existed (proven by a snapshot test —
+  // see openaiSession.test.ts). Only flip this (e.g. 'gpt-4o-mini-transcribe'
+  // or 'whisper-1') AFTER a live call confirms the session accepts it
+  // (greeting still plays = accepted).
+  OPENAI_INPUT_TRANSCRIPTION: process.env.OPENAI_INPUT_TRANSCRIPTION || 'off',
 };

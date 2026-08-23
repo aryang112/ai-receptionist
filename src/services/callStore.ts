@@ -43,6 +43,24 @@ type BookingEntry = {
   time: string;
 };
 
+// M1: per-call token usage, accumulated across every turn that reported one
+// (openaiSession's onUsage, fired inside the existing 📊 turn tokens block).
+type UsageAccumulator = {
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  turns: number;
+};
+
+// M1: one interleaved-transcript turn. ts lets the dashboard render a chat
+// view in true chronological order even though caller/erica text arrives via
+// two independent event streams.
+export type TranscriptEntry = {
+  role: 'caller' | 'erica';
+  text: string;
+  ts: number;
+};
+
 type EndEntry = {
   endedAt: number;
   durationMs: number;
@@ -50,6 +68,16 @@ type EndEntry = {
   outcome: string;
   // Optional: Erica's accumulated spoken text for the call (F10e / 4.1 digest).
   assistantTranscript?: string | undefined;
+  // M1: token usage for the whole call, and a dollar ESTIMATE derived from it
+  // (see twilioStream.ts estimateCostUsd — gpt-realtime audio rates). Absent
+  // when the call never reported usage (e.g. it never opened a session).
+  usage?: UsageAccumulator | undefined;
+  estCostUsd?: number | undefined;
+  // M1: why the call ended — 'silence — no response after check-in',
+  // 'duration cap', 'spam decline', 'caller confirmed done', 'caller hung up'
+  // (Twilio 'stop' with no prior reason), 'transferred to owner', etc. The
+  // dashboard's flag source (M3). Absent for a call that never started.
+  endReason?: string | undefined;
 };
 
 let dirEnsured = false;
@@ -134,6 +162,22 @@ export const CallStore = {
       ...(end.assistantTranscript
         ? { assistantTranscript: end.assistantTranscript }
         : {}),
+      ...(end.usage ? { usage: end.usage } : {}),
+      ...(end.estCostUsd !== undefined ? { estCostUsd: end.estCostUsd } : {}),
+      ...(end.endReason ? { endReason: end.endReason } : {}),
+    });
+  },
+
+  // M1: the full interleaved both-side transcript for a call, written once
+  // (skip-if-empty is the caller's job — twilioStream.ts's cleanup()). A
+  // separate record from 'end' so a large transcript never bloats every read
+  // of the (much smaller, much more frequently scanned) end/booking rows.
+  recordTranscript(callSid: string, entries: TranscriptEntry[]): void {
+    append({
+      type: 'transcript',
+      callSid,
+      ts: Date.now(),
+      entries,
     });
   },
 };

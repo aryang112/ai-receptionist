@@ -1,7 +1,11 @@
 import type http from 'http';
 import WebSocket, { WebSocketServer } from 'ws';
 import twilio from 'twilio';
-import { OpenAIRealtimeSession, type ToolDefinition } from './openaiSession.js';
+import {
+  OpenAIRealtimeSession,
+  type ToolDefinition,
+  type RealtimeUsage,
+} from './openaiSession.js';
 import { parseToolArgs } from './toolSchemas.js';
 import { logger } from '../core/logger.js';
 import { env } from '../config/env.js';
@@ -44,6 +48,14 @@ function getTwilioClient() {
 // that never sends an authenticated Twilio "start".
 const MAX_CONCURRENT_STREAMS = 20;
 const PRE_AUTH_TIMEOUT_MS = 10_000;
+
+// M1: gpt-realtime audio-token rate ESTIMATE (2026-08, OpenAI's realtime
+// pricing page) — dollars per 1,000,000 tokens. Cached input is priced far
+// below fresh input, which is exactly why the truncation.retention_ratio
+// lever (openaiSession.ts, the mid-call-freeze fix) also matters for cost.
+const REALTIME_INPUT_USD_PER_M = 32;
+const REALTIME_CACHED_INPUT_USD_PER_M = 0.4;
+const REALTIME_OUTPUT_USD_PER_M = 64;
 
 const CORE_SERVICES = env.PHOREST_PREFERRED_SERVICE_IDS.length
   ? env.PHOREST_PREFERRED_SERVICE_IDS.join(', ')
@@ -584,6 +596,35 @@ export class TwilioRealtimeCall {
   // Optional: bounded accumulation of Erica's spoken text for a future digest —
   // no per-delta external calls, just an in-memory buffer capped at ~8 KB.
   private assistantTranscript = '';
+  // M1: the full interleaved both-side transcript (caller AND Erica, in true
+  // turn order) for the pilot's call-log evidence base — a superset of
+  // assistantTranscript (kept for back-compat), fed by the NEW final-per-turn
+  // onUserTranscript/onAssistantTranscript callbacks, not deltas. Caller-side
+  // entries only ever appear when OPENAI_INPUT_TRANSCRIPTION is enabled
+  // (env-gated OFF by default). Capped so a very long call can't grow this
+  // unbounded — see pushTranscriptEntry.
+  private transcript: Array<{
+    role: 'caller' | 'erica';
+    text: string;
+    ts: number;
+  }> = [];
+  private static readonly TRANSCRIPT_MAX_ENTRIES = 200;
+  private static readonly TRANSCRIPT_MAX_BYTES = 16 * 1024;
+  // M1: per-call token usage, summed across every turn that reported one
+  // (openaiSession's onUsage, fired alongside the existing 📊 turn tokens
+  // log). Feeds estimateCostUsd() and the dashboard's per-call cost column.
+  private usageAccum: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedTokens: number;
+    turns: number;
+  } = { inputTokens: 0, outputTokens: 0, cachedTokens: 0, turns: 0 };
+  // M1: why the call ended (silence hangup / duration cap / spam decline /
+  // caller confirmed done / caller hung up / transferred to owner). Set
+  // exactly once — the FIRST cause to fire wins (see setEndReasonOnce) — so a
+  // Twilio 'stop' event arriving after a deliberate hangup never overwrites
+  // the real reason with the generic "caller hung up".
+  private endReason: string | undefined = undefined;
   // F8: the caller-ID lookup runs concurrently with the OpenAI handshake, so the
   // context note it produces is stashed here and injected once the session is
   // open (injectContext no-ops on a not-yet-open session).
@@ -641,6 +682,13 @@ export class TwilioRealtimeCall {
       // leave the caller live in silence — run the SAME graceful failover to the
       // owner as a fatal error, then tear down.
       onClose: () => this.failoverToOwner('OpenAI session closed unexpectedly'),
+      // M1: both-side transcript + per-turn usage, for the pilot's call-log
+      // evidence base (calls.jsonl). onUserTranscript only ever fires when
+      // OPENAI_INPUT_TRANSCRIPTION is enabled (env-gated OFF by default — see
+      // openaiSession.ts configureSession).
+      onUserTranscript: (text) => this.pushTranscriptEntry('caller', text),
+      onAssistantTranscript: (text) => this.pushTranscriptEntry('erica', text),
+      onUsage: (usage) => this.accumulateUsage(usage),
     });
 
     this.registerTrackedTool('suggest_availability', (args) =>
@@ -985,6 +1033,11 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
             { streamSid: this.streamSid },
             '☎️ ========== CALL ENDED =========='
           );
+          // M1: the generic "the socket ended" reason — first-write-wins means
+          // this never overwrites a more specific reason (silence hangup,
+          // duration cap, spam decline, transfer) already set by whichever
+          // path actually drove the hangup.
+          this.setEndReasonOnce('caller hung up');
           this.cleanup();
           break;
         default:
@@ -1308,6 +1361,62 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     if (this.assistantTranscript.length < 8000) {
       this.assistantTranscript += delta;
     }
+  }
+
+  /**
+   * M1: append one FINAL (not delta) turn to the interleaved both-side
+   * transcript, then trim from the OLDEST end while either cap is exceeded —
+   * a long call's early chit-chat is less valuable than its ending. Ignores
+   * an empty string (a transcript event with nothing meaningful said).
+   */
+  private pushTranscriptEntry(role: 'caller' | 'erica', text: string): void {
+    if (!text) return;
+    this.transcript.push({ role, text, ts: Date.now() });
+    while (
+      this.transcript.length > TwilioRealtimeCall.TRANSCRIPT_MAX_ENTRIES ||
+      Buffer.byteLength(JSON.stringify(this.transcript), 'utf8') >
+        TwilioRealtimeCall.TRANSCRIPT_MAX_BYTES
+    ) {
+      this.transcript.shift();
+    }
+  }
+
+  /** M1: sum one turn's usage into the whole-call accumulator. */
+  private accumulateUsage(usage: RealtimeUsage): void {
+    this.usageAccum.inputTokens += usage.inputTokens;
+    this.usageAccum.outputTokens += usage.outputTokens;
+    this.usageAccum.cachedTokens += usage.cachedTokens;
+    this.usageAccum.turns += 1;
+  }
+
+  /**
+   * M1: ESTIMATE only — gpt-realtime audio rates (module constants above)
+   * applied to this call's accumulated usage. Uncached input bills the full
+   * rate, cached input the discounted rate, output its own rate. Rounded to
+   * 4dp — a typical call costs low single-digit cents, so fractions matter.
+   */
+  private estimateCostUsd(usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedTokens: number;
+  }): number {
+    const uncachedInput = Math.max(0, usage.inputTokens - usage.cachedTokens);
+    const cost =
+      (uncachedInput * REALTIME_INPUT_USD_PER_M +
+        usage.cachedTokens * REALTIME_CACHED_INPUT_USD_PER_M +
+        usage.outputTokens * REALTIME_OUTPUT_USD_PER_M) /
+      1e6;
+    return Math.round(cost * 10000) / 10000;
+  }
+
+  /**
+   * M1: record why the call ended — but only the FIRST cause wins. Without
+   * this, a Twilio 'stop' event (which always follows a real hangup, even a
+   * deliberate one) could overwrite a specific reason (e.g. 'duration cap')
+   * already set moments earlier with the generic 'caller hung up'.
+   */
+  private setEndReasonOnce(reason: string): void {
+    if (this.endReason === undefined) this.endReason = reason;
   }
 
   /**
@@ -2571,6 +2680,8 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       // Set the outcome + record the tool call BEFORE cleanup() — cleanup writes
       // the endCall record using this.outcome.
       this.outcome = 'transferred';
+      // M1: set BEFORE cleanup() — same ordering reason as this.outcome above.
+      this.setEndReasonOnce('transferred to owner');
       CallStore.recordToolCall(this.callSid, {
         name: 'transfer_to_owner',
         ok: true,
@@ -2618,6 +2729,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         'Cannot hang up via REST — closing stream only'
       );
       if (this.outcome === 'none') this.outcome = 'completed';
+      // M1: set BEFORE cleanup() — reason is the trigger that actually ended
+      // this call (silence hangup / duration cap / spam decline / caller
+      // confirmed done).
+      this.setEndReasonOnce(reason);
       CallStore.recordToolCall(this.callSid, {
         name: 'end_call',
         ok: true,
@@ -2656,6 +2771,8 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       await client.calls(this.callSid).update({ status: 'completed' });
       // Keep a real outcome (booked/cancelled/…) — 'completed' only fills none.
       if (this.outcome === 'none') this.outcome = 'completed';
+      // M1: set BEFORE cleanup() — same reasoning as the no-REST-client branch above.
+      this.setEndReasonOnce(reason);
       CallStore.recordToolCall(this.callSid, {
         name: 'end_call',
         ok: true,
@@ -2947,6 +3064,13 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     if (!this.endRecorded && this.startedAtMs !== null) {
       this.endRecorded = true;
       const endedAt = Date.now();
+      // M1: only attach usage/estCostUsd when at least one turn actually
+      // reported usage (e.g. the call never got past the greeting) — an
+      // empty-but-present {0,0,0,0} object would misleadingly claim $0 cost
+      // was MEASURED rather than simply never observed.
+      const usage =
+        this.usageAccum.turns > 0 ? { ...this.usageAccum } : undefined;
+      const estCostUsd = usage ? this.estimateCostUsd(usage) : undefined;
       CallStore.endCall(this.callSid, {
         endedAt,
         durationMs: endedAt - this.startedAtMs,
@@ -2956,7 +3080,16 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         ...(this.assistantTranscript
           ? { assistantTranscript: this.assistantTranscript }
           : {}),
+        // M1: token usage, its dollar estimate, and why the call ended.
+        ...(usage ? { usage } : {}),
+        ...(estCostUsd !== undefined ? { estCostUsd } : {}),
+        ...(this.endReason ? { endReason: this.endReason } : {}),
       });
+      // M1: the interleaved both-side transcript, as its own record right
+      // next to the end record — skip when empty (nothing worth persisting).
+      if (this.transcript.length > 0) {
+        CallStore.recordTranscript(this.callSid, this.transcript);
+      }
       // S2: a spam-tagged call whose caller-ID number we know gets counted
       // toward the repeat-offender blocklist. Fire-and-forget (void) — the
       // guard above never throws and must never delay call teardown.

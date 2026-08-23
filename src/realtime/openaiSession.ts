@@ -9,6 +9,14 @@ type Logger = typeof logger;
 // 8k<->24k resampling happens anymore — Twilio's base64 frames are forwarded
 // verbatim to OpenAI and OpenAI's audio deltas are forwarded verbatim back.
 
+/** M1: per-turn token usage, exactly what the existing 📊 turn tokens log carries. */
+export type RealtimeUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  totalTokens: number;
+};
+
 export type RealtimeHandlers = {
   /** base64 G.711 mu-law audio from OpenAI, ready to send straight to Twilio. */
   onAudioChunk?: (base64MuLaw: string, itemId?: string) => void;
@@ -23,6 +31,17 @@ export type RealtimeHandlers = {
    * instead of leaving a zombie call live in silence. Never fires on close().
    */
   onClose?: () => void;
+  /**
+   * M1: the caller's final transcribed turn (conversation.item.input_audio_
+   * transcription.completed). Only ever fires when input transcription is
+   * enabled (env.OPENAI_INPUT_TRANSCRIPTION !== 'off', default OFF) — with it
+   * off this event never arrives, so this handler simply never fires.
+   */
+  onUserTranscript?: (text: string) => void;
+  /** M1: Erica's final transcribed turn (response.(output_)audio_transcript.done). */
+  onAssistantTranscript?: (text: string) => void;
+  /** M1: per-turn token usage, fired alongside the existing 📊 turn tokens log. */
+  onUsage?: (usage: RealtimeUsage) => void;
 };
 
 /** Constructor options: handlers plus an optional per-call log tag (RT-9). */
@@ -270,6 +289,19 @@ export class OpenAIRealtimeSession {
         ? undefined
         : { type: env.OPENAI_NOISE_REDUCTION }; // 'near_field' (phone) | 'far_field'
 
+    // M1: caller-side transcription, GA nested field `audio.input.transcription`.
+    // ⚠️ ENV-GATED OFF BY DEFAULT (lessons.md: a bad/rejected session.update
+    // field kills every call at pickup). When env.OPENAI_INPUT_TRANSCRIPTION
+    // is 'off', inputTranscription is undefined and the spread below adds NO
+    // key at all — the audio.input object, and therefore this whole payload,
+    // stays byte-identical to before this field existed (proven by a snapshot
+    // test in openaiSession.test.ts). Only flip the env var after a live call
+    // confirms the session accepts the new field.
+    const inputTranscription =
+      env.OPENAI_INPUT_TRANSCRIPTION === 'off'
+        ? undefined
+        : { model: env.OPENAI_INPUT_TRANSCRIPTION };
+
     const sessionConfig = {
       type: 'session.update',
       session: {
@@ -289,6 +321,9 @@ export class OpenAIRealtimeSession {
           input: {
             format: { type: 'audio/pcmu' },
             ...(noiseReduction ? { noise_reduction: noiseReduction } : {}),
+            ...(inputTranscription
+              ? { transcription: inputTranscription }
+              : {}),
             turn_detection: {
               type: 'server_vad',
               threshold: env.OPENAI_VAD_THRESHOLD,
@@ -500,6 +535,11 @@ export class OpenAIRealtimeSession {
           { transcript: event.transcript },
           'USER SAID: ' + event.transcript
         );
+        // M1: only ever fires when input transcription is enabled — see
+        // configureSession's env-gated `transcription` field, default OFF.
+        if (typeof event.transcript === 'string') {
+          this.handlers.onUserTranscript?.(event.transcript);
+        }
         break;
       }
       case 'response.audio_transcript.done':
@@ -509,6 +549,10 @@ export class OpenAIRealtimeSession {
         this.log.info(
           { transcript: event.transcript },
           '🗣️  ERICA SAID: ' + (event.transcript ?? '')
+        );
+        // M1: the final-per-turn transcript, for the both-side call log.
+        this.handlers.onAssistantTranscript?.(
+          (event.transcript ?? '') as string
         );
         break;
       }
@@ -587,6 +631,13 @@ export class OpenAIRealtimeSession {
             },
             '📊 turn tokens'
           );
+          // M1: same numbers as the log line above, for cost/dashboard persistence.
+          this.handlers.onUsage?.({
+            inputTokens: input,
+            outputTokens: usage.output_tokens ?? 0,
+            cachedTokens: cached,
+            totalTokens: usage.total_tokens ?? 0,
+          });
         } else {
           this.log.info({ eventType: event.type }, 'OpenAI response completed');
         }

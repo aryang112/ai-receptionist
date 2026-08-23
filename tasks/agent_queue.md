@@ -442,7 +442,7 @@ greeting must still play (or be cleanly barged-in), plus one normal call.
 > discloses recording (two-party-consent MD) — recordings are legally covered.
 > Test floor: 174.
 
-## M1 — [ ] Persist the full story of every call: usage, both-side transcript, end reason (P0, code)
+## M1 — [x] worker-M1 2026-08-22T00:00:00Z — Persist the full story of every call: usage, both-side transcript, end reason (P0, code) (implemented, awaiting Fable review/commit)
 **Why:** calls.jsonl is the pilot's evidence base, but today it has no token
 usage (cost), no caller-side words, and no reason the call ended — you can't
 judge "helpful or weird" or compute cost from it.

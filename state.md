@@ -3,6 +3,282 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-22 — M1 IMPLEMENTED (worker agent)
+**Task:** Round 4 M1 — persist the full story of every call: token usage (for
+cost), the CALLER's side of the transcript (not just Erica's), and WHY the
+call ended. Today `calls.jsonl` has none of the three — you can't judge
+"helpful or weird" or compute cost from it. Implemented exactly per the queue
+spec (+ Fable's line-referenced code-review notes given directly in this
+worker's task brief, which refine two wording details — see Deviations),
+nothing more. Files: `src/config/env.ts`, `src/realtime/openaiSession.ts`,
+`src/services/callStore.ts`, `src/realtime/twilioStream.ts`. `business.json`
+and `.env` are **not in the diff at all** (verified — see Verification).
+
+**1. `env.ts` — `OPENAI_INPUT_TRANSCRIPTION` (default `'off'`).** The one
+env knob controlling the risky session-shape change (see #2).
+
+**2. `openaiSession.ts` (app code — handler wiring, no existing behavior
+changed):**
+- `RealtimeHandlers` gains three optional callbacks, mirroring the existing
+  `onSpeechStarted` pattern: `onUserTranscript?(text)`, fired in the EXISTING
+  `conversation.item.input_audio_transcription.completed` case (~:498,
+  confirmed via re-read before editing) — right after its unchanged log line,
+  guarded `if (typeof event.transcript === 'string')` since this case is
+  fed by an env-gated-off event that may never fire at all.
+  `onAssistantTranscript?(text)`, fired in the EXISTING
+  `response.audio_transcript.done` / `response.output_audio_transcript.done`
+  cases (~:505-514) — same `(event.transcript ?? '')` fallback the log line
+  already used, so the callback and the log always agree.
+  `onUsage?(usage: RealtimeUsage)`, fired inside the EXISTING `if (usage)`
+  branch of the `📊 turn tokens` block (~:575-590) — same numbers as the log
+  (`input`/`output_tokens`/`cached`/`total_tokens`, with the log's own `?? 0`
+  fallbacks applied to the callback payload too). **Every existing log line
+  in all three cases is untouched** — the new callback call is always a new
+  statement placed immediately after the pre-existing `this.log.info(...)`,
+  never a modification of it (verified: `git diff` shows zero `-` lines
+  inside any of these three cases, see Verification).
+- `configureSession`'s session payload (~:272-303, re-read before editing):
+  ONE new conditional field. `const inputTranscription = env
+  .OPENAI_INPUT_TRANSCRIPTION === 'off' ? undefined : { model: env
+  .OPENAI_INPUT_TRANSCRIPTION };` then, under `audio.input`, `...(input
+  Transcription ? { transcription: inputTranscription } : {})` — same
+  conditional-spread idiom the pre-existing `noise_reduction` field already
+  uses one line above it (matching house style, not a new pattern). **When
+  `OPENAI_INPUT_TRANSCRIPTION==='off'` (the default), the spread contributes
+  NO key at all** — `audio.input` has exactly the same keys as before this
+  task existed. **This is the ONE conditional session.update change** the
+  hard constraints allow, and it is env-gated OFF by default per lessons.md's
+  standing rule (a bad/rejected session field kills every call at pickup).
+
+**3. `callStore.ts` (pure additions — zero lines removed, confirmed via
+`git diff`):**
+- `TranscriptEntry` type (`{role:'caller'|'erica', text, ts}`, exported) +
+  `CallStore.recordTranscript(callSid, entries)` (new append type
+  `'transcript'`).
+- `EndEntry` gains three optional fields (`exactOptionalPropertyTypes`-safe —
+  `| undefined` on each, matching the existing `assistantTranscript?`
+  pattern): `usage?: {inputTokens,outputTokens,cachedTokens,turns}`,
+  `estCostUsd?: number`, `endReason?: string`. `endCall()` appends all three
+  via the SAME conditional-spread idiom the pre-existing `assistantTranscript`
+  field already uses (`...(end.usage ? {usage: end.usage} : {})`, etc.) — no
+  new pattern introduced.
+
+**4. `twilioStream.ts` — the bulk of the task:**
+- Module constants (next to `MAX_CONCURRENT_STREAMS`/`PRE_AUTH_TIMEOUT_MS`):
+  `REALTIME_INPUT_USD_PER_M=32`, `REALTIME_CACHED_INPUT_USD_PER_M=0.4`,
+  `REALTIME_OUTPUT_USD_PER_M=64` (gpt-realtime audio rates, commented as an
+  ESTIMATE per the spec).
+- New private fields (next to `assistantTranscript`): `transcript` (capped
+  array, see below), `usageAccum` ({inputTokens,outputTokens,cachedTokens,
+  turns}, all zeroed), `endReason: string | undefined`.
+- `createSession()`: three new one-line callbacks wired —
+  `onUserTranscript: (text) => this.pushTranscriptEntry('caller', text)`,
+  `onAssistantTranscript: (text) => this.pushTranscriptEntry('erica', text)`,
+  `onUsage: (usage) => this.accumulateUsage(usage)`. The pre-existing
+  `onTextDelta: (delta) => this.handleAssistantText(delta)` (Erica's OLD
+  delta-accumulated `assistantTranscript` buffer) is **byte-identical,
+  untouched** — kept for back-compat exactly as instructed; the NEW
+  interleaved `transcript` array uses ONLY the new final-per-turn
+  `onAssistantTranscript` callback, never deltas.
+- `pushTranscriptEntry(role, text)` (new private method): appends
+  `{role, text, ts: Date.now()}`, no-ops on an empty string, then drops from
+  the OLDEST end in a `while` loop until BOTH caps are satisfied
+  (`TRANSCRIPT_MAX_ENTRIES=200`, `TRANSCRIPT_MAX_BYTES=16*1024`, checked via
+  `Buffer.byteLength(JSON.stringify(this.transcript), 'utf8')`) — exactly the
+  "cap ~200 entries AND ~16KB, drop-oldest" spec.
+- `accumulateUsage(usage)` (new private method): sums one turn's
+  input/output/cached tokens into `usageAccum`, increments `turns`.
+- `estimateCostUsd(usage)` (new private method): `((input-cached)*32 +
+  cached*0.40 + output*64) / 1e6`, rounded to 4dp via
+  `Math.round(cost*10000)/10000` — the exact formula in the spec.
+- `setEndReasonOnce(reason)` (new private method): `if (this.endReason ===
+  undefined) this.endReason = reason;` — the "store the FIRST reason set,
+  don't overwrite" rule from a single one-line guard, reused everywhere.
+- **endReason threading — 4 call sites, all verified by re-reading the
+  surrounding code before editing:**
+  - `endCallNow(reason)`'s TWO `cleanup()`-calling branches (the "no REST
+    client" fallback AND the successful-hangup try block) each get
+    `this.setEndReasonOnce(reason);` inserted immediately before their
+    `this.cleanup()` call — so EVERY caller of `endCallNow` (the `end_call`
+    tool → 'caller confirmed done'/'spam decline', the silence watchdog →
+    'silence — no response after check-in', the duration cap → 'duration
+    cap') gets its endReason threaded through automatically, with zero
+    additional call sites to maintain. The ABORTED branch (caller spoke
+    during the goodbye drain) and the ERROR branch (REST hangup failed)
+    deliberately do NOT set it — in both cases `cleanup()` never runs, so the
+    call isn't actually over yet; a later real hangup sets the real reason.
+  - `handleTransferToOwner`'s SUCCESS dial branch (right before its
+    `this.cleanup()`, same statement-ordering rationale as the pre-existing
+    `this.outcome = 'transferred'` line one above it): `this
+    .setEndReasonOnce('transferred to owner')`. The vacation-mode SMS
+    branch (returns `{transferred:false}`, never calls `cleanup()`) is
+    **untouched** — confirmed by reading it before editing; that call keeps
+    going, so no endReason is appropriate there.
+  - Twilio `'stop'` case in `handleMessage`: `this.setEndReasonOnce('caller
+    hung up')` right before the pre-existing `this.cleanup()` — first-write-
+    wins means this is a no-op whenever an earlier path (watchdog/cap/
+    end_call/transfer) already set the real reason; it only fires when the
+    caller just... hangs up, with nothing else in play.
+- `cleanup()` (the ONE record-writing block, re-read before editing): builds
+  `usage = this.usageAccum.turns > 0 ? {...this.usageAccum} : undefined`
+  (guarding against a misleading `{0,0,0,0}` for a call that never got a
+  usage-bearing turn) and `estCostUsd = usage ? this.estimateCostUsd(usage)
+  : undefined`, then extends the existing `CallStore.endCall(...)` call with
+  three more conditional-spread fields (`usage`, `estCostUsd`, `endReason`) —
+  same idiom as the pre-existing `assistantTranscript` field right above
+  them, nothing rewritten. Immediately after that call, ONE new block:
+  `if (this.transcript.length > 0) CallStore.recordTranscript(this.callSid,
+  this.transcript);` — skip-if-empty per spec. The pre-existing S2
+  spam-blocklist block right after it is **completely untouched**.
+
+**Deviations from spec (both are wording refinements from Fable's
+line-referenced code-review notes given directly in this worker's task
+brief, which read as more specific/authoritative than the queue's own
+terser phrasing):**
+1. The queue text says the Twilio-stop/transfer reasons should read `'twilio
+   stop'` / `'transfer'`; Fable's code-review notes (in this worker's brief)
+   say `'caller hung up'` / `'transferred to owner'` — used the latter
+   (clearer for a human scanning the dashboard's flag column, M3's actual
+   consumer). Flagging explicitly so Fable can confirm or override in review.
+2. `failoverToOwner` (the RT-1 fatal-error/unexpected-drop path) does **NOT**
+   get an `endReason` — not named in the spec's endReason bullet, and not in
+   the Accept criteria's explicit test list (which names only the
+   silence-watchdog and duration-cap paths). Left as a documented gap rather
+   than expanding scope: a fatal-error hangup's `endCall` record will have
+   `endReason` absent. Easy 1-line follow-up if Fable wants it
+   (`this.setEndReasonOnce(reason)` before the existing `this.cleanup()` in
+   `failoverToOwner`).
+3. The transfer-success `'transferred to owner'` endReason is verified by
+   re-reading the code (see above) but is **not test-covered** — every
+   existing transfer/end-call test in this codebase (`twilioStream.vacation
+   .test.ts`, `.silenceWatchdog.test.ts`, `.durationCap.test.ts`) deliberately
+   leaves `callSid` unset specifically so `endCallNow`/`handleTransferToOwner`
+   hit their "no Twilio REST client" fallback branch, since real Twilio
+   creds live in this repo's `.env` and no test anywhere mocks the `twilio`
+   npm package. Adding that mock was judged out of scope for a
+   spec item the Accept criteria doesn't explicitly require testing (only
+   silence-watchdog/duration-cap endReason tests are named). The silence-
+   watchdog and duration-cap endReason paths (which the spec DOES require)
+   ARE fully tested end-to-end, including asserting on the actual
+   `CallStore.endCall` mock-call arguments, not just the in-memory field.
+4. `onUserTranscript`/`onAssistantTranscript`/`onUsage`'s wiring inside
+   `createSession()` (three one-line arrow functions) is verified by reading
+   the diff rather than integration-tested through a real Twilio `'start'`
+   handshake — consistent with how this codebase already treats
+   `onSpeechStarted`'s wiring (every existing G2 test calls
+   `handleCallerSpeechStarted()` directly, not the real event path). The
+   handler methods themselves (`pushTranscriptEntry`, `accumulateUsage`,
+   `estimateCostUsd`, `setEndReasonOnce`) ARE fully unit-tested, as is the
+   callback→log-line agreement on the openaiSession.ts side (new tests fire
+   the real OpenAI events and assert the callback receives the exact same
+   numbers/text the pre-existing log line already carries).
+
+**⚠️ LIVE VALIDATION REQUIRED (per spec, not yet done):**
+`OPENAI_INPUT_TRANSCRIPTION` stays `'off'` in `.env` until a live call
+confirms the session accepts the new `audio.input.transcription` field
+(greeting still plays = accepted) — this is the ONE conditional
+`session.update` shape change in this task, and lessons.md's standing rule
+is that a bad/rejected session field kills every call at pickup. Do not flip
+it to `'gpt-4o-mini-transcribe'` (or any other value) in production before
+that live test.
+
+**Tests — `src/tests/openaiSession.test.ts` (extended, +8, 0 modified):**
+new `describe('M1 — onUserTranscript / onAssistantTranscript / onUsage
+handler wiring')` (6 tests: fires with the right text/args on both ERICA-SAID
+event-name variants; does NOT fire when the event carries no transcript
+string; fires `onUsage` with numbers matching the log's own `?? 0`
+fallbacks; does NOT fire `onUsage` when the response carries no `usage`) and
+`describe('M1 — configureSession session.update payload (OPENAI_INPUT
+_TRANSCRIPTION env gate)')` (2 tests — **the mandatory safety proof**: `'off'`
+→ full deep-equal against the exact pre-M1 payload shape PLUS a
+`hasOwnProperty('transcription')===false` check on `audio.input`;
+`'gpt-4o-mini-transcribe'` → `audio.input.transcription` equals `{model:...}`
+and every OTHER key in `audio.input`, destructured out, deep-equals the
+`'off'` shape — proves the enabled case adds exactly one field and touches
+nothing else).
+
+**Tests — NEW `src/tests/twilioStream.m1.test.ts` (15 tests),** same
+`buildCall()` fake-socket scaffolding as `twilioStream.silenceWatchdog
+.test.ts`/`.durationCap.test.ts` (copied locally, not imported — matches this
+codebase's established per-file convention):
+- `pushTranscriptEntry`: interleaves caller/erica in push order with
+  non-decreasing `ts`; ignores an empty string; the 200-entry cap
+  (push 205, assert length 200 and the oldest survivor is entry #5); the
+  16KB cap (push three ~7KB entries, assert the oldest is dropped and the
+  final byte size is ≤16KB, verified via the SAME `Buffer.byteLength`
+  formula the source uses).
+- `accumulateUsage`/`estimateCostUsd`: two-turn sum math
+  (`{3000,500,1400,turns:2}`); the cached-discount formula
+  (`(3000-1400)*32 + 1400*0.4 + 500*64)/1e6 = 0.08376` → rounds to `0.0838`,
+  asserted via `toBeCloseTo`); a same-token-count sanity check that 100%
+  cached always costs less than 0% cached.
+- `setEndReasonOnce`: sets on first call; a second call does NOT overwrite.
+- Twilio `'stop'` event (driven via the real `handleMessage()`, same
+  technique as `twilioStream.greetingRace.test.ts`): records `'caller hung
+  up'` when nothing set a reason first; does NOT overwrite an
+  already-set reason (first-write-wins, proven directly against the real
+  event path, not just the helper in isolation).
+- `cleanup()` persistence (spies on `CallStore.endCall` +
+  `CallStore.recordTranscript`, same pattern as `twilioStream.blocklist
+  .test.ts`'s "cleanup() wiring" block): usage/estCostUsd/endReason all land
+  correctly in the `endCall` args (arithmetic re-verified independently:
+  `(1000-400)*32+400*0.4+200*64)/1e6=0.03216`→`0.0322`) AND
+  `recordTranscript` is called once with the exact interleaved array; a
+  SEPARATE test proves the opposite — zero usage turns → `usage`/`estCostUsd`
+  both `undefined` (not `0`/zeroed), and an empty transcript → `record
+  Transcript` is **never called** (skip-if-empty).
+- endReason via the EXISTING fake-timer hangup flows, per the spec's
+  explicit instruction to "drive the existing fake-timer harnesses": the
+  silence-watchdog check-in→goodbye→hangup sequence (same timing as
+  `twilioStream.silenceWatchdog.test.ts`'s test (b)) asserts `call.endReason
+  === 'silence — no response after check-in'` AND that the SAME string
+  reached the real `CallStore.endCall` mock-call args, not just the
+  in-memory field; same double-proof for the duration-cap warning→goodbye→
+  hangup sequence asserting `'duration cap'`.
+
+**Verified:**
+- `npx tsc --noEmit` → clean, zero errors.
+- `npm test` → **197/197 passed** (was 174/174 before this task; net +23: 8
+  new in `openaiSession.test.ts`, 15 new in `twilioStream.m1.test.ts`). Test
+  files: 29 passed (was 27 — the one new file). Floor was 174 — 197 > 174,
+  satisfied.
+- `TZ=UTC npm test` → **197/197 passed**, same 29 files.
+- No existing test deleted, `.skip`ped, or modified — confirmed via `git
+  diff`: `openaiSession.test.ts`'s diff is one import-line addition + one new
+  `import { env }` line + two new `describe` blocks appended at the end,
+  zero `-` lines inside any pre-existing test; `twilioStream.m1.test.ts` is
+  entirely new.
+- `git diff --stat -- src/config/business.json .env` → **empty** (neither
+  file touched). `git status --short` shows only the 6 expected files
+  modified (`env.ts`, `openaiSession.ts`, `twilioStream.ts`, `callStore.ts`,
+  `openaiSession.test.ts`, `tasks/agent_queue.md`) + 1 new test file +
+  this `state.md` entry — no stray files.
+- Grepped the full `twilioStream.ts` diff for `handleBargeIn`/`markQueue`/
+  `bargeInEpoch` → **zero hits** — barge-in untouched.
+- `git diff -- src/realtime/openaiSession.ts` and `-- src/services/callStore
+  .ts` → **zero `-` lines in either** (pure additions, confirmed via `grep
+  "^-" | grep -v "^---"` returning nothing for both files) — no existing
+  behavior in either file was altered, only new optional fields/branches
+  added.
+- `git diff -- src/realtime/twilioStream.ts` → exactly ONE removed line (the
+  old single-line `import {...} from './openaiSession.js'`, reformatted to a
+  multi-line import by the repo's format-on-save hook to add the new
+  `RealtimeUsage` type import) — every other change is a pure addition.
+  Confirmed the reformat didn't touch anything else by re-reading the region
+  it fired in (state.md's authors' note: a PostToolUse hook reformatted the
+  file after the private-fields edit; re-read the affected region before the
+  next edit, per the tool's own warning, and it was purely whitespace-wrap
+  of the new type annotation, not a content change).
+- Every existing pino log line in the touched cases (`USER SAID`, `🗣️ ERICA
+  SAID`, `📊 turn tokens`, `🤫`, `⏳`, `☎️`) is byte-identical — confirmed by
+  reading the diff (all new callback-firing statements are added AFTER the
+  pre-existing `this.log.info(...)`/`logger.info(...)` call in each case,
+  never replacing or reordering it).
+
+**Queue status:** M1 marked `[x]` below — implemented, awaiting Fable
+review/commit. Not committed by this worker (per ritual — no
+`git add`/commit).
+
 ## 2026-08-22 (2) — ✅ ROUND 3 COMPLETE (Fable orchestrator + Sonnet workers): spam, vacation, call-mix defects — handoff (read this first)
 All 6 Round-3 tasks shipped, reviewed, committed. **174/174 tests (was 124),
 tsc clean, both TZs.** One worker per task, sequential, Fable review-gate on
