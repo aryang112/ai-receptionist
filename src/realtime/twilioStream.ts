@@ -657,6 +657,12 @@ export class TwilioRealtimeCall {
   // speaking — markQueue non-empty). Ticks refresh this while Erica is
   // speaking so a long response isn't mistaken for dead air once it ends.
   private lastActivityAt = 0;
+  // True while a caller turn is OPEN — speech_started seen, speech_stopped not
+  // yet. server_vad only closes a turn after ~700ms of pause, so a caller
+  // talking continuously for 20s+ produces NO events in between; without this
+  // flag an unbroken monologue is indistinguishable from dead air and the
+  // watchdog interrupts them mid-sentence (2026-08-24 Holly bug).
+  private callerSpeaking = false;
   // The check-in ("Are you still there?") fires at most ONCE per call — this
   // latches permanently once used.
   private checkInFired = false;
@@ -831,6 +837,7 @@ export class TwilioRealtimeCall {
       onAudioChunk: (chunk) => this.sendAudioToTwilio(chunk),
       onTextDelta: (delta) => this.handleAssistantText(delta),
       onSpeechStarted: () => this.handleCallerSpeechStarted(),
+      onSpeechStopped: () => this.handleCallerSpeechStopped(),
       onResponseComplete: () => this.handleResponseComplete(),
       onError: (error) => this.handleError(error),
       // RT-1: an unexpected OpenAI drop (not our own close()) would otherwise
@@ -1376,7 +1383,21 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
    */
   private handleCallerSpeechStarted() {
     this.lastActivityAt = Date.now();
+    // Marks the caller turn OPEN until speech_stopped — see callerSpeaking.
+    this.callerSpeaking = true;
     this.handleBargeIn();
+  }
+
+  /**
+   * G2: wiring for OpenAI's speech-stopped event — the caller's turn closed.
+   * Clearing callerSpeaking re-arms the silence watchdog, and stamping
+   * last-activity NOW means the silence clock counts from when they finished
+   * talking, not from when they started (a 21s answer must not already be 21s
+   * "silent" the instant it ends).
+   */
+  private handleCallerSpeechStopped() {
+    this.callerSpeaking = false;
+    this.lastActivityAt = Date.now();
   }
 
   /**
@@ -1440,6 +1461,17 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     if (!this.sessionReady || this.closed || this.transferring) return;
     if (this.toolCallsInFlight > 0) return;
     if (this.markQueue.length > 0) {
+      this.lastActivityAt = Date.now();
+      return;
+    }
+    // A caller turn is still OPEN (they're mid-sentence — server_vad hasn't
+    // seen their ~700ms pause yet). Long answers are exactly when a check-in
+    // is most damaging: 2026-08-24 a caller's 21s message got interrupted with
+    // "are you still there?" because silence was measured from speech_started.
+    // If a speech_stopped were ever lost this would disarm the watchdog for
+    // the rest of the call; that's acceptable — the max-call-duration cap
+    // (separate mechanism) still backstops the call.
+    if (this.callerSpeaking) {
       this.lastActivityAt = Date.now();
       return;
     }

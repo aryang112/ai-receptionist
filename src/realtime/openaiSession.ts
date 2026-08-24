@@ -41,6 +41,15 @@ export type RealtimeHandlers = {
   onResponseComplete?: () => void;
   /** Fired when OpenAI VAD detects the caller started talking (barge-in trigger). */
   onSpeechStarted?: () => void;
+  /**
+   * Fired when OpenAI VAD detects the caller's turn ENDED (they paused long
+   * enough for server_vad to close the turn). Pairs with onSpeechStarted so a
+   * listener can tell "caller is mid-sentence" from "caller has stopped" — the
+   * silence watchdog needs that distinction (2026-08-24 Holly bug: a 21s
+   * unbroken monologue never emits speech_stopped, and was being counted as
+   * 21s of silence).
+   */
+  onSpeechStopped?: () => void;
   onError?: (error: Error) => void;
   /**
    * Fired when the OpenAI WebSocket closes for a reason OTHER than our own
@@ -549,6 +558,7 @@ export class OpenAIRealtimeSession {
       case 'input_audio_buffer.speech_stopped': {
         this.tSpeechStopped = Date.now();
         this.log.info({ eventType: event.type }, 'Speech stopped (VAD)');
+        this.handlers.onSpeechStopped?.();
         break;
       }
       case 'conversation.item.input_audio_transcription.completed': {

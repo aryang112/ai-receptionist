@@ -663,3 +663,24 @@ describe('M1 — configureSession session.update payload (OPENAI_INPUT_TRANSCRIP
     expect(rest).toEqual(expectedAudioInputWithoutTranscription());
   });
 });
+
+describe('VAD turn boundaries — onSpeechStarted / onSpeechStopped wiring', () => {
+  it('fires onSpeechStopped when the VAD closes the caller turn (mirrors onSpeechStarted)', async () => {
+    const onSpeechStarted = vi.fn();
+    const onSpeechStopped = vi.fn();
+    const { session } = buildSession({ onSpeechStarted, onSpeechStopped });
+
+    await fire(session, {
+      type: 'input_audio_buffer.speech_started',
+      item_id: 'item_1',
+    });
+    expect(onSpeechStarted).toHaveBeenCalledTimes(1);
+    // The turn is still OPEN — a caller mid-monologue emits nothing further
+    // until they pause, so this handler must NOT have run yet.
+    expect(onSpeechStopped).not.toHaveBeenCalled();
+
+    await fire(session, { type: 'input_audio_buffer.speech_stopped' });
+    expect(onSpeechStopped).toHaveBeenCalledTimes(1);
+    expect(onSpeechStarted).toHaveBeenCalledTimes(1);
+  });
+});

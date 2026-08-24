@@ -151,9 +151,13 @@ describe('G2 — silence watchdog', () => {
     vi.advanceTimersByTime(env.SILENCE_CHECKIN_MS - 1000);
     expect(injectContext).not.toHaveBeenCalled();
 
-    // ...then the caller speaks. This is the real onSpeechStarted wiring
-    // (stamps lastActivityAt, then runs the unmodified handleBargeIn()).
+    // ...then the caller speaks a short, COMPLETE turn — the real
+    // onSpeechStarted wiring (stamps lastActivityAt, then runs the unmodified
+    // handleBargeIn()) followed by onSpeechStopped when server_vad closes the
+    // turn. Both halves matter: an open turn (started with no stopped) holds
+    // the watchdog off indefinitely, which is its own test below.
     call.handleCallerSpeechStarted();
+    call.handleCallerSpeechStopped();
 
     // The original 20s window would have elapsed by now, but the clock was
     // reset by the caller's speech — still no check-in.
@@ -164,6 +168,55 @@ describe('G2 — silence watchdog', () => {
     // A full fresh window after the reset does still fire it.
     vi.advanceTimersByTime(env.SILENCE_CHECKIN_MS);
     expect(injectContext).toHaveBeenCalledTimes(1);
+  });
+
+  it('(c-i) HOLLY REGRESSION (2026-08-24): a long unbroken caller turn never triggers the check-in', () => {
+    const { call, injectContext, requestResponse } = buildCall();
+    call.startSilenceWatchdog();
+
+    // The caller launches into a 21s answer. server_vad only closes a turn
+    // after ~700ms of pause, so speech_started fires and NOTHING else arrives
+    // until she finally stops — no speech_stopped, no marks, no tool calls.
+    // In production this looked exactly like 21s of dead air and Erica cut
+    // in with "are you still there?" mid-sentence.
+    call.handleCallerSpeechStarted();
+    expect(call.callerSpeaking).toBe(true);
+
+    // Blow past BOTH thresholds while the turn is still open.
+    vi.advanceTimersByTime(
+      env.SILENCE_CHECKIN_MS + env.SILENCE_HANGUP_MS + 10000
+    );
+    expect(injectContext).not.toHaveBeenCalled();
+    expect(requestResponse).not.toHaveBeenCalled();
+    expect(call.checkInFired).toBe(false);
+    expect(call.silenceHangupInitiated).toBe(false);
+    expect(call.closed).toBeFalsy();
+  });
+
+  it('(c-ii) the silence clock runs from speech_stopped, not speech_started', () => {
+    const { call, injectContext } = buildCall();
+    call.startSilenceWatchdog();
+
+    // A 25s monologue: suppressed throughout (see the regression above).
+    call.handleCallerSpeechStarted();
+    vi.advanceTimersByTime(25000); // t=25000
+    expect(injectContext).not.toHaveBeenCalled();
+
+    // Turn closes. The watchdog re-arms, counting from HERE — if it had kept
+    // counting from speech_started it would already be 25s "silent" and fire
+    // on the very next tick.
+    call.handleCallerSpeechStopped();
+    expect(call.callerSpeaking).toBe(false);
+
+    // Just under a full fresh window of post-turn silence — still nothing
+    // (last tick in this span is t=40000, silentMs=15000).
+    vi.advanceTimersByTime(env.SILENCE_CHECKIN_MS - 1000); // t=44000
+    expect(injectContext).not.toHaveBeenCalled();
+
+    // The tick at t=45000 sees a full SILENCE_CHECKIN_MS since the turn ended.
+    vi.advanceTimersByTime(2000); // t=46000
+    expect(injectContext).toHaveBeenCalledTimes(1);
+    expect(call.checkInFired).toBe(true);
   });
 
   it('(d) the "are you still there?" check-in fires at most once per call', () => {
