@@ -3,6 +3,81 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-24 (8) — ✅ FULL HOLLY BUNDLE SHIPPED (Fable orchestrating Sonnet/Opus workers)
+Aryan approved implementation (dropped: confirm-before-transfer tweak — the
+committed ASKED-FOR-RICHA behavior stays as-is). Four workers, sequential
+(shared working tree), each Fable-review-gated + committed:
+- **W1 (Sonnet, `ae4515d`)**: compressed greeting — "on a recorded line" IS
+  the MD disclosure (4 words, salon name kept) + never-volunteer-closed rule
+  (pre-open "book today" → straight to availability). Fable touch-up: the
+  recognized-caller injected note quoted the OLD greeting ending (parroting
+  risk) — now describes, not quotes.
+- **W2 (Opus, `9ee980d`)**: watchdog fix — new `callerSpeaking` flag via new
+  `onSpeechStopped` handler; open caller turn = activity, silence clock runs
+  from turn END. Mutation-tested Holly regression.
+- **W3 (Opus, `e94b98a`)**: 1.5s teardown grace (TRANSCRIPT_GRACE_MS) when a
+  caller turn is open/just-closed — in-flight transcription lands; end
+  record/durations still written immediately.
+- **W4 (Opus, `2b765cc`)**: dial-status fallback — `<Dial timeout=15
+  action=/twilio/dial-status>`; non-completed dial reconnects the caller to
+  a failback Erica segment (transferFailed=1: apology opening, no duplicate
+  start/recording rows, transfer_to_owner message-only — no redial loop).
+  Host rides a regex-validated `host` stream param. Admin/digest joins
+  handle multi-segment calls (last end row wins; usage/cost/duration sum;
+  transcripts concatenated). NOTE: fatal-error failoverToOwner still uses a
+  bare untimed <Dial> — deliberate carve-out.
+**308→329 tests** (293 at session start), tsc clean, TZ=UTC green throughout.
+Worker tokens ~495k (W1 76k / W2 96k / W3 103k / W4 220k). New lessons.md
+entry: VAD emits nothing mid-monologue + recording-RMS forensics + railway
+logs of dead deployments.
+**⏳ DEPLOY PENDING — 6 commits since prod** (fa0f370 + 09d233b + these
+four): `railway up --service erica` in a quiet window (drops in-flight
+calls). Post-deploy acceptance: (1) greeting plays AND is the new compressed
+one; (2) in-window "can I talk to Richa" rings her cell; (3) if she doesn't
+pick up in ~15s the caller comes BACK to Erica with an apology (not her
+personal voicemail / not a hangup); (4) a 30s+ rambling message gets NO
+"are you still there" interruption and lands fully in the transcript.
+Optional new env knobs (defaults fine): TRANSFER_WINDOW_START/END,
+TRANSFER_DIAL_TIMEOUT_S.
+
+## 2026-08-24 (7) — 🐛 ROOT CAUSE: silence watchdog interrupted Holly MID-MESSAGE (Fable, direct)
+Aryan heard a long Holly message (work meeting, "squeeze me in ~2:20 PM") on
+the 11:46 recording that was in NO transcript and NO SMS. Full forensics
+(admin API usage/turns + per-channel RMS via ffmpeg + Railway logs of the
+OLD deployment 6cb3f36a — `railway logs <deployId> --since/--until` works
+for dead containers):
+- Audio analysis: Holly's channel is −24..−35 dBFS CONTINUOUS 0:34–0:54 —
+  her loudest speech of the call. NOT a quiet-caller/VAD-threshold problem.
+- Logs: `speech_started` fired at +34.6s (VAD HEARD her). No speech_stopped
+  for 21s because she never paused ≥700ms (server_vad silence_duration) —
+  turn stayed open, which is CORRECT VAD behavior.
+- **THE BUG: silence check-in fired at +55s with silentMs=20423 — while she
+  was mid-sentence.** `lastActivityAt` is stamped ONLY at speech_started
+  (handleCallerSpeechStarted, twilioStream.ts ~1376); nothing re-stamps
+  during an open caller turn, so a >20s monologue counts as >20s of
+  "silence" → "Are you still there?" talks over the caller. Bites ANY long
+  message — the core message-taking use case.
+- Secondary: at +55.8s speech_stopped DID commit her whole message and a
+  response started — she hung up 300ms later; the async transcription was
+  killed by teardown → message absent from transcript despite reaching
+  OpenAI. (Tertiary, already fixed by entry 6: the SMS fired at +20s with
+  reason "caller asked to speak directly with Richa" — 14s BEFORE her
+  message existed; new window would have live-dialed instead.)
+**PROPOSED FIX (discussed, NOT yet implemented):** track callerSpeaking
+(true on speech_started, false on speech_stopped, also re-stamp
+lastActivityAt on speech_stopped); silence check-in skips while
+callerSpeaking (duration cap still backstops a stuck-open turn). Optional:
+grace period for in-flight transcription at teardown.
+**DISCUSSION DECISIONS from Aryan (implement later, as one bundle):**
+compressed greeting KEEPING a short recording disclosure (MD two-party
+consent — "on a recorded line" style, salon name stays); confirm-once-
+before-transfer is OK (mishearing protection — rule: confirm what you
+heard when unsure, never quiz WHY); pre-open callers: never volunteer
+closed-status, booking requests go straight to availability, hours
+questions answered whenever asked in any phrasing (behavior rules, no
+scripted lines); NO whisper on transfers (Richa sees the CLIENT's number —
+<Dial> passes the original caller ID through).
+
 ## 2026-08-24 (6) — ✅ TRANSFER WINDOW implemented (the Holly fix) (Fable, direct)
 Aryan approved entry (5)'s plan (9AM–9PM window + Richa-cell OK). Built:
 - `env.ts`: `TRANSFER_WINDOW_START`/`END` (default '09:00'/'21:00', salon TZ,

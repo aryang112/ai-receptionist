@@ -197,6 +197,27 @@ WHEN ("confirm once, in your own words, after they state a request") — never
 include a ready-made line the model can lift. If an example is unavoidable,
 make it structurally unusable as a reply (describe it, don't quote it).
 
+## 🤫 server_vad emits NOTHING mid-monologue — never measure "silence" from speech_started (2026-08-24)
+The Holly incident: a caller answered "anything to note down?" with a 21s
+unbroken message. VAD fired `speech_started` once, then nothing for 21s (it
+only closes a turn after ~700ms of pause — correct behavior). The silence
+watchdog measured from `speech_started`, concluded 20s of "silence", and
+interrupted her mid-sentence with "Are you still there?" — she hung up and
+complained to the owner. Rules: (1) between speech_started and speech_stopped
+the caller is TALKING, not silent — any silence/inactivity logic must treat
+an open caller turn as continuous activity (see `callerSpeaking` in
+twilioStream.ts); (2) the silence clock starts at turn END, not turn start;
+(3) async input transcription lands ~0.5–1.5s AFTER the turn commits — a
+caller who hangs up right after finishing loses their transcript unless
+teardown waits (TRANSCRIPT_GRACE_MS). Long monologues are the NORMAL case
+for message-taking — test with them, not just short utterances. Also: when a
+spoken complaint doesn't match the transcript, pull the dual-channel Twilio
+recording and measure per-channel RMS (ffmpeg) — the recording taps the
+phone leg upstream of the media stream, so it holds ground truth even when
+the pipeline lost the audio. And `railway logs <deploymentId> --since/--until`
+retrieves logs from REPLACED containers — the in-memory WARN ring dies with
+the container, Railway's store doesn't.
+
 ## 2026-08-24 — Smoke tests must run through the REAL app stack
 The /admin dashboard shipped "smoke-tested" but had NEVER worked in
 production: the smoke test mounted adminRouter on a bare express app,
