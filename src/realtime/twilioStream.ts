@@ -53,6 +53,22 @@ function getTwilioClient() {
 const MAX_CONCURRENT_STREAMS = 20;
 const PRE_AUTH_TIMEOUT_MS = 10_000;
 
+// 2026-08-24 (the Holly transcript bug): caller-side transcription
+// (gpt-4o-mini-transcribe) is ASYNC — the
+// `conversation.item.input_audio_transcription.completed` event lands ~0.5–1.5s
+// AFTER the VAD commits the turn (`speech_stopped`). Holly finished a 21s
+// message and hung up 300ms later; cleanup() closed the OpenAI socket while her
+// transcription was still in flight, so her entire message existed on the Twilio
+// recording but was ABSENT from the stored transcript. When a caller turn was
+// open (or only just closed) at teardown, hold the OpenAI session open this long
+// so the late transcript entry can still land before we persist. The end record
+// (endedAt/durationMs) is written immediately regardless — the grace must never
+// inflate the call's measured duration.
+const TRANSCRIPT_GRACE_MS = 1500;
+// How recently a caller turn must have closed for its transcription to still be
+// plausibly in flight at teardown (see TRANSCRIPT_GRACE_MS).
+const TRANSCRIPT_INFLIGHT_WINDOW_MS = 3000;
+
 // M1: gpt-realtime audio-token rate ESTIMATE (2026-08, OpenAI's realtime
 // pricing page) — dollars per 1,000,000 tokens. Cached input is priced far
 // below fresh input, which is exactly why the truncation.retention_ratio
@@ -663,6 +679,11 @@ export class TwilioRealtimeCall {
   // flag an unbroken monologue is indistinguishable from dead air and the
   // watchdog interrupts them mid-sentence (2026-08-24 Holly bug).
   private callerSpeaking = false;
+  // ms timestamp of the last speech_stopped (caller turn closed). Used ONLY by
+  // cleanup()'s transcript grace window: a turn that closed moments before the
+  // hangup very likely still has its async transcription in flight (the Holly
+  // bug — see TRANSCRIPT_GRACE_MS). 0 = the caller never spoke.
+  private lastCallerSpeechStoppedAt = 0;
   // The check-in ("Are you still there?") fires at most ONCE per call — this
   // latches permanently once used.
   private checkInFired = false;
@@ -1398,6 +1419,9 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
   private handleCallerSpeechStopped() {
     this.callerSpeaking = false;
     this.lastActivityAt = Date.now();
+    // The turn just committed — its async transcription is now in flight. If the
+    // caller hangs up in the next moment, cleanup() waits for it (Holly bug).
+    this.lastCallerSpeechStoppedAt = this.lastActivityAt;
   }
 
   /**
@@ -3561,10 +3585,30 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       clearTimeout(this.durationCapGoodbyeRetryTimer);
       this.durationCapGoodbyeRetryTimer = undefined;
     }
+    // 2026-08-24 (the Holly bug): was a caller-side transcription still in
+    // flight when the line dropped? An OPEN turn commits on close, and a turn
+    // that closed moments ago hasn't had time for its async
+    // input_audio_transcription.completed event yet — in both cases the last
+    // thing the caller said would be lost if we persisted and closed the OpenAI
+    // socket right now. Computed ONCE here; when true the transcript record and
+    // session.close() are deferred by TRANSCRIPT_GRACE_MS (the end record is
+    // NOT — see below).
+    const transcriptionInFlight =
+      env.OPENAI_INPUT_TRANSCRIPTION !== 'off' &&
+      this.session != null &&
+      (this.callerSpeaking ||
+        (this.lastCallerSpeechStoppedAt > 0 &&
+          Date.now() - this.lastCallerSpeechStoppedAt <
+            TRANSCRIPT_INFLIGHT_WINDOW_MS));
+    // Whether THIS cleanup wrote the end record — the deferred transcript write
+    // below is allowed only in that case (keeps a transcript record from ever
+    // appearing for a call that never wrote a start/end record).
+    let endRecordWritten = false;
     // Persist the call end exactly once, and only if the call actually started
     // (a socket that closed before Twilio's "start" never wrote a start record).
     if (!this.endRecorded && this.startedAtMs !== null) {
       this.endRecorded = true;
+      endRecordWritten = true;
       const endedAt = Date.now();
       // M1: only attach usage/estCostUsd when at least one turn actually
       // reported usage (e.g. the call never got past the greeting) — an
@@ -3589,7 +3633,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       });
       // M1: the interleaved both-side transcript, as its own record right
       // next to the end record — skip when empty (nothing worth persisting).
-      if (this.transcript.length > 0) {
+      // Holly fix: when a caller transcription is still in flight, this write
+      // moves into the grace timer below so the last thing the caller said
+      // still makes it into the record.
+      if (!transcriptionInFlight && this.transcript.length > 0) {
         CallStore.recordTranscript(this.callSid, this.transcript);
       }
       // S2: a spam-tagged call whose caller-ID number we know gets counted
@@ -3601,7 +3648,38 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     }
     // session may be undefined if the socket errored/closed before Twilio's
     // "start" event ever built it — guard so cleanup never throws.
-    this.session?.close();
+    if (transcriptionInFlight) {
+      // Holly fix: keep the OpenAI socket open just long enough for the
+      // in-flight caller transcription to arrive (it still routes into
+      // pushTranscriptEntry — that path has no `closed` guard), THEN persist
+      // and close. The Twilio leg is already gone and sendAudioToTwilio no-ops
+      // once `closed` is set, so nothing else is kept alive by this.
+      logger.info(
+        { streamSid: this.streamSid, callSid: this.callSid },
+        'Holding OpenAI session briefly for an in-flight caller transcription'
+      );
+      const graceTimer = setTimeout(() => {
+        try {
+          if (endRecordWritten && this.transcript.length > 0) {
+            CallStore.recordTranscript(this.callSid, this.transcript);
+          }
+        } catch (error) {
+          logger.error(
+            { err: error, callSid: this.callSid },
+            'Failed to record transcript after the grace window'
+          );
+        }
+        try {
+          this.session?.close();
+        } catch (error) {
+          logger.error({ err: error }, 'Error closing OpenAI session');
+        }
+      }, TRANSCRIPT_GRACE_MS);
+      // Never let the grace window hold the process (or a test run) open.
+      graceTimer.unref?.();
+    } else {
+      this.session?.close();
+    }
     try {
       if (this.socket.readyState === WebSocket.OPEN) {
         this.socket.close();
