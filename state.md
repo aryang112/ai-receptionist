@@ -3,6 +3,92 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-24 (2) — ☁️ CLOUD QA ROUTINE LIVE + /admin/api/logs built (Fable, direct)
+**Twice-daily automated QA is running.** Cloud routine `erica-call-qa`
+(trig_01Cd5z1eA3HHTk1ZJbBgTMBm, https://claude.ai/code/routines/) fires at
+8:37 AM + 10:37 PM ET (cron `37 2,12 * * *` UTC — shifts 1h when DST ends):
+an isolated cloud Claude session (sonnet-5, runs on Aryan's claude.ai plan —
+NO separate API billing) pulls the last 13h of calls + transcripts from the
+/admin API, judges them against the embedded rubric (self-contained prompt —
+GitHub checkout is 92 commits stale, deliberately not used), and emails ONE
+report per run to Aryan via the Gmail connector. All-quiet runs still email
+a one-liner = doubles as an uptime check (API unreachable/401 → CRITICAL
+email). ⚠️ ADMIN_TOKEN is embedded in the routine prompt (routines have no
+secrets store — Aryan accepted the tradeoff); rotating it = new value in
+Railway + .env + edit the routine. Test run fired 2026-08-24T03:19Z.
+- **Digest decision: NOT yet** (Aryan) — DIGEST_ENABLED stays false.
+- `<this commit>` feat(admin): GET /admin/api/logs — pino tees WARN+ lines
+  into a 300-entry in-memory ring (core/logRing.ts), served behind the same
+  adminAuth. Purpose: the cloud routine sweeps server errors WITHOUT a
+  Railway token (project tokens are deploy-capable — refused on principle).
+  279/279 tests (was 273; +6 adminLogs.test.ts), tsc clean, both TZs.
+- **✅ DEPLOYED 2026-08-24 ~12:52 PM ET** (Aryan ran `railway up` himself —
+  the permission classifier blocks Fable from deploying directly; salon-open
+  quiet window as planned). Verified: new container 8e3f2c23b5c6 clean boot
+  (pid 1, catalog 63), /admin/api/logs 404→200 flip proven against the NEW
+  container's own request log, empty ring on fresh boot as expected. Routine
+  prompt updated same hour (RemoteTrigger update, Gmail connector preserved):
+  DATA + "SERVER LOG SWEEP" sections added — level≥50 always a finding,
+  warns only if unexplained by a reviewed call, ≤3 quoted lines, empty ring
+  after restart is normal, 404 = MINOR (rollback hint) not critical. First
+  run with the sweep: tonight 10:37 PM ET.
+- **Scheduled-run #1 confirmed autonomous:** fired 8:40 AM ET 2026-08-24 by
+  itself, emailed "Erica QA — 2 findings — Aug 24 AM" (led with the known
+  post-goodbye bug). NOTE for Aryan-questions: routines live under
+  claude.ai/code/routines (the CODE surface) — they do NOT appear in the
+  Claude app's Home→"Scheduled tasks" page (that's the separate chat-tasks
+  feature).
+
+## 2026-08-24 — 🔍 MONITORING STOOD UP: /call-review + first sweep (Fable, direct)
+**Vonage forwarding is LIVE (Aryan flipped it).** Standing QA loop begun:
+- `4d53642` NEW `.claude/commands/call-review.md` — the twice-daily sweep:
+  new calls + both-side transcripts (OPENAI_INPUT_TRANSCRIPTION confirmed ON
+  in prod = gpt-4o-mini-transcribe) via /admin API, gracefulness rubric,
+  accuracy cross-checks vs business.json + live catalog, Railway log sweep,
+  verdicts clean/minor/needs-a-listen. State: `data/review-state.json`
+  (seeded through 2026-08-24T02:51Z).
+- **First sweep (10 calls, all Aryan's tests): booking ✅, reschedule ✅
+  (graceful 5PM-close handling, 4:50→4:45 nudge), price/hours Q&A ✅ ALL
+  verified accurate vs live catalog (brow lam $70 ✓, lash lift $150 ✓,
+  Summer Beauty Bundle is REAL — $61.50 — not hallucinated). After-hours
+  message path fired a real transfer_to_owner SMS ✓.**
+- **🐛 CONFIRMED LIVE — post-goodbye stray response** (call …7ad22f82,
+  10:51PM): after caller's "that's it" + Erica's goodbye, a queued
+  tool-follow-up ("I've passed that along… anything else?") played AFTER the
+  goodbye; caller: "Hello?". This is the audit's deferred "post-tool
+  check-in collision," now observed on a real call. Fix candidate: suppress
+  queued check-in/tool-follow-up once the goodbye/end_call sequence starts.
+  Recording exists for confirmation.
+- Transcription artifact noted (not an Erica bug): gpt-4o-mini-transcribe
+  hallucinates Korean on line noise ("이 제품을", "이거 맞아?") — Erica
+  recovers gracefully ("didn't quite catch that"). Review rubric should not
+  penalize these.
+
+## 2026-08-23 (late) — ✅ VONAGE STAGE-1 PREREQS CLEARED (Fable, direct)
+Aryan green-lit forwarding. All three pre-Stage-1 blockers closed this session:
+- **Sign-off calls verified in production** (via /admin API, days=2): 4 calls
+  from Aryan (…5169), all `recognized:true`, all recorded, costs $0.05–0.20.
+  H1 confirmed live: 3 of 4 calls answered hours/price questions with ZERO
+  tool calls (instant from-prompt answers, no filler). All outcome 'none' /
+  'caller hung up' — expected for Q&A test calls, no anomaly flags beyond
+  the inherent `no-outcome`.
+- **`SPAM_NEVER_BLOCK=+14109429100`** (the salon's public Vonage line) set on
+  Railway via CLI (value never echoed to logs; verified present by key-name
+  listing). Triggered a redeploy — verified by deployment logs per the
+  deploy-hygiene rule, not URL curl. Blocklist can no longer dead the
+  forwarded line if Vonage substitutes caller-ID.
+- **Vacation dates CONFIRMED by Aryan** (Sept 1–9). business.json already
+  carried exactly those dates — no file change needed; the PROVISIONAL label
+  in earlier entries is hereby retired.
+**REMAINING for Stage 1 (Aryan-side):** (1) flip the Vonage after-hours rule
+→ forward to +14103046449; (2) DAY-1: first forwarded call must show the
+CALLER's number in `From` (dashboard/logs) — if it shows the salon's own
+number, fix Vonage caller-ID passthrough before real traffic; (3) optional:
+`DIGEST_ENABLED=true` + `DIGEST_TO` on Railway when Richa should start
+getting the daily SMS. Standing non-blockers: Phorest secret rotation before
+any git push (91 commits unpushed); deploys drop in-flight calls — quiet
+hours only once forwarding is live.
+
 ## 2026-08-23 — H1 IMPLEMENTED (worker agent)
 **Task:** H1 — hot-load hours + the price catalog into the prompt (replaces
 the tool-only design that was a workaround for the old 40k TPM ceiling, lifted
