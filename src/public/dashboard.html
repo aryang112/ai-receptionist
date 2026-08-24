@@ -423,7 +423,12 @@
     d.addEventListener('toggle', function () {
       if (d.open && !loaded) {
         loaded = true;
-        loadDetail(c, detail);
+        loadDetail(c, detail).catch(function () {
+          // Don't strand the row on "Loading…" — allow a close/reopen retry.
+          loaded = false;
+          detail.innerHTML =
+            '<span class="loading">Failed to load — close and reopen to retry.</span>';
+        });
       }
       pauseOrResumeRefresh();
     });
@@ -494,9 +499,16 @@
 
   async function refresh() {
     if (anyDetailOpen()) return; // paused-while-detail-open guard
-    await Promise.all([loadStats(), loadCalls()]);
-    document.getElementById('refreshedAt').textContent =
-      'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    try {
+      await Promise.all([loadStats(), loadCalls()]);
+      document.getElementById('refreshedAt').textContent =
+        'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    } catch (err) {
+      // A failed fetch (mid-deploy container swap, flaky mobile network) must
+      // never strand the page on "Loading…" — say so; the 30s timer retries.
+      document.getElementById('refreshedAt').textContent =
+        'Failed to load — retrying shortly…';
+    }
   }
 
   document.getElementById('flagToggle').addEventListener('click', function () {

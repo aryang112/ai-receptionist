@@ -148,3 +148,35 @@ describe("buildInstructions — TODAY'S STATUS precompute", () => {
     expect(instructions).toMatch(/At this moment we are CLOSED/);
   });
 });
+
+// 2026-08-24 — lessons from Erica's first real customer call (Holly, message
+// mode): (1) she took a "can't make my appointment" purely as a message and
+// never offered to reschedule/cancel — SELF-SERVICE FIRST rule; (2) she said
+// the scripted "let me get Richa for you" handoff sentence while the salon
+// was CLOSED, then had to walk it back — the handoff script is now gated to
+// live-transfer-actually-possible, and the closed-hours rule is absolute.
+describe('buildInstructions — TRANSFER self-service + closed-hours rules', () => {
+  it('has the SELF-SERVICE FIRST rule: intent over keywords, tools before message-taking', () => {
+    const instructions = buildInstructions();
+    expect(instructions).toContain('SELF-SERVICE FIRST');
+    // callers don't say the magic words — the rule must call that out
+    expect(instructions).toMatch(/almost never use words like "cancel"/);
+    // offer another time before accepting a cancellation
+    expect(instructions).toMatch(/first be offered another time/);
+  });
+
+  it('gates the scripted handoff sentence to live-transfer-actually-possible', () => {
+    const instructions = buildInstructions();
+    expect(instructions).toMatch(
+      /ONLY when a live transfer is actually possible RIGHT NOW/
+    );
+  });
+
+  it('closed-hours: never promise a live transfer, FYI Richa after self-handled changes', () => {
+    const instructions = buildInstructions();
+    expect(instructions).toMatch(/NEVER say "let me get her"/);
+    expect(instructions).toMatch(
+      /handled a schedule change yourself while the salon is closed/
+    );
+  });
+});
