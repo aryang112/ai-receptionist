@@ -150,6 +150,14 @@ export function adminAuth(req: Request, res: Response, next: NextFunction) {
 
 adminRouter.use(adminAuth);
 
+// Monitoring surface — never cache. Without this, Safari heuristically served
+// stale /admin API responses from disk cache (fetches never reached the
+// server at all), stranding the dashboard on "Loading…" (live bug 2026-08-24).
+adminRouter.use((_req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 // ─────────────────────────────────────────────────────────────────────────
 // Record shapes read back from callStore.readCalls() (loosely typed — the
 // store itself is the contract; this is just what this route reads off it).

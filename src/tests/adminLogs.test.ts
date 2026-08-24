@@ -106,3 +106,17 @@ describe('GET /admin/api/logs', () => {
     expect(res.body.entries[2].line).toContain('lim9'); // newest kept
   });
 });
+
+describe('admin cache headers', () => {
+  it('every /admin response carries Cache-Control: no-store', async () => {
+    env.ADMIN_TOKEN = 'sekrit-token-for-test';
+    const page = await request(app)
+      .get('/admin')
+      .set('Authorization', 'Bearer sekrit-token-for-test');
+    expect(page.headers['cache-control']).toBe('no-store');
+    const api = await request(app)
+      .get('/admin/api/logs')
+      .set('Authorization', 'Bearer sekrit-token-for-test');
+    expect(api.headers['cache-control']).toBe('no-store');
+  });
+});
