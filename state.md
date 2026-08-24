@@ -3,6 +3,98 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-24 (6) — ✅ TRANSFER WINDOW implemented (the Holly fix) (Fable, direct)
+Aryan approved entry (5)'s plan (9AM–9PM window + Richa-cell OK). Built:
+- `env.ts`: `TRANSFER_WINDOW_START`/`END` (default '09:00'/'21:00', salon TZ,
+  end-exclusive, defensive HH:mm parse → defaults on garbage).
+- `hours.ts`: NEW `isWithinTransferWindow(now?)` — pure clock check on
+  Richa's waking hours; IGNORES weekday hours/closedDates (her cell rings,
+  not the front desk). Vacation stays a separate, earlier gate.
+- `handleTransferToOwner`: gate swapped `isOpenNow()` →
+  `isWithinTransferWindow()`. Out-of-window note now has Erica confirm the
+  text ALREADY reached Richa's phone (warming lever) — no more "when the
+  salon reopens" wording. Fatal failover still ungated.
+- Prompt (TRANSFER section rework): NEW precomputed "RICHA'S LINE
+  POSSIBLE/NOT possible" status (never re-derived by the model, same
+  principle as TODAY'S STATUS); NEW "ASKED FOR RICHA" fast path — explicit
+  ask = honor promptly, no quizzing, no talking them out of it, never
+  promise-then-walk-back; SELF-SERVICE FIRST re-scoped to callers who
+  describe a problem WITHOUT explicitly asking for Richa; handoff-sentence +
+  closed-hours rules now key on RICHA'S LINE, not salon hours.
+  transfer_to_owner tool description aligned (string content only — no
+  session-shape change).
+- Timeline note: 2026-08-24 is a MONDAY — Holly called 14 min before the
+  noon opening (entry 5's "Sunday" framing in chat was wrong, tests use the
+  real Monday timestamp).
+- Tests 284→293 (+5 hours window incl. Holly-regression cases, transfer-gate
+  file reworked — Sunday/pre-open cases now expect DIAL, +3 prompt). 293/293
+  green ×4 runs + TZ=UTC. tsc clean. Prompt render verified at Mon-11:46
+  (POSSIBLE + salon CLOSED simultaneously) and Tue-10PM (NOT possible).
+  NOTE: one full-suite run flaked admin.route.test.ts (404 vs 401) once —
+  not reproducible in 5 subsequent runs, clean tree unaffected, watch for it.
+**⏳ NOT DEPLOYED** — rides with fa0f370 in one `railway up --service erica`
+(Aryan runs it). Acceptance on first live call: greeting plays; then an
+in-window "can I talk to Richa" should DIAL her cell.
+
+## 2026-08-24 (5) — 🔎 HOLLY TRANSCRIPTS PULLED — timeline CORRECTION + strategy reset (Fable, direct)
+Aryan listened to the recordings; Holly complained to Richa — she does not
+want to deal with an AI receptionist at all. Transcript facts (correcting
+entry (3), which had the two calls SWAPPED):
+- **11:23 call SUCCEEDED**: recognized Holly, took the can't-make-12PM
+  message cleanly, SMS'd Richa. No silence-hangup here.
+- **11:46 call is the damage**: Holly called back WANTING A HUMAN ("Is this
+  Richa?" → "Yes" to wanting Richa directly) → Erica said "Let me get Richa
+  for you" → immediately reneged (salon closed) → offered a SECOND
+  message-take for a message already left at 11:23 → Holly went silent,
+  hung up, 3s rage-redial 11:49. The broken transfer promise = the complaint.
+**Strategy decisions from Aryan (pending his 2 confirmations):**
+1. Caller asks for Richa by name → stop probing/explaining, just act.
+2. Replace the salon-hours transfer gate with a HUMAN TRANSFER WINDOW
+   (proposed 9AM–9PM ET, config-tunable) — transfer rings Richa's CELL, so
+   salon hours are the wrong clock. In-window: live transfer attempt, no-answer
+   → message+SMS fallback. Out-of-window: message path, never promise.
+3. Warming: recognized regulars get shorter/warmer greeting; "Richa just got
+   your message as a text" confirmation; Richa personally tells regulars
+   "just ask for me and you'll ring through."
+**AWAITING from Aryan:** (a) confirm window hours, (b) Richa's OK for
+off-salon-hours cell transfers. Then: implement window + prompt rework on
+top of fa0f370 (STILL NOT DEPLOYED — prod would repeat the Holly failure
+verbatim today), one combined deploy in a quiet window.
+
+## 2026-08-24 (4) — 🛠️ SELF-SERVICE-FIRST prompt rule + dashboard error states (Fable, direct)
+Aryan's design call (from the Holly review): Erica must UNDERSTAND the
+message's intent — no keyword matching — and execute what her tools can do
+(offer another time first, then cancel), only then fall back to
+message/transfer by hours. `fa0f370`:
+- Prompt: new SELF-SERVICE FIRST block in TRANSFER section; the scripted
+  "let me get Richa for you" handoff sentence gated to
+  live-transfer-actually-possible (root cause of the morning slip: the
+  quoted example out-parroted the closed-hours rule); closed-hours rule now
+  absolute ("NEVER say") + FYI-text Richa after any self-handled schedule
+  change while closed.
+- Dashboard: refresh() + per-row detail no longer strand on "Loading…"
+  after a failed fetch (Aryan hit this — likely the 12:52 deploy's container
+  swap mid-request; all 4 admin APIs verified healthy, stats 200 in 90ms).
+- 282/282 tests (+3 prompt regressions), tsc clean, both TZs.
+**⏳ NOT YET DEPLOYED** — needs `railway up --service erica` (Aryan runs it;
+classifier blocks Fable). Salon-open window closes 5 PM ET today. After
+deploy, first closed-hours "can't make it" call validates the new flow.
+
+## 2026-08-24 (3) — 🎉 FIRST REAL CUSTOMER CALL handled (pre-open forwarding)
+Holly (recognized Phorest client, …1772) called 11:23 AM (salon opens 12) —
+couldn't make her 12 PM appt. Erica took the message; transfer_to_owner:ok
+BOTH calls → Richa SMS'd at 11:23 + 11:46 (full detail). 3s redial 11:49
+(greeting hangup, benign). ~$0.22 total. **Caller-ID passthrough CONFIRMED**
+(recognized:true, real last4 — the Stage-1 day-1 verification is done).
+Server warn/error ring: empty. Findings (not yet fixed, next quiet-hours
+deploy): (1) Erica said "Let me get Richa for you" while KNOWING the salon
+was closed, then pivoted to message-taking — prompt rule needs: when closed,
+offer the message path immediately, never promise the transfer; (2) call 1
+ended in caller silence ("Are you still there?") and Holly had to call back
+to leave the message — LISTEN to the 11:23 recording (echo/VAD suspicion vs
+caller distraction). Note: heavy transcription noise on these calls; Erica
+navigated it well (confirmed "Are you Holly?" via recognition).
+
 ## 2026-08-24 (2) — ☁️ CLOUD QA ROUTINE LIVE + /admin/api/logs built (Fable, direct)
 **Twice-daily automated QA is running.** Cloud routine `erica-call-qa`
 (trig_01Cd5z1eA3HHTk1ZJbBgTMBm, https://claude.ai/code/routines/) fires at

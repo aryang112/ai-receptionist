@@ -134,13 +134,19 @@ describe('buildInstructions — SERVICES & PRICES catalog (H1)', () => {
 describe("buildInstructions — TODAY'S STATUS precompute", () => {
   it('Sunday afternoon: CLOSED all day, next open tomorrow, tomorrow = Monday hours', () => {
     const instructions = buildInstructions(at('2026-08-23T17:37')); // Sunday
-    expect(instructions).toMatch(/today is Sunday and the salon is CLOSED all day/);
-    expect(instructions).toMatch(/At this moment we are CLOSED — next open tomorrow at 12 PM/);
+    expect(instructions).toMatch(
+      /today is Sunday and the salon is CLOSED all day/
+    );
+    expect(instructions).toMatch(
+      /At this moment we are CLOSED — next open tomorrow at 12 PM/
+    );
     expect(instructions).toMatch(/Tomorrow \(Monday\): 12 PM to 5 PM/);
   });
   it('Tuesday 2pm: open today and OPEN right now', () => {
     const instructions = buildInstructions(at('2026-08-25T14:00')); // Tuesday
-    expect(instructions).toMatch(/today is Tuesday and the salon is open 12 PM to 7 PM/);
+    expect(instructions).toMatch(
+      /today is Tuesday and the salon is open 12 PM to 7 PM/
+    );
     expect(instructions).toMatch(/At this moment we are OPEN/);
   });
   it('Tuesday 9pm: open today but CLOSED right now', () => {
@@ -178,5 +184,36 @@ describe('buildInstructions — TRANSFER self-service + closed-hours rules', () 
     expect(instructions).toMatch(
       /handled a schedule change yourself while the salon is closed/
     );
+  });
+});
+
+// 2026-08-24 (the Holly call, round 2): the transfer gate moved from salon
+// hours to Richa's waking hours (isWithinTransferWindow) — and a caller who
+// explicitly asks for Richa gets honored promptly, not probed. The RICHA'S
+// LINE status is precomputed server-side (never re-derived by the model),
+// same principle as TODAY'S STATUS.
+describe("buildInstructions — transfer window (RICHA'S LINE)", () => {
+  it('inside the window (Mon 11:46am, salon still closed): line says POSSIBLE', () => {
+    const instructions = buildInstructions(at('2026-08-24T11:46'));
+    expect(instructions).toMatch(/RICHA'S LINE/);
+    expect(instructions).toMatch(
+      /live transfer to Richa is POSSIBLE right now/
+    );
+    // ...even though the salon itself is CLOSED at that moment
+    expect(instructions).toMatch(/At this moment we are CLOSED/);
+  });
+
+  it('outside the window (Tue 10pm): line says NOT possible', () => {
+    const instructions = buildInstructions(at('2026-08-25T22:00'));
+    expect(instructions).toMatch(
+      /live transfer to Richa is NOT possible right now/
+    );
+  });
+
+  it('asked-for-Richa fast path: honor promptly, never promise-then-walk-back', () => {
+    const instructions = buildInstructions();
+    expect(instructions).toMatch(/ASKED FOR RICHA/);
+    expect(instructions).toMatch(/honor it promptly/);
+    expect(instructions).toMatch(/never promise the transfer first/);
   });
 });

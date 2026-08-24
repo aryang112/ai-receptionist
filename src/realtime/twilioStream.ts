@@ -30,6 +30,7 @@ import {
   getActiveOrUpcomingVacation,
   fmtTime,
   isOpenNow,
+  isWithinTransferWindow,
 } from '../core/hours.js';
 import { snapSlotsToGrid } from '../core/slots.js';
 import { verifyStreamToken } from '../security/wsAuth.js';
@@ -167,6 +168,12 @@ export function buildInstructions(
     ? getHoursStatus(tomorrowISO, now).hoursThatDay
     : null;
   const openNow = isOpenNow(now);
+  // Transfer-window fix (2026-08-24, the Holly call): live transfers ring
+  // Richa's CELL, so their availability follows her waking hours (the
+  // env-tunable transfer window), not the salon's opening hours. Precomputed
+  // server-side and handed over as a finished fact — same never-re-derive
+  // principle as TODAY'S STATUS above.
+  const transferPossibleNow = isWithinTransferWindow(now);
   const todayStatusLine = todayStatus
     ? `TODAY'S STATUS (precomputed — trust this verbatim, do NOT re-derive it from the weekly table): today is ${now.toFormat('cccc')} and the salon is ${
         todayStatus.hoursThatDay === 'Closed'
@@ -317,19 +324,22 @@ If the caller changes their mind mid-flow (e.g. asks to cancel instead) → ABAN
 6. If response has squeezed: true → "Thanks for letting us know — I'll let Richa know, and we'll do our best to squeeze you in. See you soon!"
 
 ═══ TRANSFER TO RICHA ═══
-Transferring is a LAST RESORT. You — Erica — handle booking, rescheduling, cancelling, multiple services, hours, and running-late yourself. Only call transfer_to_owner when:
-- The caller explicitly asks to speak to Richa or a real person
+RICHA'S LINE (precomputed — trust this verbatim, do NOT re-derive it from the clock or the salon hours): a live transfer to Richa is ${transferPossibleNow ? 'POSSIBLE right now' : 'NOT possible right now (outside her calling hours)'}. Transfers ring Richa's own phone, so this is INDEPENDENT of whether the salon is open — she takes calls beyond salon hours.
+
+ASKED FOR RICHA — when a caller explicitly asks to speak to Richa (or to a real person), honor it promptly: don't quiz them about why, don't re-explain that you're the virtual receptionist, and never try to talk them out of it. If RICHA'S LINE above says POSSIBLE (and no away-notice above), transfer on the spot. If it says NOT possible, say so honestly in one short sentence and offer to text her a message right away instead — never promise the transfer first and then walk it back.
+
+SELF-SERVICE FIRST — when a caller describes a problem or asks you to pass along a message WITHOUT explicitly asking to speak to Richa, listen for what they actually NEED before taking the message. Callers almost never use words like "cancel" or "reschedule" — they say things like "I can't make it today" or "something came up." Understand the intent: if the underlying request is something YOU can do with your tools (cancelling, rescheduling, booking, prices, hours, running-late notes), offer to handle it yourself on the spot. A caller who can't make their appointment should first be offered another time, and if they'd rather not rebook, offered a cancellation right there — confirm which appointment, run the tool, confirm the result out loud. After handling it, offer to pass a note along to Richa too if anything personal remains. Fall back to a pure transfer or message ONLY when the request genuinely needs Richa herself.
+
+Beyond an explicit ask for Richa, transferring is a LAST RESORT. You — Erica — handle booking, rescheduling, cancelling, multiple services, hours, and running-late yourself. Otherwise only call transfer_to_owner when:
 - It's a group booking for several DIFFERENT PEOPLE at once, or a request genuinely outside booking / reschedule / cancel / hours / running-late
 - The caller is clearly upset and wants a human
 - A tool keeps failing even AFTER you retried it — and only then, after saying "I'm having a little trouble with our system — let me get Richa to help you."
 
-SELF-SERVICE FIRST — when a caller asks for Richa, or asks you to pass along a message, listen for what they actually NEED before transferring or taking the message. Callers almost never use words like "cancel" or "reschedule" — they say things like "I can't make it today" or "something came up." Understand the intent: if the underlying request is something YOU can do with your tools (cancelling, rescheduling, booking, prices, hours, running-late notes), offer to handle it yourself on the spot. A caller who can't make their appointment should first be offered another time, and if they'd rather not rebook, offered a cancellation right there — confirm which appointment, run the tool, confirm the result out loud. After handling it, offer to pass a note along to Richa too if anything personal remains. Fall back to a pure transfer or message ONLY when the request genuinely needs Richa herself.
-
 Do NOT transfer just because: a service isn't in the memorised price list (try to book it — the catalog is bigger than that list); the caller wants a second or third service (book each one); or a tool errors a single time (say "one sec, let me try that again" and retry first). One hiccup is never a reason to transfer.
 
-ONLY when a live transfer is actually possible RIGHT NOW (salon open per the HOURS line, no away-notice above): say ONLY one short handoff sentence first (a brief "let me get Richa for you" in your own words — one sentence, nothing more), then call transfer_to_owner. Any explanation of WHY (e.g. "since it's for two different people…") comes BEFORE that sentence in your previous turn, or not at all; the call hands off right after you finish speaking, so a long final sentence risks being cut off.
+ONLY when a live transfer is actually possible RIGHT NOW (RICHA'S LINE above says POSSIBLE, no away-notice above): say ONLY one short handoff sentence first (a brief "let me get Richa for you" in your own words — one sentence, nothing more), then call transfer_to_owner. Any explanation of WHY (e.g. "since it's for two different people…") comes BEFORE that sentence in your previous turn, or not at all; the call hands off right after you finish speaking, so a long final sentence risks being cut off.
 EXCEPTION — if a note above says Richa is currently away on her time off: do NOT say you'll get her or promise a transfer. Offer to pass a message along instead, and once they give it, call transfer_to_owner with the message as the reason — it reaches her as a text, not a call.
-SAME RULE OUTSIDE OPEN HOURS — check the HOURS line against the current time above: when the salon is closed, NEVER say "let me get her" or promise a live transfer (Richa isn't at the salon) — not even for a moment before correcting yourself. Offer to pass a message along; transfer_to_owner delivers it to her as a text and she follows up when the salon reopens. And if you handled a schedule change yourself while the salon is closed (a cancellation or reschedule affecting today or the next open day), still send Richa a short FYI afterwards via transfer_to_owner so she isn't caught off guard.
+OUTSIDE CALLING HOURS — when RICHA'S LINE above says NOT possible: NEVER say "let me get her" or promise a live transfer — not even for a moment before correcting yourself. Offer to pass a message along; transfer_to_owner delivers it straight to her phone as a text, and after it succeeds, confirm in your own words that Richa already has the text and will follow up. And if you handled a schedule change yourself while the salon is closed (a cancellation or reschedule affecting today or the next open day), still send Richa a short FYI afterwards via transfer_to_owner so she isn't caught off guard.
 
 ═══ ENDING THE CALL ═══
 After you finish helping with something (booking confirmed, question answered, cancellation done), ask: "Anything else I can help you with?"
@@ -544,7 +554,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'transfer_to_owner',
     description:
-      'Transfer the call to Richa (the salon owner). LAST RESORT only — you handle booking (including multiple services), rescheduling, cancelling, hours, and running-late yourself. Use ONLY when: the caller explicitly asks for Richa or a real person; it is a group booking for several DIFFERENT people; a tool keeps failing AFTER you retried it; or the caller is clearly upset and wants a human.',
+      'Transfer the call to Richa (the salon owner) — or, outside her calling hours, deliver a message to her phone as a text. Use PROMPTLY when the caller explicitly asks for Richa or a real person. Otherwise LAST RESORT — you handle booking (including multiple services), rescheduling, cancelling, hours, and running-late yourself; use only for: a group booking for several DIFFERENT people; a tool that keeps failing AFTER you retried it; or a caller who is clearly upset and wants a human.',
     parameters: {
       type: 'object',
       properties: {
@@ -2992,21 +3002,25 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         };
       }
 
-      // AFTER-HOURS gate (2026-08-23, Aryan-confirmed): live transfers ring
-      // Richa's PERSONAL mobile — outside open hours that means her phone at
-      // night and, most likely, her personal voicemail. So the dial only
-      // happens while the salon is open; otherwise take a message and text
-      // it to her, exactly like vacation mode (which is checked first above,
-      // for its better wording). The fatal-error failover below is NOT
-      // gated — a technical meltdown still reaches a human at any hour.
-      if (!isOpenNow()) {
+      // TRANSFER-WINDOW gate (2026-08-24, Aryan-decided after the Holly
+      // call — replaces the 2026-08-23 salon-hours gate): live transfers
+      // ring Richa's PERSONAL mobile, so the right clock is her waking
+      // hours (default 9 AM–9 PM salon TZ, env-tunable), NOT the salon's
+      // opening hours. Holly asked for Richa at 11:46 AM — 14 minutes
+      // before the salon's noon opening — and the old gate blocked the
+      // dial; under this one it rings through.
+      // Outside the window: take a message and text it to her, exactly
+      // like vacation mode (which is checked first above, for its better
+      // wording). The fatal-error failover below is NOT gated — a
+      // technical meltdown still reaches a human at any hour.
+      if (!isWithinTransferWindow()) {
         logger.info(
           {
             tool: 'transfer_to_owner',
             reason: payload.reason,
             callSid: this.callSid,
           },
-          'Transfer suppressed — after hours; sending SMS instead'
+          'Transfer suppressed — outside transfer window; sending SMS instead'
         );
         const afterHoursCallerName =
           (this.prefetch?.clientId
@@ -3015,7 +3029,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           this.prefetch?.firstName ??
           'a caller';
         void this.notifyOwnerSms(
-          `Hi Richa, it's Erica. After-hours message: ${afterHoursCallerName} called — ${payload.reason}. I let them know you'll follow up when the salon reopens.`
+          `Hi Richa, it's Erica. After-hours message: ${afterHoursCallerName} called — ${payload.reason}. I let them know you'll follow up as soon as you can.`
         );
         this.markInfoOutcome();
         CallStore.recordToolCall(this.callSid, {
@@ -3025,7 +3039,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         });
         return {
           transferred: false,
-          note: "The salon is closed right now, so the caller can't be connected to Richa — tell them you've passed their message along and she'll follow up when the salon reopens.",
+          note: "It's outside calling hours, so the caller can't be connected to Richa right now — let them know (in your own words) that their message has just reached Richa's phone as a text and she'll follow up as soon as she can.",
         };
       }
 

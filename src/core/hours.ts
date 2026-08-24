@@ -1,5 +1,6 @@
 import { DateTime } from 'luxon';
 import { businessHours } from '../config/businessConfig.js';
+import { env } from '../config/env.js';
 
 // business.json is the source of truth for hours (read-only here).
 const TZ = businessHours.timezone || 'America/New_York';
@@ -138,6 +139,39 @@ export function isOpenNow(now: DateTime = DateTime.now()): boolean {
   const oc = getOpenClose(todayISO);
   if (!oc) return false;
   return nowDt >= oc.open && nowDt <= oc.close;
+}
+
+/** "HH:mm" → minutes since midnight, or `fallback` on garbage (same
+ * defensive-parse stance as digest.ts's DIGEST_TIME handling). */
+function parseHHMM(value: string, fallback: number): number {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!m) return fallback;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return fallback;
+  return h * 60 + min;
+}
+
+/**
+ * Human transfer window (2026-08-24, Aryan-decided after the Holly call):
+ * live transfers ring Richa's PERSONAL cell, so the gate is her waking hours
+ * — NOT the salon's opening hours. A recognized regular calling Sunday
+ * morning and asking for Richa should ring through even though the salon is
+ * closed; a 10:30 PM caller should not. Every day of the week, ignoring
+ * closedDates: the salon calendar is irrelevant to whether her phone may
+ * ring. Defaults 09:00–21:00 salon TZ (end exclusive), env-tunable via
+ * TRANSFER_WINDOW_START/END — read at CALL time so tests can reassign env.
+ * Vacation mode is a separate, earlier gate in handleTransferToOwner and is
+ * deliberately NOT considered here. `now` injectable for tests.
+ */
+export function isWithinTransferWindow(
+  now: DateTime = DateTime.now()
+): boolean {
+  const nowDt = now.setZone(TZ);
+  const start = parseHHMM(env.TRANSFER_WINDOW_START, 9 * 60);
+  const end = parseHHMM(env.TRANSFER_WINDOW_END, 21 * 60);
+  const minutes = nowDt.hour * 60 + nowDt.minute;
+  return minutes >= start && minutes < end;
 }
 
 export type ActiveOrUpcomingVacation = {

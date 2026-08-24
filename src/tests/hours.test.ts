@@ -1,10 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { DateTime } from 'luxon';
 import {
   getHoursStatus,
   getActiveOrUpcomingVacation,
   isOpenNow,
+  isWithinTransferWindow,
 } from '../core/hours.js';
+import { env } from '../config/env.js';
 
 // business.json: mon 12-17, tue-fri 12-19, sat 10-18, sun closed; closedDates incl 2026-12-25.
 // vacations: 2026-09-01 to 2026-09-09 (Richa away), reopens 2026-09-10 (Thu).
@@ -110,5 +112,53 @@ describe('isOpenNow (after-hours transfer gate, 2026-08-23)', () => {
     expect(isOpenNow(at('2026-08-25T09:00'))).toBe(false); // before open
     expect(isOpenNow(at('2026-08-23T13:00'))).toBe(false); // Sunday
     expect(isOpenNow(at('2026-09-03T13:00'))).toBe(false); // vacation Thursday
+  });
+});
+
+// 2026-08-24 (the Holly call): the transfer gate is Richa's waking hours,
+// not the salon's opening hours — her cell rings, not the front desk.
+describe('isWithinTransferWindow (human transfer window, 2026-08-24)', () => {
+  const savedStart = env.TRANSFER_WINDOW_START;
+  const savedEnd = env.TRANSFER_WINDOW_END;
+  afterEach(() => {
+    env.TRANSFER_WINDOW_START = savedStart;
+    env.TRANSFER_WINDOW_END = savedEnd;
+  });
+
+  it('default 09:00–21:00: boundaries are start-inclusive, end-exclusive', () => {
+    expect(isWithinTransferWindow(at('2026-08-25T08:59'))).toBe(false);
+    expect(isWithinTransferWindow(at('2026-08-25T09:00'))).toBe(true);
+    expect(isWithinTransferWindow(at('2026-08-25T20:59'))).toBe(true);
+    expect(isWithinTransferWindow(at('2026-08-25T21:00'))).toBe(false);
+  });
+
+  it('ignores the salon calendar — the Holly regression cases', () => {
+    // Sunday 11:46 AM (salon closed all day) — Holly's actual call time.
+    expect(isWithinTransferWindow(at('2026-08-23T11:46'))).toBe(true);
+    // Weekday 9:30 AM, salon not open until noon.
+    expect(isWithinTransferWindow(at('2026-08-25T09:30'))).toBe(true);
+    // Weekday 8 PM: salon closed at 7, but Richa still takes calls.
+    expect(isWithinTransferWindow(at('2026-08-25T20:00'))).toBe(true);
+    // Christmas (a closedDate) mid-day: her phone may still ring.
+    expect(isWithinTransferWindow(at('2026-12-25T13:00'))).toBe(true);
+    // Late night is out regardless of anything else.
+    expect(isWithinTransferWindow(at('2026-08-25T22:30'))).toBe(false);
+  });
+
+  it('env-tunable window is honored', () => {
+    env.TRANSFER_WINDOW_START = '10:00';
+    env.TRANSFER_WINDOW_END = '18:00';
+    expect(isWithinTransferWindow(at('2026-08-25T09:30'))).toBe(false);
+    expect(isWithinTransferWindow(at('2026-08-25T17:59'))).toBe(true);
+    expect(isWithinTransferWindow(at('2026-08-25T18:00'))).toBe(false);
+  });
+
+  it('garbage window values fall back to the 09:00/21:00 defaults', () => {
+    env.TRANSFER_WINDOW_START = 'not-a-time';
+    env.TRANSFER_WINDOW_END = '25:99';
+    expect(isWithinTransferWindow(at('2026-08-25T08:59'))).toBe(false);
+    expect(isWithinTransferWindow(at('2026-08-25T09:00'))).toBe(true);
+    expect(isWithinTransferWindow(at('2026-08-25T20:59'))).toBe(true);
+    expect(isWithinTransferWindow(at('2026-08-25T21:00'))).toBe(false);
   });
 });

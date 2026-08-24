@@ -103,6 +103,10 @@ Caller dials Twilio number
   V1: `vacations` ranges close those dates like closedDates;
   `getActiveOrUpcomingVacation(now?)` → `{from,to,reopenISO}|null` (active or
   starting ≤14 days) drives the prompt block + transfer gate.
+  `isWithinTransferWindow(now?)` — the HUMAN transfer window (2026-08-24, the
+  Holly fix): live-transfer gate follows Richa's waking hours
+  (`TRANSFER_WINDOW_START/END`, default 09:00–21:00 salon TZ, end-exclusive),
+  ignoring the salon calendar entirely — her cell rings, not the front desk.
 - **slots.ts** — `snapSlotsToGrid(slots, gridMin)` / `ceilToGrid`. Snaps Phorest's
   re-anchored odd-minute availability starts UP to a clean clock grid before Erica
   offers them (see lessons.md). Called in `handleSuggestAvailability`.
@@ -132,7 +136,9 @@ Caller dials Twilio number
   `BLOCKLIST_PATH`, `SPAM_BLOCK_THRESHOLD` (2), `OPENAI_INPUT_TRANSCRIPTION`
   (⚠️ default 'off' — session-shape change, flip only after a live call
   validates it), `RECORD_CALLS` ('true'), `ADMIN_TOKEN` (set in prod!),
-  `DIGEST_ENABLED`/`DIGEST_TIME` ('19:30')/`DIGEST_TO`). Defaults are sensible.
+  `DIGEST_ENABLED`/`DIGEST_TIME` ('19:30')/`DIGEST_TO`,
+  `TRANSFER_WINDOW_START`/`TRANSFER_WINDOW_END` ('09:00'/'21:00' — Richa's
+  live-transfer calling hours, decoupled from salon hours)). Defaults are sensible.
 - **business.json** — salon hours per weekday + closedDates + `vacations`
   (`[{from,to,note}]` — ONE entry closes booking those dates, reroutes transfer
   to SMS message-taking, injects the prompt block; edit this for future

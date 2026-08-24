@@ -9,11 +9,14 @@ import {
 } from 'vitest';
 import WebSocket from 'ws';
 
-// 2026-08-23 (Aryan-confirmed behavior): live transfers ring Richa's PERSONAL
-// mobile, so they only happen while the salon is OPEN. After hours (and
-// before opening / Sundays / closed dates), transfer_to_owner takes a message
-// and texts it to her instead — same machinery as vacation mode. The fatal
-// failover is deliberately NOT gated (tested implicitly by not touching it).
+// 2026-08-24 (Aryan-decided after the Holly call — replaces the 2026-08-23
+// salon-hours gate): live transfers ring Richa's PERSONAL mobile, so the gate
+// is her waking hours (the transfer window, default 09:00–21:00 salon TZ),
+// NOT the salon's opening hours. Inside the window the dial happens even when
+// the salon is closed (Sunday mid-day, weekday mornings/evenings). Outside
+// it, transfer_to_owner takes a message and texts it to her instead — same
+// machinery as vacation mode. The fatal failover is deliberately NOT gated
+// (tested implicitly by not touching it).
 
 process.env.OPENAI_REALTIME_API_KEY ||= 'test-key';
 
@@ -38,17 +41,17 @@ function buildCall() {
     close: vi.fn(),
   };
   call.streamSid = 'STREAMSID';
-  // callSid deliberately unset: the OPEN-hours dial branch then hits its
+  // callSid deliberately unset: the in-window dial branch then hits its
   // existing "missing Twilio client or callSid" guard instead of a real REST
   // call — reaching that guard IS the proof the dial branch was taken.
   return call;
 }
 
-describe('transfer_to_owner — after-hours gate', () => {
+describe('transfer_to_owner — transfer-window gate', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('AFTER HOURS (Tue 9pm, not vacation): no dial — SMS message + {transferred:false}', async () => {
+  it('OUTSIDE WINDOW (Tue 9pm): no dial — SMS message + {transferred:false}', async () => {
     vi.setSystemTime(new Date('2026-08-25T21:00:00-04:00'));
     const call = buildCall();
     const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
@@ -60,11 +63,23 @@ describe('transfer_to_owner — after-hours gate', () => {
 
     expect(result).toEqual({
       transferred: false,
-      note: expect.stringContaining('reopens'),
+      note: expect.stringContaining('as a text'),
     });
     expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
     expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/After-hours message/);
     expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/bridal package/);
+  });
+
+  it('OUTSIDE WINDOW (Tue 7am, before 9): message path, no dial', async () => {
+    vi.setSystemTime(new Date('2026-08-25T07:00:00-04:00'));
+    const call = buildCall();
+    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    call.notifyOwnerSms = notifyOwnerSms;
+
+    const result = await call.handleTransferToOwner({ reason: 'question' });
+
+    expect(result.transferred).toBe(false);
+    expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
   });
 
   it('OPEN HOURS (Tue 2pm): proceeds to the dial branch (no message SMS)', async () => {
@@ -83,15 +98,39 @@ describe('transfer_to_owner — after-hours gate', () => {
     expect(notifyOwnerSms).not.toHaveBeenCalled();
   });
 
-  it('SUNDAY (closed all day): message path even at mid-day', async () => {
-    vi.setSystemTime(new Date('2026-08-23T13:00:00-04:00'));
+  it('THE HOLLY FIX — Mon 11:46am (14 min before noon opening): DIALS', async () => {
+    // Holly's actual call: Monday 2026-08-24, 11:46 AM — salon opens at
+    // noon, so the old salon-hours gate blocked the dial and Erica had to
+    // walk back her "let me get Richa" promise. Richa was demonstrably
+    // awake (she was receiving the SMS messages).
+    vi.setSystemTime(new Date('2026-08-24T11:46:00-04:00'));
     const call = buildCall();
     const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
     call.notifyOwnerSms = notifyOwnerSms;
 
-    const result = await call.handleTransferToOwner({ reason: 'question' });
+    const result = await call.handleTransferToOwner({
+      reason: 'wants to speak with Richa',
+    });
 
-    expect(result.transferred).toBe(false);
-    expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ error: 'Transfer unavailable' });
+    expect(notifyOwnerSms).not.toHaveBeenCalled();
+  });
+
+  it('SALON CLOSED but inside window (Tue 9:30am / Tue 8pm): DIALS', async () => {
+    for (const time of [
+      '2026-08-25T09:30:00-04:00', // before the salon opens at noon
+      '2026-08-25T20:00:00-04:00', // after the salon closed at 7pm
+      '2026-08-23T13:00:00-04:00', // Sunday mid-day (salon closed all day)
+    ]) {
+      vi.setSystemTime(new Date(time));
+      const call = buildCall();
+      const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+      call.notifyOwnerSms = notifyOwnerSms;
+
+      const result = await call.handleTransferToOwner({ reason: 'question' });
+
+      expect(result).toEqual({ error: 'Transfer unavailable' });
+      expect(notifyOwnerSms).not.toHaveBeenCalled();
+    }
   });
 });
