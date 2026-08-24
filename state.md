@@ -30,9 +30,11 @@ committed ASKED-FOR-RICHA behavior stays as-is). Four workers, sequential
 Worker tokens ~495k (W1 76k / W2 96k / W3 103k / W4 220k). New lessons.md
 entry: VAD emits nothing mid-monologue + recording-RMS forensics + railway
 logs of dead deployments.
-**⏳ DEPLOY PENDING — 6 commits since prod** (fa0f370 + 09d233b + these
-four): `railway up --service erica` in a quiet window (drops in-flight
-calls). Post-deploy acceptance: (1) greeting plays AND is the new compressed
+**✅ DEPLOYED 2026-08-24 7:39 PM ET** (deployment dcc70930, Fable ran
+`railway up` at Aryan's direction — first Fable-run deploy; container
+f84f82069919 clean boot, catalog 63, health+admin 200). Awaiting Aryan's
+test call against the acceptance list below.
+Post-deploy acceptance: (1) greeting plays AND is the new compressed
 one; (2) in-window "can I talk to Richa" rings her cell; (3) if she doesn't
 pick up in ~15s the caller comes BACK to Erica with an apology (not her
 personal voicemail / not a hangup); (4) a 30s+ rambling message gets NO
