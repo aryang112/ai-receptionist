@@ -157,4 +157,13 @@ export const env = {
   // mode still suppresses transfers entirely (checked first in the handler).
   TRANSFER_WINDOW_START: process.env.TRANSFER_WINDOW_START || '09:00',
   TRANSFER_WINDOW_END: process.env.TRANSFER_WINDOW_END || '21:00',
+
+  // How long the live transfer rings Richa's phone before Twilio gives up and
+  // hands control back to us (the <Dial timeout> + action callback in
+  // handleTransferToOwner → POST /twilio/dial-status). Deliberately SHORTER
+  // than a typical carrier voicemail pickup (~20–25s) so a no-answer returns
+  // the caller to a fresh Erica session that apologizes and takes a message,
+  // instead of dying in Richa's PERSONAL voicemail (where the salon never
+  // sees the message and Erica can't follow up).
+  TRANSFER_DIAL_TIMEOUT_S: Number(process.env.TRANSFER_DIAL_TIMEOUT_S || 15),
 };

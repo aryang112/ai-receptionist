@@ -286,6 +286,35 @@ describe('buildDailyDigest / buildWeeklyDigest (M4)', () => {
     expect(digest).toContain('$75.50');
     expect(digest).not.toContain('$75.5)'); // never the bare-float form
   });
+
+  // Transfer failback (2026-08-24): the live transfer rang out and the caller
+  // was reconnected to a second Erica session on the SAME callSid, so the call
+  // has TWO end rows. Same rule as admin.ts: last outcome wins, cost sums.
+  it('a transfer-failback call (two end rows) counts once, takes the LAST outcome and SUMS cost', () => {
+    const sid = nextCallSid();
+    CallStore.startCall({ callSid: sid, startedAt: tsAt(DAY, '14:00') });
+    // Segment 1 ended in the transfer…
+    CallStore.endCall(sid, {
+      endedAt: tsAt(DAY, '14:02'),
+      durationMs: 120000,
+      outcome: 'transferred',
+      estCostUsd: 0.04,
+    });
+    // …segment 2 is how the call actually ended.
+    CallStore.endCall(sid, {
+      endedAt: tsAt(DAY, '14:05'),
+      durationMs: 90000,
+      outcome: 'info',
+      estCostUsd: 0.02,
+    });
+
+    const digest = buildDailyDigest(DAY);
+    // ONE call (one start row), reported by its FINAL outcome…
+    expect(digest).toContain('Erica today: 1 call');
+    expect(digest).toContain('1 info call');
+    // …and both segments' tokens were really spent, so the cost is the sum.
+    expect(digest).toContain('Est cost $0.06');
+  });
 });
 
 // ANALYTICS AUDIT FIX (2026-08-22, P1): the scheduler now summarizes

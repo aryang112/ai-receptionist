@@ -53,6 +53,13 @@ function getTwilioClient() {
 const MAX_CONCURRENT_STREAMS = 20;
 const PRE_AUTH_TIMEOUT_MS = 10_000;
 
+// The `host` stream parameter ends up inside a TwiML attribute we build by
+// templating (the <Dial action="…"> URL), and a Host header is ultimately
+// caller-influenced — so accept only what a real host can look like
+// (hostname[:port]). Anything else is treated as absent, which degrades to
+// today's bare <Dial> instead of emitting attacker-shaped XML.
+const PUBLIC_HOST_RE = /^[A-Za-z0-9.-]+(?::\d{1,5})?$/;
+
 // 2026-08-24 (the Holly transcript bug): caller-side transcription
 // (gpt-4o-mini-transcribe) is ASYNC — the
 // `conversation.item.input_audio_transcription.completed` event lands ~0.5–1.5s
@@ -164,7 +171,12 @@ export function buildInstructions(
   // H1: the warmed/TTL-cached Phorest catalog, or null when unavailable
   // (cold cache raced past its cap, or the fetch failed) — null keeps the
   // existing tool-first SERVICES & PRICES wording verbatim.
-  services: Service[] | null = null
+  services: Service[] | null = null,
+  // Transfer-failback (2026-08-24): this session is the SECOND segment of a
+  // call whose live transfer to Richa never connected. It swaps the GREETING
+  // paragraph and NOTHING else — every other section stays byte-identical
+  // (locked by a test).
+  opts: { transferFailback?: boolean } = {}
 ): string {
   // Inject the authoritative current salon date/time so "today"/"tomorrow" and
   // any relative dates are computed correctly — never left to the model's own
@@ -230,6 +242,15 @@ Erica cannot connect a caller to Richa while she's away — offer to pass a mess
 }`
     : '';
 
+  // Transfer failback: the caller is ALREADY mid-call — they heard the
+  // recorded-line greeting in segment 1, then heard Richa's phone ring out.
+  // So the greeting paragraph is replaced by an opening that apologizes and
+  // pivots to message-taking. Described, never scripted: a quotable example
+  // sentence in a prompt WILL be parroted in the wrong context (lessons.md).
+  const greetingSection = opts.transferFailback
+    ? `GREETING (transfer failback — this is NOT a new call): the caller is mid-call with you already. They asked for Richa, you tried to connect them, and her phone did not pick up; the line has just come back to you. Open immediately, without waiting for them to speak. In one or two warm, apologetic sentences, let them know Richa couldn't be reached right now, and offer them the choice of leaving a message for her (which reaches her as a text) or letting you help them yourself. Word it fresh, in your own voice, then stop and let them answer. Do NOT re-deliver the recorded-line greeting, do NOT introduce yourself at length, and do NOT ask who is calling or restart the conversation — this is the SAME phone call, and they have already heard the greeting and the recording notice.`
+    : `GREETING: Open the call yourself, immediately and warmly. Identify as the virtual receptionist AND include a brief, natural recording notice in the same breath: "Hi, this is Erica, the virtual receptionist at ${businessHours.name}, on a recorded line — I can help with bookings or any questions. What can I do for you?" Then wait for the caller. (Maryland is a two-party-consent state and we keep a record of the call, so that brief "on a recorded line" phrase IS the recording notice and is not optional — always include it, kept light and friendly.) If the caller speaks while you're greeting: once the recorded-line mention has been said, NEVER restart or repeat the scripted greeting — just respond to them naturally.`;
+
   // H1: full catalog present → replace the tool-first price paragraph with
   // the hot-loaded, alphabetized list + its own quote-only-from-list rule.
   // Absent (cold cache raced past its cap, or fetch failed) → keep the
@@ -248,7 +269,7 @@ PERSONALITY: Conversational, warm, efficient. Speak like a real person — not a
 
 VOICE & DELIVERY: Sound like a real, warm front-desk receptionist — relaxed, natural pacing (never rushed or robotic), genuine warmth, and natural intonation that rises and falls like real speech. Use light human touches where they fit: a soft "mm-hm", a small friendly laugh, a reassuring "no worries at all". React naturally — if a caller sounds unsure, slow down and reassure; if they're in a hurry, be brisk and efficient. Vary your rhythm like a person would. Never sound like you're reading a script.
 
-GREETING: Open the call yourself, immediately and warmly. Identify as the virtual receptionist AND include a brief, natural recording notice in the same breath: "Hi, this is Erica, the virtual receptionist at ${businessHours.name}, on a recorded line — I can help with bookings or any questions. What can I do for you?" Then wait for the caller. (Maryland is a two-party-consent state and we keep a record of the call, so that brief "on a recorded line" phrase IS the recording notice and is not optional — always include it, kept light and friendly.) If the caller speaks while you're greeting: once the recorded-line mention has been said, NEVER restart or repeat the scripted greeting — just respond to them naturally.
+${greetingSection}
 
 NEVER LEAVE SILENCE: Before you call ANY tool (looking something up, booking, checking availability, etc.), FIRST say a short, natural filler out loud — like "Let me check that for you…", "One sec…", or "Let me pull that up…" — and THEN call the tool. The caller must never hear dead air while you work.
 
@@ -815,6 +836,21 @@ export class TwilioRealtimeCall {
   // "start" is never auth-checked nor closed. Close it after a short window.
   private started = false;
   private preAuthTimer: NodeJS.Timeout | undefined = undefined;
+  // The public host Twilio reached us on, passed through from routes/twilio.ts
+  // as the `host` stream parameter. handleTransferToOwner has no Express `req`,
+  // so this is the only way it can build the absolute action URL for the
+  // <Dial> callback. Only a syntactically valid host is ever stored (see
+  // PUBLIC_HOST_RE) — the value lands inside a TwiML attribute we template, and
+  // a Host header is caller-influenced. Undefined (old/edge session, or a
+  // malformed header) ⇒ the transfer falls back to today's bare <Dial>: never
+  // a half-configured action URL.
+  private publicHost: string | undefined = undefined;
+  // True when this stream is the SECOND segment of a call whose live transfer
+  // never connected (POST /twilio/dial-status set transferFailed=1). Changes
+  // three things: the greeting paragraph, no duplicate start/recording rows
+  // (the callSid already has both from segment 1), and transfer_to_owner can
+  // only take a message — never dial Richa a second time.
+  private transferFailback = false;
 
   constructor(socket: WebSocket) {
     this.socket = socket;
@@ -1169,6 +1205,17 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           // as a stream parameter. Log-only — no blocking decisions on it.
           const callerStir = (event as TwilioStartEvent).start.customParameters
             ?.stir;
+          // The public host + the failback marker, both set by routes/twilio.ts
+          // (see buildStreamTwiml). The host feeds this call's <Dial> action
+          // URL; transferFailed=1 means Richa's phone already rang out on this
+          // very call and we're picking the caller back up.
+          const hostParam = (event as TwilioStartEvent).start.customParameters
+            ?.host;
+          this.publicHost =
+            hostParam && PUBLIC_HOST_RE.test(hostParam) ? hostParam : undefined;
+          this.transferFailback =
+            (event as TwilioStartEvent).start.customParameters
+              ?.transferFailed === '1';
           this.callerFrom = callerFrom;
           const warm = this.prepareCallerContext(callerFrom);
           // H1: race the (warm, TTL-cached) Phorest catalog fetch alongside
@@ -1202,7 +1249,9 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           const services = await servicesPromise;
           if (this.closed) break;
           await this.session.configureSession({
-            instructions: buildInstructions(undefined, services),
+            instructions: buildInstructions(undefined, services, {
+              transferFailback: this.transferFailback,
+            }),
             tools: TOOL_DEFINITIONS,
           });
           if (this.closed) break;
@@ -1216,18 +1265,31 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           // after warmCallerContext so recognizedClientId reflects a caller-ID
           // match. Record startedAtMs so cleanup() can compute duration.
           this.startedAtMs = Date.now();
-          CallStore.startCall({
-            callSid: this.callSid,
-            streamSid: this.streamSid,
-            from: callerFrom,
-            recognizedClientId: this.prefetch?.clientId,
-            startedAt: this.startedAtMs,
-            stirVerstat: callerStir,
-          });
-          // M2: fire-and-forget dual-channel recording via the Twilio REST
-          // API. NEVER awaited — must not delay the greeting below — and the
-          // method itself never throws (see its own doc comment).
-          this.startCallRecording();
+          if (this.transferFailback) {
+            // Second segment of an existing call: the callSid already has a
+            // start row and a LIVE dual-channel recording from segment 1.
+            // Writing either again would double-count the call on the
+            // dashboard/digest and start a second overlapping recording.
+            // Instance state (startedAtMs above) is still set — durations,
+            // watchdogs and cleanup all work off it.
+            logger.info(
+              { streamSid: this.streamSid, callSid: this.callSid },
+              '↩️ transfer failback segment — reusing the existing start + recording rows for this callSid'
+            );
+          } else {
+            CallStore.startCall({
+              callSid: this.callSid,
+              streamSid: this.streamSid,
+              from: callerFrom,
+              recognizedClientId: this.prefetch?.clientId,
+              startedAt: this.startedAtMs,
+              stirVerstat: callerStir,
+            });
+            // M2: fire-and-forget dual-channel recording via the Twilio REST
+            // API. NEVER awaited — must not delay the greeting below — and the
+            // method itself never throws (see its own doc comment).
+            this.startCallRecording();
+          }
           // Erica greets first, in her own voice (no separate Polly handoff).
           // No response can exist yet at this point in the handshake, so this
           // bare response.create is safe as-is (requestGreeting is intentionally
@@ -2995,6 +3057,22 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     }
   }
 
+  /**
+   * The caller's name for an owner SMS, or an honest 'a caller'.
+   * AUDIT FIX (2026-08-22): deliberately does NOT fall back to the last
+   * clientNames entry — that could name a lookup/disambiguation candidate who
+   * isn't the caller, and a wrong name in Richa's text is worse than none.
+   */
+  private callerDisplayName(): string {
+    return (
+      (this.prefetch?.clientId
+        ? this.clientNames.get(this.prefetch.clientId)
+        : undefined) ??
+      this.prefetch?.firstName ??
+      'a caller'
+    );
+  }
+
   private async handleTransferToOwner(args: unknown) {
     try {
       const parsed = parseToolArgs('transfer_to_owner', args);
@@ -3006,6 +3084,35 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         return { error: parsed.error };
       }
       const payload = parsed.data as { reason: string };
+
+      // FAILBACK GATE (2026-08-24): this segment EXISTS because a live dial to
+      // Richa just rang out on this very call. Dialing her again would loop
+      // the caller through the same silence, so a transfer request here can
+      // only ever become a message. Checked before the vacation/window gates
+      // — it outranks both, since it's evidence rather than a schedule.
+      if (this.transferFailback) {
+        logger.info(
+          {
+            tool: 'transfer_to_owner',
+            reason: payload.reason,
+            callSid: this.callSid,
+          },
+          'Transfer suppressed — Richa already did not answer on this call; sending SMS instead'
+        );
+        void this.notifyOwnerSms(
+          `Hi Richa, it's Erica. I couldn't reach you just now: ${this.callerDisplayName()} called — ${payload.reason}. I let them know you'd follow up.`
+        );
+        this.markInfoOutcome();
+        CallStore.recordToolCall(this.callSid, {
+          name: 'transfer_to_owner',
+          ok: true,
+          detail: { failbackMessage: true, reason: payload.reason },
+        });
+        return {
+          transferred: false,
+          note: "Richa still can't be reached — her phone already rang out on this call, so there is no point trying again. Their message has just landed on her phone as a text; confirm that to the caller in your own words and offer to help with anything else yourself.",
+        };
+      }
 
       // V1: while Richa is ACTIVELY on vacation (today falls inside the
       // range — NOT just "starting soon"), never dial her personal phone.
@@ -3031,18 +3138,8 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           },
           'Transfer suppressed — Richa is on vacation; sending SMS instead'
         );
-        // AUDIT FIX (2026-08-22): dropped the last-clientNames-entry fallback
-        // — it could name a lookup/disambiguation candidate who isn't the
-        // caller. Better an honest 'a caller' than the wrong name in Richa's
-        // text.
-        const callerName =
-          (this.prefetch?.clientId
-            ? this.clientNames.get(this.prefetch.clientId)
-            : undefined) ??
-          this.prefetch?.firstName ??
-          'a caller';
         void this.notifyOwnerSms(
-          `Hi Richa, it's Erica. While you're away: ${callerName} called — ${payload.reason}. I let them know you're away.`
+          `Hi Richa, it's Erica. While you're away: ${this.callerDisplayName()} called — ${payload.reason}. I let them know you're away.`
         );
         this.markInfoOutcome();
         CallStore.recordToolCall(this.callSid, {
@@ -3079,14 +3176,8 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           },
           'Transfer suppressed — outside transfer window; sending SMS instead'
         );
-        const afterHoursCallerName =
-          (this.prefetch?.clientId
-            ? this.clientNames.get(this.prefetch.clientId)
-            : undefined) ??
-          this.prefetch?.firstName ??
-          'a caller';
         void this.notifyOwnerSms(
-          `Hi Richa, it's Erica. After-hours message: ${afterHoursCallerName} called — ${payload.reason}. I let them know you'll follow up as soon as you can.`
+          `Hi Richa, it's Erica. After-hours message: ${this.callerDisplayName()} called — ${payload.reason}. I let them know you'll follow up as soon as you can.`
         );
         this.markInfoOutcome();
         CallStore.recordToolCall(this.callSid, {
@@ -3135,8 +3226,21 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       await this.waitForPlaybackToDrain(12000);
       // Erica has already spoken the handoff line in her own voice, so go
       // straight to <Dial> — no Polly <Say> (a jarring mid-call voice switch).
+      //
+      // The dial is TIMED and has an action callback whenever we know our own
+      // public host (routes/twilio.ts passes it as the `host` stream
+      // parameter). Without the timeout the caller sat through Richa's carrier
+      // ringing until her PERSONAL voicemail answered — a message the salon
+      // never sees; without the action, a busy/failed dial hung up on them
+      // outright, because nothing followed the <Dial>. With both, anything
+      // other than a completed conversation comes back to POST
+      // /twilio/dial-status, which reconnects them to Erica (transferFailed=1).
+      // No host (an old session, or a malformed Host header) ⇒ today's exact
+      // bare <Dial>: a half-configured action URL would be worse than none.
       await client.calls(this.callSid).update({
-        twiml: `<Response><Dial>${env.OWNER_PHONE}</Dial></Response>`,
+        twiml: this.publicHost
+          ? `<Response><Dial timeout="${env.TRANSFER_DIAL_TIMEOUT_S}" action="https://${this.publicHost}/twilio/dial-status" method="POST">${env.OWNER_PHONE}</Dial></Response>`
+          : `<Response><Dial>${env.OWNER_PHONE}</Dial></Response>`,
       });
 
       logger.info(

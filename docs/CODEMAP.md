@@ -24,7 +24,14 @@ Caller dials Twilio number
   `TOOL_DEFINITIONS`, all tool handlers (`handleSuggestAvailability`,
   `handleBookAppointment`, `handleReschedule`, `handleCancel`, `handleGetBusinessHours`,
   `handleGetPrices`, `handleLookupCustomer`, `handleListAppointments`,
-  `handleLogRunningLate`, `handleTransferToOwner`), barge-in (mark/clear/truncate),
+  `handleLogRunningLate`, `handleTransferToOwner` — 2026-08-24 its `<Dial>` is
+  TIMED (`TRANSFER_DIAL_TIMEOUT_S`) with an `action` back to
+  `/twilio/dial-status`, built from the `host` stream parameter; no host ⇒ the
+  original bare `<Dial>`. A `transferFailed=1` segment sets `transferFailback`,
+  which swaps ONLY the GREETING paragraph, skips the duplicate
+  `CallStore.startCall` + `startCallRecording` (segment 1 already wrote both),
+  and makes transfer_to_owner message-only — never a second dial),
+  barge-in (mark/clear/truncate),
   outbound audio to Twilio, and the caller-ID prefetch: **`prepareCallerContext`**
   (700ms-capped lookup racing the greeting; a TIMEOUT is not a no-match — the
   in-flight lookup keeps running and upgrades the call late via
@@ -117,8 +124,16 @@ Caller dials Twilio number
 
 ## src/routes/
 - **twilio.ts** — `/voice` (returns the Stream TwiML + caller-# param + `stir`
-  STIR/SHAKEN param, log-only). S2: a blocklisted number gets `<Reject>` here —
-  before any OpenAI session opens (repeat robocalls cost ~$0). `/gather` (legacy).
+  STIR/SHAKEN param, log-only + `host` public-host param). S2: a blocklisted
+  number gets `<Reject>` here — before any OpenAI session opens (repeat
+  robocalls cost ~$0). `/gather` (legacy). **`/dial-status`** (2026-08-24, the
+  live-transfer no-answer fallback): the action callback for
+  handleTransferToOwner's `<Dial>`. `DialCallStatus === 'completed'` →
+  `<Hangup/>`; anything else (no-answer / busy / failed / canceled) →
+  reconnect the caller to a fresh Erica session with `transferFailed=1`
+  instead of dropping them in Richa's personal voicemail (no-answer) or
+  hanging up on them (busy/failed). `deriveStreamUrl` + `derivePublicHost` +
+  the shared `buildStreamTwiml` mean /voice and /dial-status can't drift.
 - **admin.ts** — the OWNER DASHBOARD (M3). Token-auth (`ADMIN_TOKEN`,
   fail-closed in prod, timing-safe compare), read-only GETs: `/admin` (serves
   `src/public/dashboard.html` — self-contained mobile-first page),
@@ -138,13 +153,16 @@ Caller dials Twilio number
   validates it), `RECORD_CALLS` ('true'), `ADMIN_TOKEN` (set in prod!),
   `DIGEST_ENABLED`/`DIGEST_TIME` ('19:30')/`DIGEST_TO`,
   `TRANSFER_WINDOW_START`/`TRANSFER_WINDOW_END` ('09:00'/'21:00' — Richa's
-  live-transfer calling hours, decoupled from salon hours)). Defaults are sensible.
+  live-transfer calling hours, decoupled from salon hours),
+  `TRANSFER_DIAL_TIMEOUT_S` (15 — how long her phone rings before the dial
+  hands back to /twilio/dial-status; deliberately under the ~20–25s carrier
+  voicemail pickup)). Defaults are sensible.
 - **business.json** — salon hours per weekday + closedDates + `vacations`
   (`[{from,to,note}]` — ONE entry closes booking those dates, reroutes transfer
   to SMS message-taking, injects the prompt block; edit this for future
   vacations) + `location` (address for the prompt/hours tool). **Do not change casually.**
 
-## src/tests/  (vitest, 239 tests)
+## src/tests/  (vitest, 329 tests)
 phorest.client.test.ts (URL/range/client_id/timezone/retry regressions),
 hours.test.ts, booking.alias/match.test.ts, slots.test.ts (clean-grid snapping),
 wsAuth, middleware, twilioStream.bargein/contracts, phorest.mock/selector,
@@ -157,6 +175,12 @@ twilioStream.vacation.test.ts (transfer gate), twilioStream.spam.test.ts
 (end_call reason→outcome), blocklist.test.ts + twilioStream.blocklist.test.ts
 (threshold/persistence/client guard), twilioStream.freshCheck.test.ts (A1
 stale-slot rejection + fail-open), twilioStream.greetingRace.test.ts (A2 order).
+2026-08-24 (transfer failback): twilioStream.transferFailback.test.ts (timed
+dial + action URL, bare-dial fallback, no second dial, no duplicate
+start/recording rows), plus new cases in twilio.route (`/dial-status`, the
+`host` param), twilioStream.prompt (greeting swap is the ONLY diff) and
+admin.route/digest (two end rows + two transcript rows → last outcome wins,
+usage/duration/cost summed, transcript concatenated by ts).
 
 ## scripts/  (read-only diagnostics + ops)
 inspect-appointment.ts, list-services.ts, check-availability.ts, test-appt-filter.ts,

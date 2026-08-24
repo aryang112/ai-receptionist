@@ -634,6 +634,139 @@ describe('admin — GET /admin/api/transcript/:callSid', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// Multi-segment calls (transfer failback, 2026-08-24): the live transfer rang
+// out, the caller was reconnected to a second Erica session on the SAME
+// callSid — so one call now has TWO end rows and TWO transcript rows.
+// ─────────────────────────────────────────────────────────────────────────
+describe('admin — a transfer-failback call joins its two segments', () => {
+  const twoSegmentRows = [
+    {
+      type: 'start',
+      callSid: 'CA_failback',
+      ts: recentTs,
+      from: '+14105557777',
+    },
+    // Segment 2's transcript is written FIRST in this fixture on purpose:
+    // the join must order by entry ts, not by row position in the file.
+    {
+      type: 'transcript',
+      callSid: 'CA_failback',
+      ts: recentTs + 90000,
+      entries: [
+        { role: 'erica', text: 'I could not reach her', ts: recentTs + 70000 },
+        { role: 'caller', text: 'Please text her', ts: recentTs + 80000 },
+      ],
+    },
+    {
+      type: 'transcript',
+      callSid: 'CA_failback',
+      ts: recentTs + 30000,
+      entries: [
+        { role: 'caller', text: 'Can I speak to Richa', ts: recentTs + 10000 },
+        { role: 'erica', text: 'One moment', ts: recentTs + 20000 },
+      ],
+    },
+    // Segment 1 ended in the transfer…
+    {
+      type: 'end',
+      callSid: 'CA_failback',
+      ts: recentTs + 30000,
+      durationMs: 30000,
+      outcome: 'transferred',
+      usage: {
+        inputTokens: 1000,
+        outputTokens: 200,
+        cachedTokens: 100,
+        turns: 2,
+      },
+      estCostUsd: 0.04,
+      endReason: 'transferred to owner',
+    },
+    // …and segment 2 is how the call ACTUALLY ended.
+    {
+      type: 'end',
+      callSid: 'CA_failback',
+      ts: recentTs + 95000,
+      durationMs: 45000,
+      outcome: 'info',
+      usage: {
+        inputTokens: 500,
+        outputTokens: 300,
+        cachedTokens: 50,
+        turns: 3,
+      },
+      estCostUsd: 0.02,
+      endReason: 'caller confirmed done',
+    },
+  ];
+
+  it('last end row wins for outcome/endReason; usage, cost and duration SUM across segments', async () => {
+    writeFixture(twoSegmentRows);
+    const res = await request(app).get('/admin/api/calls?days=1');
+    const call = res.body.calls.find(
+      (c: { callSid: string }) => c.callSid === 'CA_failback'
+    );
+    expect(call).toBeDefined();
+    // One call, not two — the failback segment never wrote a second start row.
+    expect(
+      res.body.calls.filter(
+        (c: { callSid: string }) => c.callSid === 'CA_failback'
+      )
+    ).toHaveLength(1);
+
+    expect(call.outcome).toBe('info');
+    expect(call.endReason).toBe('caller confirmed done');
+    // Documented approximation: the sum excludes the ringing gap between the
+    // two segments (which belongs to neither).
+    expect(call.durationMs).toBe(75000);
+    expect(call.usage).toEqual({
+      inputTokens: 1500,
+      outputTokens: 500,
+      cachedTokens: 150,
+      turns: 5,
+    });
+    expect(call.estCostUsd).toBeCloseTo(0.06, 5);
+  });
+
+  it('/api/stats counts it as ONE call and sums its cost', async () => {
+    writeFixture(twoSegmentRows);
+    const res = await request(app).get('/admin/api/stats?days=365');
+    expect(res.body.totals.calls).toBe(1);
+    expect(res.body.totals.totalEstCostUsd).toBeCloseTo(0.06, 5);
+    expect(res.body.totals.avgDurationMs).toBe(75000);
+  });
+
+  it('the transcript endpoint concatenates both segments in ts order', async () => {
+    writeFixture(twoSegmentRows);
+    const res = await request(app).get('/admin/api/transcript/CA_failback');
+    expect(res.status).toBe(200);
+    expect(res.body.entries.map((e: { text: string }) => e.text)).toEqual([
+      'Can I speak to Richa',
+      'One moment',
+      'I could not reach her',
+      'Please text her',
+    ]);
+  });
+
+  it('a single-segment call is completely unchanged (usage object passed through as-is)', async () => {
+    writeFixture(fullCallRows);
+    const res = await request(app).get('/admin/api/calls?days=1');
+    const call = res.body.calls.find(
+      (c: { callSid: string }) => c.callSid === 'CA_full'
+    );
+    expect(call.durationMs).toBe(45000);
+    expect(call.outcome).toBe('booked');
+    expect(call.usage).toEqual({
+      inputTokens: 1000,
+      outputTokens: 400,
+      cachedTokens: 200,
+      turns: 3,
+    });
+    expect(call.estCostUsd).toBe(0.05);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // /api/recording/:callSid — the proxy
 // ─────────────────────────────────────────────────────────────────────────
 describe('admin — GET /admin/api/recording/:callSid proxy', () => {

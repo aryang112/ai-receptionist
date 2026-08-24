@@ -92,9 +92,20 @@ function callsForDate(rows: AnyRow[], dateISO: string): DigestCall[] {
     const iso = dt.toISODate();
     if (iso !== dateISO) continue;
 
-    const end = group.find((r) => r.type === 'end') as
-      | { outcome?: string; estCostUsd?: number }
-      | undefined;
+    // A transfer-failback call (the live transfer rang out and the caller was
+    // reconnected to a fresh Erica session on the SAME callSid) writes one
+    // 'end' row per segment. Same rule admin.ts's buildCallSummaries uses: the
+    // LAST end row is the final word on the outcome, and cost SUMS across
+    // segments (each segment's tokens were really spent). The digest reads no
+    // other end-row field, so nothing else here needs the multi-row treatment.
+    const endRows = group.filter((r) => r.type === 'end') as Array<{
+      outcome?: string;
+      estCostUsd?: number;
+    }>;
+    const end = endRows[endRows.length - 1];
+    const estCostUsd = endRows.some((e) => e.estCostUsd !== undefined)
+      ? endRows.reduce((sum, e) => sum + (e.estCostUsd ?? 0), 0)
+      : undefined;
     // ANALYTICS AUDIT FIX (2026-08-22, P1): collect EVERY booking row for
     // this call, not just the last one — a call can book multiple services
     // in one visit, and the old `[...group].reverse().find(...)` silently
@@ -117,7 +128,7 @@ function callsForDate(rows: AnyRow[], dateISO: string): DigestCall[] {
       outcome: end?.outcome ?? 'none',
       bookingRevenue,
       bookingCount: bookingRows.length,
-      estCostUsd: end?.estCostUsd,
+      estCostUsd,
       afterHours,
     });
   }

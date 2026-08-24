@@ -237,3 +237,64 @@ describe('buildInstructions — GREETING compression + never-volunteer-closed', 
     );
   });
 });
+
+// 2026-08-24 — transfer failback. When the live transfer rings out, the caller
+// is reconnected to a fresh Erica session mid-call (transferFailed=1). That
+// session must NOT re-greet them: they already heard the greeting and the
+// recording notice on segment 1 of the SAME phone call. Exactly one paragraph
+// changes — everything else is byte-identical, which is what makes this safe
+// to ship on a prompt this load-bearing.
+describe('buildInstructions — transfer failback greeting', () => {
+  const NOW = at('2026-10-01T14:00'); // no vacation block either side
+
+  it('replaces the greeting with an apologize-and-take-a-message opening', () => {
+    const failback = buildInstructions(NOW, null, { transferFailback: true });
+    expect(failback).toContain('GREETING (transfer failback');
+    expect(failback).toMatch(/her phone did not pick up/);
+    expect(failback).toMatch(/reaches her as a text/);
+    // The standard greeting — recorded-line notice and all — must be GONE:
+    // repeating it mid-call is the exact defect this branch exists to avoid.
+    expect(failback).not.toContain('on a recorded line');
+    expect(failback).not.toContain('What can I do for you?');
+    expect(failback).not.toMatch(/^GREETING: Open the call yourself/m);
+  });
+
+  it('describes the opening instead of scripting it — no quotable sentence to parrot (lessons.md)', () => {
+    const failback = buildInstructions(NOW, null, { transferFailback: true });
+    const greeting = failback.slice(
+      failback.indexOf('GREETING (transfer failback'),
+      failback.indexOf('NEVER LEAVE SILENCE:')
+    );
+    // A double-quoted fragment inside the paragraph would be a ready-made
+    // line the model can lift verbatim into the wrong moment.
+    expect(greeting).not.toMatch(/"/);
+  });
+
+  it('changes ONLY the greeting paragraph — every other section is byte-identical', () => {
+    const standard = buildInstructions(NOW);
+    const failback = buildInstructions(NOW, null, { transferFailback: true });
+    expect(failback).not.toBe(standard);
+
+    const upTo = (s: string) => s.slice(0, s.indexOf('GREETING'));
+    const from = (s: string) => s.slice(s.indexOf('NEVER LEAVE SILENCE:'));
+    expect(upTo(failback)).toBe(upTo(standard));
+    expect(from(failback)).toBe(from(standard));
+
+    // Spot-check one untouched section explicitly: TRANSFER TO RICHA still
+    // reads exactly as it does on a normal call.
+    const transferSection = (s: string) =>
+      s.slice(
+        s.indexOf('═══ TRANSFER TO RICHA ═══'),
+        s.indexOf('═══ ENDING THE CALL ═══')
+      );
+    expect(transferSection(failback)).toBe(transferSection(standard));
+    expect(transferSection(standard).length).toBeGreaterThan(0);
+  });
+
+  it('default/omitted opts keep the standard greeting (no behavior change for normal calls)', () => {
+    expect(buildInstructions(NOW, null, {})).toBe(buildInstructions(NOW));
+    expect(buildInstructions(NOW, null, { transferFailback: false })).toBe(
+      buildInstructions(NOW)
+    );
+  });
+});

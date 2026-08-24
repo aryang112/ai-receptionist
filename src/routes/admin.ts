@@ -310,6 +310,32 @@ function computeFlags(args: {
   return flags;
 }
 
+/**
+ * A transfer-failback call (twilioStream.ts: the live transfer rang out and
+ * the caller was reconnected to a fresh Erica session on the SAME callSid)
+ * writes a SECOND 'end' row — one per media-stream segment. Token usage is
+ * real for each segment, so it sums; duration sums too (a documented
+ * approximation: it excludes the ringing gap between the segments, which
+ * belongs to neither). The single-row case returns the row untouched so
+ * nothing about an ordinary call changes — including the per-modality usage
+ * fields, which are summed generically rather than being re-listed here and
+ * silently dropped.
+ */
+function sumUsage(endRows: EndRow[]): EndRow['usage'] | undefined {
+  const present = endRows
+    .map((e) => e.usage)
+    .filter((u): u is NonNullable<EndRow['usage']> => !!u);
+  if (present.length === 0) return undefined;
+  if (present.length === 1) return present[0];
+  const summed: Record<string, number> = {};
+  for (const usage of present) {
+    for (const [key, value] of Object.entries(usage)) {
+      if (typeof value === 'number') summed[key] = (summed[key] ?? 0) + value;
+    }
+  }
+  return summed as unknown as EndRow['usage'];
+}
+
 function buildCallSummaries(rows: AnyRow[]): CallSummary[] {
   const byCall = new Map<string, AnyRow[]>();
   for (const row of rows) {
@@ -347,7 +373,17 @@ function buildCallSummaries(rows: AnyRow[]): CallSummary[] {
     }
     if (!start) continue; // malformed/partial group — nothing to show
 
-    const end = group.find((r) => r.type === 'end') as EndRow | undefined;
+    // A call can have MORE THAN ONE end row — a transfer failback reconnects
+    // the caller to a second Erica session under the same callSid. The LAST
+    // one is the final word on how the call ended; the measurable quantities
+    // (duration, tokens, cost) are the sum of the segments.
+    const endRows = group.filter((r): r is EndRow => r.type === 'end');
+    const end = endRows[endRows.length - 1];
+    const durationMs = endRows.reduce((sum, e) => sum + (e.durationMs ?? 0), 0);
+    const usage = sumUsage(endRows);
+    const estCostUsd = endRows.some((e) => e.estCostUsd !== undefined)
+      ? endRows.reduce((sum, e) => sum + (e.estCostUsd ?? 0), 0)
+      : undefined;
     const tools = group
       .filter((r): r is ToolRow => r.type === 'tool')
       .map((t) => ({ name: t.name, ok: t.ok }));
@@ -383,14 +419,14 @@ function buildCallSummaries(rows: AnyRow[]): CallSummary[] {
       startTs: start.ts,
       fromLast4: last4(start.from),
       recognized: !!start.recognizedClientId || recognizedRow,
-      durationMs: end?.durationMs ?? 0,
+      durationMs,
       outcome,
       ...(endReason ? { endReason } : {}),
       tools,
       bookings,
       ...(lastBooking ? { booking: lastBooking } : {}),
-      ...(end?.usage ? { usage: end.usage } : {}),
-      ...(end?.estCostUsd !== undefined ? { estCostUsd: end.estCostUsd } : {}),
+      ...(usage ? { usage } : {}),
+      ...(estCostUsd !== undefined ? { estCostUsd } : {}),
       hasRecording,
       hasTranscript,
       blocked: false,
@@ -560,16 +596,21 @@ adminRouter.get('/api/logs', (req, res) => {
 adminRouter.get('/api/transcript/:callSid', (req, res) => {
   const { callSid } = req.params;
   const rows = readCalls() as AnyRow[];
-  const transcript = [...rows]
-    .reverse()
-    .find((r) => r.type === 'transcript' && r.callSid === callSid) as
-    | TranscriptRow
-    | undefined;
-  if (!transcript) {
+  // One transcript row per media-stream SEGMENT, and a transfer failback gives
+  // one callSid two segments — so concatenate every row for the call and sort
+  // by entry timestamp, rather than showing only the last row (which would
+  // hide the whole pre-transfer half of the conversation).
+  const transcriptRows = rows.filter(
+    (r): r is TranscriptRow => r.type === 'transcript' && r.callSid === callSid
+  );
+  if (transcriptRows.length === 0) {
     res.status(404).json({ error: 'No transcript for this call' });
     return;
   }
-  res.json({ callSid, entries: transcript.entries });
+  const entries = transcriptRows
+    .flatMap((r) => r.entries ?? [])
+    .sort((a, b) => a.ts - b.ts);
+  res.json({ callSid, entries });
 });
 
 adminRouter.get('/api/recording/:callSid', async (req, res) => {
