@@ -21,6 +21,7 @@ import { env } from '../config/env.js';
 import { logger } from '../core/logger.js';
 import { readCalls } from '../services/callStore.js';
 import { getOpenClose } from '../core/hours.js';
+import { recentWarnings } from '../core/logRing.js';
 
 export const adminRouter = express.Router();
 
@@ -525,6 +526,14 @@ adminRouter.get('/api/stats', (req, res) => {
           : Math.round(revenuePerDollar * 100) / 100,
     },
   });
+});
+
+// Recent WARN+ server log lines from the in-memory ring (core/logRing.ts) —
+// how the cloud QA routine sweeps for server errors without a Railway token.
+// Ephemeral: covers the current container only, same as platform logs.
+adminRouter.get('/api/logs', (req, res) => {
+  const limit = Number(req.query.limit) || undefined;
+  res.json({ entries: recentWarnings(limit) });
 });
 
 adminRouter.get('/api/transcript/:callSid', (req, res) => {

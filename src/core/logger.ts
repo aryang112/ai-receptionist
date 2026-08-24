@@ -1,8 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import pino from 'pino';
+import { logRingStream } from './logRing.js';
 
 const level = process.env.LOG_LEVEL || 'info';
+
+// WARN+ lines are additionally teed into an in-memory ring served at
+// /admin/api/logs — always on, every environment (it's how the cloud QA
+// routine sees server errors without platform credentials).
+const ringDest = { stream: logRingStream, level: 'warn' as const };
 
 /**
  * In dev we ALSO tee every log line to a file so a call can be inspected after
@@ -27,7 +33,12 @@ function resolveLogFile(): string | null {
 
 function buildLogger(): pino.Logger {
   const file = resolveLogFile();
-  if (!file) return pino({ level });
+  if (!file) {
+    return pino(
+      { level },
+      pino.multistream([{ stream: process.stdout, level }, ringDest])
+    );
+  }
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     // 'w' truncates on open → one file per server run.
@@ -37,11 +48,15 @@ function buildLogger(): pino.Logger {
       pino.multistream([
         { stream: process.stdout, level },
         { stream: fileStream, level },
+        ringDest,
       ])
     );
   } catch {
     // Never let logging setup break boot — fall back to stdout only.
-    return pino({ level });
+    return pino(
+      { level },
+      pino.multistream([{ stream: process.stdout, level }, ringDest])
+    );
   }
 }
 
