@@ -120,3 +120,22 @@ describe('admin cache headers', () => {
     expect(api.headers['cache-control']).toBe('no-store');
   });
 });
+
+describe('dashboard CSP override', () => {
+  it('the page allows inline script (helmet app-wide CSP would kill the dashboard JS)', async () => {
+    env.ADMIN_TOKEN = 'sekrit-token-for-test';
+    const page = await request(app)
+      .get('/admin')
+      .set('Authorization', 'Bearer sekrit-token-for-test');
+    expect(page.headers['content-security-policy']).toContain(
+      "script-src 'self' 'unsafe-inline'"
+    );
+    // API responses do NOT get the relaxed override
+    const api = await request(app)
+      .get('/admin/api/logs')
+      .set('Authorization', 'Bearer sekrit-token-for-test');
+    expect(api.headers['content-security-policy'] || '').not.toContain(
+      "'unsafe-inline'"
+    );
+  });
+});

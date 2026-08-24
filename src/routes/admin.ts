@@ -412,6 +412,19 @@ function daysParam(req: Request, fallback: number): number {
 // Routes
 // ─────────────────────────────────────────────────────────────────────────
 adminRouter.get('/', (_req, res) => {
+  // Helmet's app-wide CSP (script-src 'self') silently kills the dashboard's
+  // inline <script> in EVERY browser — the page rendered as a dead shell
+  // stuck on "Loading…" (live bug 2026-08-24; the M3 smoke test missed it by
+  // mounting the router on a bare express app without helmet). Override on
+  // THIS page only: allow inline script/style, keep everything else
+  // same-origin. API responses keep the strict helmet CSP.
+  res.set(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; " +
+      "style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+      "media-src 'self'; object-src 'none'; frame-ancestors 'self'; " +
+      "base-uri 'self'"
+  );
   res.type('html').send(dashboardHtml);
 });
 

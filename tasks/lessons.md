@@ -196,3 +196,18 @@ even to "is this Richard?". Rule: instructions describe WHAT to accomplish and
 WHEN ("confirm once, in your own words, after they state a request") — never
 include a ready-made line the model can lift. If an example is unavoidable,
 make it structurally unusable as a reply (describe it, don't quote it).
+
+## 2026-08-24 — Smoke tests must run through the REAL app stack
+The /admin dashboard shipped "smoke-tested" but had NEVER worked in
+production: the smoke test mounted adminRouter on a bare express app,
+skipping index.ts's `app.use(helmet())` — whose default CSP
+(`script-src 'self'`) silently kills the page's inline <script> in every
+browser. The page styled fine (inline styles ARE allowed), fetches never
+fired, UI stuck on "Loading…". Found only when Aryan opened it for real;
+curl-based checks can't catch it (no JS execution).
+**Rules:** (1) Any browser-facing surface must be smoke-tested through the
+real `index.ts` app (all app-level middleware), not a bare router mount.
+(2) When a page "loads but does nothing", check REQ logs for whether the
+JS's API calls ever ARRIVE — zero arrivals = script never ran (CSP, parse
+error, blocked), not a data/auth problem. (3) Adding app-wide security
+middleware (helmet/CSP) requires re-testing every HTML page it covers.
