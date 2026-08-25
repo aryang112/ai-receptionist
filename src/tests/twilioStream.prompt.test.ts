@@ -310,3 +310,48 @@ describe('buildInstructions — transfer failback greeting', () => {
     );
   });
 });
+
+// N1: NON-CLIENT CALLS section (2026-08-25, Aryan-approved after the 8/25
+// job-seeker call) — one triage principle for calls that aren't about salon
+// services: brief + warm, one pointer, no transfer, wrap up. Job seekers get
+// the website pointer; premises emergencies are the explicit exception.
+describe('buildInstructions — NON-CLIENT CALLS (N1)', () => {
+  it('includes the section with the job-seeker website pointer', () => {
+    const instructions = buildInstructions();
+    expect(instructions).toContain('NON-CLIENT CALLS');
+    expect(instructions).toMatch(/hiring/i);
+    expect(instructions).toMatch(/website/i);
+    expect(instructions).toMatch(/wrong number/i);
+  });
+
+  it('carves out premises emergencies as NOT off-topic', () => {
+    const instructions = buildInstructions();
+    expect(instructions).toMatch(/EXCEPTION[\s\S]*premises/);
+    expect(instructions).toMatch(/break-in/);
+  });
+});
+
+// P1: PRIVACY section (same approval) — blanket never-disclose: no phone
+// numbers for anyone, no schedules/whereabouts, appointments only discussed
+// with the identified owner of the appointment.
+describe('buildInstructions — PRIVACY (P1)', () => {
+  it('includes the never-give-out-numbers and whereabouts rules', () => {
+    const instructions = buildInstructions();
+    expect(instructions).toContain('PRIVACY');
+    expect(instructions).toMatch(/NEVER give out phone numbers/i);
+    expect(instructions).toMatch(/schedule or whereabouts/i);
+    expect(instructions).toMatch(/whether anyone is at the salon/i);
+  });
+
+  it('restricts appointment details to the identified owner of the appointment', () => {
+    const instructions = buildInstructions();
+    expect(instructions).toMatch(/someone ELSE's appointment/);
+    expect(instructions).toMatch(/don't confirm or deny/i);
+  });
+
+  it('is present in the transfer-failback variant too (byte-identical outside the greeting)', () => {
+    const failback = buildInstructions(undefined, null, { transferFailback: true });
+    expect(failback).toContain('NON-CLIENT CALLS');
+    expect(failback).toContain('PRIVACY');
+  });
+});
