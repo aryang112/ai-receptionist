@@ -53,6 +53,19 @@ function getTwilioClient() {
 const MAX_CONCURRENT_STREAMS = 20;
 const PRE_AUTH_TIMEOUT_MS = 10_000;
 
+// 2026-08-24 (observed on Aryan's first two post-deploy test calls): pickup
+// noise — a connect click, a breath, a reflexive "hi" — trips VAD ~1.3s into
+// the greeting, and barge-in truncates it MID-WORD; the model then re-delivers
+// the greeting ("stops, then continues" from the caller's ear). During the
+// first moments of the opening line we therefore IGNORE barge-in truncation:
+// the greeting's audio is typically fully buffered on Twilio's side by then,
+// so skipping the flush lets it play out intact. The caller's words are still
+// committed and answered as soon as the greeting finishes — only the
+// mid-word audio cut is suppressed, and only inside this window anchored to
+// the call's FIRST outbound audio chunk (so it never dampens normal mid-call
+// barge-in).
+const GREETING_BARGE_IN_GRACE_MS = 3000;
+
 // The `host` stream parameter ends up inside a TwiML attribute we build by
 // templating (the <Dial action="…"> URL), and a Host header is ultimately
 // caller-influenced — so accept only what a real host can look like
@@ -248,8 +261,8 @@ Erica cannot connect a caller to Richa while she's away — offer to pass a mess
   // pivots to message-taking. Described, never scripted: a quotable example
   // sentence in a prompt WILL be parroted in the wrong context (lessons.md).
   const greetingSection = opts.transferFailback
-    ? `GREETING (transfer failback — this is NOT a new call): the caller is mid-call with you already. They asked for Richa, you tried to connect them, and her phone did not pick up; the line has just come back to you. Open immediately, without waiting for them to speak. In one or two warm, apologetic sentences, let them know Richa couldn't be reached right now, and offer them the choice of leaving a message for her (which reaches her as a text) or letting you help them yourself. Word it fresh, in your own voice, then stop and let them answer. Do NOT re-deliver the recorded-line greeting, do NOT introduce yourself at length, and do NOT ask who is calling or restart the conversation — this is the SAME phone call, and they have already heard the greeting and the recording notice.`
-    : `GREETING: Open the call yourself, immediately and warmly. Identify as the virtual receptionist AND include a brief, natural recording notice in the same breath: "Hi, this is Erica, the virtual receptionist at ${businessHours.name}, on a recorded line — I can help with bookings or any questions. What can I do for you?" Then wait for the caller. (Maryland is a two-party-consent state and we keep a record of the call, so that brief "on a recorded line" phrase IS the recording notice and is not optional — always include it, kept light and friendly.) If the caller speaks while you're greeting: once the recorded-line mention has been said, NEVER restart or repeat the scripted greeting — just respond to them naturally.`;
+    ? `GREETING (transfer failback — this is NOT a new call): the caller is mid-call with you already. They asked for Richa, you tried to connect them, and her phone did not pick up; the line has just come back to you. Open immediately, without waiting for them to speak. In one or two warm, apologetic sentences, let them know Richa couldn't be reached right now, and offer them the choice of leaving a message for her (which reaches her as a text) or letting you help them yourself. Word it fresh, in your own voice, then stop and let them answer. Do NOT re-deliver the recorded-line greeting, do NOT introduce yourself at length, and do NOT ask who is calling or restart the conversation — this is the SAME phone call, and they have already heard the greeting and the recording notice. If a noise or brief word from them cuts into your opening while it plays, never deliver the opening again — treat it as heard in full and respond naturally from there.`
+    : `GREETING: Open the call yourself, immediately and warmly. Identify as the virtual receptionist AND include a brief, natural recording notice in the same breath: "Hi, this is Erica, the virtual receptionist at ${businessHours.name}, on a recorded line — I can help with bookings or any questions. What can I do for you?" Then wait for the caller. (Maryland is a two-party-consent state and we keep a record of the call, so that brief "on a recorded line" phrase IS the recording notice and is not optional — always include it, kept light and friendly.) If the caller speaks while you're greeting: once the recorded-line mention has been said, NEVER restart or repeat the scripted greeting — just respond to them naturally. This includes a noise or a brief "hi" cutting into the greeting as it plays: never deliver the greeting a second time — treat it as heard in full, and simply answer whatever they said (or ask what you can do for them if it was just noise).`;
 
   // H1: full catalog present → replace the tool-first price paragraph with
   // the hot-loaded, alphabetized list + its own quote-only-from-list rule.
@@ -673,6 +686,9 @@ export class TwilioRealtimeCall {
   // against a second REST redirect and against handleError re-entering itself.
   private transferring = false;
   private hasReceivedFirstAudioChunk = false;
+  // When the call's first outbound audio chunk (the greeting) was sent —
+  // anchors GREETING_BARGE_IN_GRACE_MS. null until Erica first speaks.
+  private firstAudioChunkAt: number | null = null;
   private sessionReady = false;
   // RT-8: media frames that arrive during the ~300–500ms OpenAI handshake (before
   // sessionReady) used to be dropped, swallowing an impatient early "hello?".
@@ -1426,6 +1442,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         '🔊 AI speaking - first audio chunk sent to Twilio'
       );
       this.hasReceivedFirstAudioChunk = true;
+      this.firstAudioChunkAt = Date.now();
     }
 
     try {
@@ -1468,6 +1485,19 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     this.lastActivityAt = Date.now();
     // Marks the caller turn OPEN until speech_stopped — see callerSpeaking.
     this.callerSpeaking = true;
+    // Greeting grace: pickup noise must not chop the opening line mid-word.
+    // The turn above is still tracked and the caller's words still get
+    // answered — only the audio truncation is skipped in this window.
+    if (
+      this.firstAudioChunkAt !== null &&
+      Date.now() - this.firstAudioChunkAt < GREETING_BARGE_IN_GRACE_MS
+    ) {
+      logger.info(
+        { streamSid: this.streamSid },
+        '🔇 barge-in ignored — inside the greeting grace window (pickup noise)'
+      );
+      return;
+    }
     this.handleBargeIn();
   }
 

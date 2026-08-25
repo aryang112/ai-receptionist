@@ -178,6 +178,18 @@ describe('buildInstructions — TRANSFER self-service + closed-hours rules', () 
     );
   });
 
+  it('greeting is never re-delivered after a noise/brief-word interruption (both variants)', () => {
+    // 2026-08-24 post-deploy calls: pickup noise triggered barge-in and the
+    // model re-delivered the greeting ("stops, then continues"). The rule
+    // must exist in the standard AND transfer-failback greeting paragraphs.
+    const standard = buildInstructions();
+    expect(standard).toMatch(/never deliver the greeting a second time/);
+    const failback = buildInstructions(undefined, null, {
+      transferFailback: true,
+    });
+    expect(failback).toMatch(/never deliver the opening again/);
+  });
+
   it('closed-hours: never promise a live transfer, FYI Richa after self-handled changes', () => {
     const instructions = buildInstructions();
     expect(instructions).toMatch(/NEVER say "let me get her"/);

@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from 'vitest';
 import WebSocket from 'ws';
 
 // The OpenAI session constructor throws without a key; some import paths reach it.
@@ -143,5 +151,61 @@ describe('RT-4 — barge-in stays armed through the whole audio tail', () => {
     // And state is reset so the next response re-arms cleanly.
     expect(call.markQueue).toHaveLength(0);
     expect(call.responseStartTimestamp).toBeNull();
+  });
+});
+
+// 2026-08-24 (post-deploy test calls): pickup noise / a reflexive "hi" fired
+// VAD ~1.3s into the greeting; barge-in chopped it mid-word and the model
+// re-delivered it — the caller heard the greeting stop, pause, and start
+// again. Inside GREETING_BARGE_IN_GRACE_MS (3s from the call's FIRST audio
+// chunk) speech_started must not truncate — but must still count as caller
+// activity (turn tracking for the silence watchdog stays live).
+describe('greeting barge-in grace (pickup-noise fix)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-24T20:00:00-04:00'));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('speech_started inside the grace window does NOT truncate or clear', () => {
+    const { call, sent } = buildCall();
+    call.sessionReady = true;
+    call.latestMediaTimestamp = 100;
+    call.sendAudioToTwilio('greet1'); // stamps firstAudioChunkAt
+    call.sendAudioToTwilio('greet2');
+
+    vi.advanceTimersByTime(1300); // Aryan's calls: trigger at ~1.3s
+    call.handleCallerSpeechStarted();
+
+    expect(call.session.truncateActiveResponse).not.toHaveBeenCalled();
+    expect(sent.some((f) => f.event === 'clear')).toBe(false);
+    // The caller turn is still tracked — watchdog semantics unaffected.
+    expect(call.callerSpeaking).toBe(true);
+    // Barge-in stays armed for the rest of the greeting playback.
+    expect(call.responseStartTimestamp).toBe(100);
+    expect(call.markQueue.length).toBeGreaterThan(0);
+  });
+
+  it('speech_started AFTER the grace window truncates normally', () => {
+    const { call, sent } = buildCall();
+    call.sessionReady = true;
+    call.latestMediaTimestamp = 100;
+    call.sendAudioToTwilio('greet1');
+
+    vi.advanceTimersByTime(3001);
+    call.latestMediaTimestamp = 600;
+    call.handleCallerSpeechStarted();
+
+    expect(call.session.truncateActiveResponse).toHaveBeenCalledWith(500);
+    expect(sent.some((f) => f.event === 'clear')).toBe(true);
+  });
+
+  it('no grace before Erica has ever spoken (firstAudioChunkAt null)', () => {
+    const { call } = buildCall();
+    call.sessionReady = true;
+    // No sendAudioToTwilio yet — handleBargeIn's own no-op guards apply, but
+    // the grace guard itself must not throw or block the normal path.
+    call.handleCallerSpeechStarted();
+    expect(call.callerSpeaking).toBe(true);
   });
 });
