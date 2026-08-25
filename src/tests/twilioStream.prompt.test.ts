@@ -119,11 +119,15 @@ describe('buildInstructions — SERVICES & PRICES catalog (H1)', () => {
     expect(instructions).not.toContain('call get_prices WITH the serviceName');
   });
 
-  it('with services=null (default), the SERVICES & PRICES section is byte-identical to the pre-H1 tool-first text', () => {
+  // 2026-08-25 (Aryan): fillers are BEHAVIOR, not script — the section must
+  // describe a varied, own-words filler and must not quote a canned phrase
+  // (a quoted phrase gets parroted verbatim on every call).
+  it('with services=null (default), the tool-first section describes filler behavior without a scripted phrase', () => {
     const instructions = buildInstructions();
-    expect(instructions).toContain(
-      `Callers often ask for prices. When they ask the price of a service, say a quick filler ("Let me check that for you…") and call get_prices WITH the serviceName they asked about — it returns that service's exact price and duration. Only omit serviceName if they ask broadly "what services do you offer." Quote ONLY what get_prices returns; NEVER guess or make up a price. Read service names naturally (ignore any leading numbers/codes like "3)").`
-    );
+    expect(instructions).toContain('call get_prices WITH the serviceName');
+    expect(instructions).toMatch(/filler in your own words/);
+    expect(instructions).not.toContain('say a quick filler ("');
+    expect(instructions).toContain('Quote ONLY what get_prices returns');
   });
 });
 
@@ -350,7 +354,9 @@ describe('buildInstructions — PRIVACY (P1)', () => {
   });
 
   it('is present in the transfer-failback variant too (byte-identical outside the greeting)', () => {
-    const failback = buildInstructions(undefined, null, { transferFailback: true });
+    const failback = buildInstructions(undefined, null, {
+      transferFailback: true,
+    });
     expect(failback).toContain('NON-CLIENT CALLS');
     expect(failback).toContain('PRIVACY');
   });

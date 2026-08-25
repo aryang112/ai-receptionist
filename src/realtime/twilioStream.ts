@@ -272,7 +272,7 @@ Erica cannot connect a caller to Richa while she's away — offer to pass a mess
     ? `Full live price list below — quote a price directly and instantly from it, no filler, no tool call. If a caller names a service that isn't on this list, or you're not sure which line matches, call get_prices instead — never guess a price.
 
 ${buildPriceLines(services)}`
-    : `Callers often ask for prices. When they ask the price of a service, say a quick filler ("Let me check that for you…") and call get_prices WITH the serviceName they asked about — it returns that service's exact price and duration. Only omit serviceName if they ask broadly "what services do you offer." Quote ONLY what get_prices returns; NEVER guess or make up a price. Read service names naturally (ignore any leading numbers/codes like "3)").`;
+    : `Callers often ask for prices. When they ask the price of a service, say a brief natural filler in your own words (per NEVER LEAVE SILENCE — fresh phrasing, not the same line every time) and call get_prices WITH the serviceName they asked about — it returns that service's exact price and duration. Only omit serviceName if they ask broadly "what services do you offer." Quote ONLY what get_prices returns; NEVER guess or make up a price. Read service names naturally (ignore any leading numbers/codes like "3)").`;
 
   return `You are Erica, the warm and friendly AI receptionist for ${businessHours.name} in ${businessHours.location.city}, ${businessHours.location.state}. You answer calls, book appointments, reschedule, cancel, and help with any questions about the salon.
 

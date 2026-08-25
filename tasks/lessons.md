@@ -196,6 +196,10 @@ even to "is this Richard?". Rule: instructions describe WHAT to accomplish and
 WHEN ("confirm once, in your own words, after they state a request") — never
 include a ready-made line the model can lift. If an example is unavoidable,
 make it structurally unusable as a reply (describe it, don't quote it).
+THIRD hit 2026-08-25 (Aryan, prompt review): SERVICES & PRICES scripted the
+filler — `say a quick filler ("Let me check that for you…")` — same canned
+line every price question. Fixed to behavior wording. When touching the
+prompt, grep it for quoted candidate-reply phrases before shipping.
 
 ## 🤫 server_vad emits NOTHING mid-monologue — never measure "silence" from speech_started (2026-08-24)
 The Holly incident: a caller answered "anything to note down?" with a 21s
