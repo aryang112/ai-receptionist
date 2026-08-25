@@ -3,6 +3,26 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-24 (9) — 🔊 GREETING BARGE-IN GRACE shipped + deployed (Fable, direct)
+Aryan's first two post-deploy test calls (23:53Z + 23:58Z): pickup noise /
+reflexive "hi" fired VAD ~1.3s into the greeting → barge-in chopped it
+mid-word → model RE-DELIVERED the greeting (verbatim on call 2, violating
+the never-restart rule) → caller hears stop-pause-restart. Fix `<commit>`:
+- `GREETING_BARGE_IN_GRACE_MS=3000` anchored to the call's FIRST audio chunk
+  (`firstAudioChunkAt`): speech_started inside it skips ONLY the truncation
+  (no clear/flush — greeting audio is already buffered on Twilio and plays
+  out); callerSpeaking/lastActivity tracking unchanged, caller words still
+  committed + answered post-greeting. Applies equally to the failback
+  opening. Mid-call barge-in untouched (window only exists at call start).
+- Prompt: both greeting variants now forbid delivering the opening twice
+  after a noise/brief-word interruption.
+- 333 tests (+4), tsc clean. **DEPLOYED 8:03 PM ET (ea5abcaf, container
+  7f249ee7d2f5)** — awaiting Aryan's re-test.
+⚠️ FLAKE WATCH: admin.route.test.ts failed once-in-a-full-suite-run 3× today
+(different test each time: auth 404-vs-401, join test), never reproducible
+solo or on rerun. Suspect tmp-fixture collision under parallel load. Worth a
+dedicated look in a quiet session.
+
 ## 2026-08-24 (8) — ✅ FULL HOLLY BUNDLE SHIPPED (Fable orchestrating Sonnet/Opus workers)
 Aryan approved implementation (dropped: confirm-before-transfer tweak — the
 committed ASKED-FOR-RICHA behavior stays as-is). Four workers, sequential
