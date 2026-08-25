@@ -3,6 +3,33 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-25 (1) — 📞 call-review sweep + NON-CLIENT CALLS / PRIVACY prompt sections (Fable, direct)
+- **/call-review** (10 new calls: 8× 8/24, 2× 8/25): all 8/24 ugliness =
+  known Holly bugs (pre-fix container) + Aryan's test calls; the post-fix
+  test calls VERIFY greeting grace, no-restart, and the in-window transfer
+  fast path live. 8/25: 2 real callers — 45s silent call (handled
+  gracefully) + a job seeker (Erica improvised "reach out to Richa
+  directly" → prompted this work). 0 bookings, logs clean, no cost
+  outliers. ⚠️ Acceptance item 3 (dial-status ride-back when Richa doesn't
+  pick up) still untested live.
+- `.claude/commands/call-review.md`: new **Known numbers** section — the
+  …5169 number is Aryan's TEST phone (review for regressions, exclude from
+  customer stats/damage).
+- **`58dabd1`**: prompt gets **NON-CLIENT CALLS** (triage principle:
+  brief+warm, ONE pointer, no tools/transfer, wrap up — job seekers →
+  website; genuine vendors/press/landlord → message path; charity → polite
+  decline; wrong number → identify+end; premises emergency = the explicit
+  escalation carve-out) + **PRIVACY** (never give out ANY phone number,
+  schedule, or whereabouts; never confirm who's at the salon; appointment
+  details only with the identified appointment owner; never read numbers
+  aloud beyond confirming the caller's own digits). Aryan-approved. +5
+  prompt tests (N1/P1) → **338 green**, tsc clean.
+- **⚠️ NOT DEPLOYED** — prompt changes need `railway up`; awaiting Aryan.
+- Mishap: blind Write wiped todo.md's 2026-07-18 audit roadmap in 58dabd1;
+  restored from git beneath today's plan. New lessons.md entry.
+- Deferred: Wix-site careers blurb (separate repo, publish needs approval);
+  multilingual policy decision.
+
 ## 2026-08-24 (9) — 🔊 GREETING BARGE-IN GRACE shipped + deployed (Fable, direct)
 Aryan's first two post-deploy test calls (23:53Z + 23:58Z): pickup noise /
 reflexive "hi" fired VAD ~1.3s into the greeting → barge-in chopped it

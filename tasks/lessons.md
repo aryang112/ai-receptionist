@@ -232,3 +232,13 @@ real `index.ts` app (all app-level middleware), not a bare router mount.
 JS's API calls ever ARRIVE — zero arrivals = script never ran (CSP, parse
 error, blocked), not a data/auth problem. (3) Adding app-wide security
 middleware (helmet/CSP) requires re-testing every HTML page it covers.
+
+## 2026-08-25 — Never blind-Write living docs (todo.md wiped)
+Writing a fresh plan to `tasks/todo.md` with Write OVERWROTE the 341-line
+2026-07-18 audit roadmap (49 open items) without noticing — caught only via
+the commit diff's deletion count, restored from git history.
+**Rules:** (1) `state.md`, `tasks/todo.md`, `tasks/lessons.md` are living,
+append-style docs — Read (or at least `wc -l`) before any Write; new plans
+get PREPENDED above old content, never replace it. (2) After any commit,
+sanity-check the insertions/deletions line — an unexpected deletion count
+means something got clobbered.
