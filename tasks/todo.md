@@ -360,3 +360,12 @@ Phases 1+2 are the gate for ANY public deploy. The strategic clock: platform
 first-party AI receptionists are coming (GlossGenius/Fresha announced; Zenoti
 shipped) — the moat window favors shipping 4.1–4.3 and proving ROI on Richa
 this quarter over polishing.
+
+## Nice-to-have backlog (deferred, no date)
+- [ ] Spam/telemarketer lookup on unrecognized inbound numbers — Twilio
+      Lookup + Nomorobo Spam Score add-on ($0.003/lookup, ~$0.20/mo at our
+      volume). Aryan installs the add-on in Twilio Console (Marketplace →
+      Nomorobo Spam Score); code: lookup non-client numbers in parallel with
+      greeting, cache per-number in data/, score=1 → soft guard line in
+      Erica's context (polite-brief-no-transfer). Soft signal ONLY — never
+      auto-block (false positives). Deferred by Aryan 2026-08-26.
