@@ -132,6 +132,22 @@ describe('handleTransferToOwner — timed dial with a dial-status action', () =>
     expect(env.TRANSFER_DIAL_TIMEOUT_S).toBeLessThan(20);
   });
 
+  it('a successful handoff also texts Richa an FYI (voicemail pickups look "completed" — this is the salon-side trail)', async () => {
+    const call = buildCall('CA_dial_fyi');
+    call.publicHost = 'erica.up.railway.app';
+    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    call.notifyOwnerSms = notifyOwnerSms;
+
+    const result = await call.handleTransferToOwner({
+      reason: 'wants to speak with Richa about a bridal party',
+    });
+
+    expect(result).toEqual({ transferred: true });
+    expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
+    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/transferred a call/);
+    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/bridal party/);
+  });
+
   it('with NO public host (old/edge session): byte-identical to the original bare <Dial>', async () => {
     const call = buildCall('CA_dial_bare');
     expect(call.publicHost).toBeUndefined();

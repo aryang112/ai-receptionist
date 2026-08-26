@@ -3292,6 +3292,14 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         { tool: 'transfer_to_owner', callSid: this.callSid },
         'Call transferred successfully'
       );
+      // FYI text (2026-08-26, the telemarketer-to-voicemail call): a <Dial>
+      // answered by Richa's VOICEMAIL reports DialCallStatus=completed — a
+      // "successful" transfer the salon otherwise has no record of. This text
+      // is the salon-side trail for every live handoff: who was sent to her
+      // phone and why, whether or not she actually picked up.
+      void this.notifyOwnerSms(
+        `Hi Richa, it's Erica. FYI — I just transferred a call to your phone: ${this.callerDisplayName()} — ${payload.reason}.`
+      );
       // Set the outcome + record the tool call BEFORE cleanup() — cleanup writes
       // the endCall record using this.outcome.
       this.outcome = 'transferred';
