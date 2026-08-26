@@ -800,14 +800,6 @@ async function fetchAppointment(
 }
 
 export const realPhorest: PhorestPort = {
-  async listStaffNames(): Promise<string[]> {
-    const staff = await loadStaff();
-    return staff
-      .filter((s) => !s.archived)
-      .map((s) => (s.firstName || '').trim())
-      .filter(Boolean);
-  },
-
   async listServices(): Promise<Service[]> {
     const services = await loadServices();
     const normalised = Array.from(services.values()).map(normaliseService);

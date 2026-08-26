@@ -47,10 +47,6 @@ const services: Service[] = [
 
 // export a fake implementation of the PhorestPort contract
 export const mockPhorest: PhorestPort = {
-  async listStaffNames() {
-    return ['Richa'];
-  },
-
   async listServices() {
     return services;
   },

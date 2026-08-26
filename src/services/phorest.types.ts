@@ -80,10 +80,4 @@ export interface PhorestPort {
 
   // Preload client phone index for fast lookups (optional, no-op in mock)
   preloadClients?(): Promise<void>;
-
-  // First names of bookable staff — lets tool handlers recognize when a caller
-  // named a PERSON (e.g. "Richa") where a service name was expected, so the
-  // model can be coached instead of told "not in the system". Optional; both
-  // implementations provide it (mock and real must stay mirror-images).
-  listStaffNames?(): Promise<string[]>;
 }
