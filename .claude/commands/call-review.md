@@ -12,6 +12,13 @@ after-hours forwarding) — this is the standing quality gate.
   `{ "lastReviewedTs": <ms>, "lastRunISO": "<iso>" }`. If missing, default
   lastReviewedTs to 48h ago.
 
+## Known numbers
+- **443-253-5169 (`fromLast4: "5169"`) is Aryan's TEST phone.** Calls from it
+  are internal test calls, not customers. Still review them for regressions
+  (they often exercise fresh deploys), but exclude them from customer-traffic
+  stats, frustration-signal clustering, and "damage" verdicts in the report —
+  label them as test calls.
+
 ## Procedure
 1. Read `data/review-state.json`. Fetch `/admin/api/calls?days=7` and keep
    calls with `startTs > lastReviewedTs`. Report webhook-blocked entries as a
