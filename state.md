@@ -3,6 +3,34 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-26 — 📞 call-review + transfer-FYI text shipped (Fable, direct)
+- **/call-review** (3 new: 1 test + 2 real): all ✅. Test call verified the
+  846da90c deploy's off-topic deflection (linked-list bait → graceful
+  redirect). 11:41 silent call handled cleanly. 11:00 call: caller asked for
+  "the owner" → live transfer fired correctly BUT went straight to Richa's
+  personal voicemail (dial leg answered in <1s, 21s duration,
+  DialCallStatus=completed → no failback, logged as successful transfer).
+  **Aryan follow-up: caller was a TELEMARKETER; Richa screened it
+  deliberately. No damage.** ⚠️ Acceptance item 3 (dial-status ride-back)
+  STILL untested live — voicemail pickup ≠ no-answer, so it didn't exercise
+  the failback.
+- **`4b17308` feat(transfer)**: FYI text to Richa after EVERY successful live
+  handoff (`transfer_to_owner` success path now fires `notifyOwnerSms` with
+  caller name + reason). Why: voicemail pickups report `completed` — the
+  salon had zero record of who was sent to her phone. +1 test → **339
+  green**. Aryan-decided (chose this over press-1 whisper / callerId change —
+  zero added caller wait).
+- **⚠️ NOT DEPLOYED — `railway up` blocked by permission classifier; awaiting
+  Aryan.** Until deployed, transfers still leave no salon-side trail.
+- Noted in logs (NOT yet reviewed, next sweep): call CA7b608d06…224a ended
+  20:41Z with a real BOOKING created (appointmentId SnXt5da…). First live
+  booking since the 846da90c deploy — review it next /call-review.
+- Roadmap idea (Aryan, not yet scoped): spam/telemarketer lookup on inbound
+  unrecognized numbers (Twilio Lookup + Nomorobo spam score add-on; we
+  already capture StirVerstat) → prime Erica to decline pitches gracefully
+  and never transfer flagged callers. Soft signal only — false positives
+  must not make her rude to real clients.
+
 ## 2026-08-25 (2) — 🚀 DEPLOYED + 🏢 company roadmap written (Fable, direct)
 - **DEPLOYED 11:23 PM ET** (deployment 846da90c, container 0397a17a1830):
   NON-CLIENT CALLS + PRIVACY sections (58dabd1) + de-scripted fillers
