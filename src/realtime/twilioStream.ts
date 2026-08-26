@@ -450,12 +450,55 @@ async function getServiceCatalog() {
     }));
 }
 
+/**
+ * True when a caller-supplied "service name" is actually a STAFF member's
+ * first name — the Glenda call (2026-08-26) sent serviceName="Richa" and the
+ * bare notOffered result made the model say "we don't have a service named
+ * Richa in the system". Matching: exact case-insensitive, or edit distance
+ * ≤ 2 for names of 4+ chars (phone transcription mangles names — "Rishka").
+ * Only ever consulted on the notOffered path, so a real service name can
+ * never be swallowed by this.
+ */
+export function matchStaffName(
+  query: string,
+  staffNames: string[]
+): string | null {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  for (const name of staffNames) {
+    const n = name.trim().toLowerCase();
+    if (!n) continue;
+    if (q === n) return name.trim();
+    if (n.length >= 4 && editDistance(q, n) <= 2) return name.trim();
+  }
+  return null;
+}
+
+function editDistance(a: string, b: string): number {
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => {
+    const row = new Array<number>(b.length + 1).fill(0);
+    row[0] = i;
+    return row;
+  });
+  for (let j = 0; j <= b.length; j++) dp[0]![j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i]![j] = Math.min(
+        dp[i - 1]![j]! + 1,
+        dp[i]![j - 1]! + 1,
+        dp[i - 1]![j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+  }
+  return dp[a.length]![b.length]!;
+}
+
 const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     type: 'function',
     name: 'suggest_availability',
     description:
-      'Find available appointments for a given service on a specific date.',
+      "Find available appointment times for a given SERVICE on a specific date. Call it with any service the caller names, even one you have never heard of — it matches against the live catalog. Returns slots as {time, value} pairs: speak the 'time' (e.g. \"1:10 PM\"); when booking or rescheduling, pass that slot's 'value' (24h) as the time. Only ever offer times that appear in slots.",
     parameters: {
       type: 'object',
       properties: {
@@ -480,7 +523,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         serviceName: { type: 'string' },
         date: { type: 'string', description: 'ISO date YYYY-MM-DD' },
-        time: { type: 'string', description: '24h time HH:MM' },
+        time: {
+          type: 'string',
+          description:
+            "24h time HH:MM — the chosen slot's 'value' from suggest_availability",
+        },
         clientId: {
           type: 'string',
           description:
@@ -506,13 +553,18 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     type: 'function',
     name: 'reschedule_appointment',
-    description: 'Reschedule an existing appointment to a new date and time.',
+    description:
+      'Reschedule an existing appointment to a new date and time. Only after the caller explicitly confirmed the new slot.',
     parameters: {
       type: 'object',
       properties: {
         appointmentId: { type: 'string' },
-        date: { type: 'string' },
-        time: { type: 'string' },
+        date: { type: 'string', description: 'ISO date YYYY-MM-DD' },
+        time: {
+          type: 'string',
+          description:
+            "24h time HH:MM — the chosen slot's 'value' from suggest_availability",
+        },
       },
       required: ['appointmentId', 'date', 'time'],
     },
@@ -2019,6 +2071,21 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     };
   }
 
+  /**
+   * Staff-name check for the notOffered path — best-effort only: any staff
+   * fetch failure returns null so the normal notOffered flow proceeds. The
+   * roster is memoized inside the adapter (loadStaff), so this is a cache
+   * read on every call after the first.
+   */
+  private async matchCallerNamedStaff(query: string): Promise<string | null> {
+    try {
+      const names = (await phorest.listStaffNames?.()) ?? [];
+      return matchStaffName(query, names);
+    } catch {
+      return null;
+    }
+  }
+
   private async handleSuggestAvailability(args: unknown) {
     try {
       const parsed = parseToolArgs('suggest_availability', args);
@@ -2047,6 +2114,33 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       // slot fields. If the phrase didn't resolve to a single service, hand the
       // model the alternatives (never crash on a missing .service/.slots).
       if ('notOffered' in result) {
+        // The Glenda call (2026-08-26): a caller who asks "is Richa free at
+        // 5:30?" makes the model pass a PERSON as serviceName. Recognize
+        // staff names here and coach the model in the tool result — the
+        // guidance arrives at the decision moment, unlike a prompt rule
+        // hundreds of lines away (which demonstrably lost).
+        const staffMatch = await this.matchCallerNamedStaff(
+          payload.serviceName
+        );
+        if (staffMatch) {
+          logger.info(
+            {
+              tool: 'suggest_availability',
+              serviceName: payload.serviceName,
+              staffMatch,
+            },
+            'suggest_availability — caller named a staff member, not a service'
+          );
+          CallStore.recordToolCall(this.callSid, {
+            name: 'suggest_availability',
+            ok: true,
+            detail: { staffNameAsService: payload.serviceName },
+          });
+          return {
+            staffMember: staffMatch,
+            note: `The caller named ${staffMatch} — a staff member, not a service. Every service here is with ${staffMatch}. Do not mention this lookup or the system; just ask naturally which service they'd like, then check availability for it.`,
+          };
+        }
         logger.info(
           {
             tool: 'suggest_availability',
@@ -2066,6 +2160,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           // Cap at 3 (CONTRACT #1) so Erica offers a couple of real alternatives,
           // never a long list.
           closest: result.closest.slice(0, 3).map((s) => s.name),
+          note: 'No catalog match for that name. Never tell the caller a name was not found or mention the system or catalog — ask naturally what they would like done, or offer the closest services if any fit.',
         };
       }
       if ('ambiguous' in result) {
@@ -2087,6 +2182,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           serviceName: payload.serviceName,
           // Cap at 3 (CONTRACT #1) — a short "did you mean X or Y?" list.
           candidates: result.ambiguous.slice(0, 3).map((s) => s.name),
+          note: 'Several services could match — ask conversationally which of the candidates they meant. Never mention the system or read this like a list dump.',
         };
       }
 
@@ -2161,6 +2257,17 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           offered: slots.length,
         },
       });
+      // State-specific coaching rides WITH the data (replaces the prompt's
+      // old READING RESULTS prose): closed-day vs closed-now vs fully-booked
+      // wording arrives exactly when that state is in front of the model.
+      const stateNote = !hours.salonOpenThatDay
+        ? `The salon does not open that day at all — say we are closed then and offer the next opening (${hours.nextOpen ?? 'another day'}). Never call a closed day fully booked.`
+        : hours.closedRightNow
+          ? `Already closed for today (hours were ${hours.hoursThatDay}) — say so and offer the next opening (${hours.nextOpen ?? 'tomorrow'}). Never call it fully booked.`
+          : slots.length === 0
+            ? 'Open that day but genuinely fully booked — say so and offer another day.'
+            : 'Offer only times from slots, nearest to what the caller asked for. If they want a time not in slots, it is not open — offer the nearest listed times instead, never invent one.';
+
       return {
         service: result.service.name,
         date: result.date,
@@ -2169,6 +2276,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         hoursThatDay: hours.hoursThatDay,
         closedRightNow: hours.closedRightNow,
         nextOpen: hours.nextOpen,
+        note: stateNote,
       };
     } catch (error) {
       logger.error(
@@ -2180,7 +2288,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         ok: false,
         error: this.formatError(error),
       });
-      return { error: this.formatError(error) };
+      return {
+        error: this.formatError(error),
+        note: 'Say a brief natural line in your own words and retry this tool once. If it fails again, offer to get Richa involved rather than retrying further.',
+      };
     }
   }
 
@@ -2988,7 +3099,13 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         ok: true,
         detail: { clientId: payload.clientId, count: clean.length },
       });
-      return { appointments: clean };
+      return {
+        appointments: clean,
+        note:
+          clean.length === 0
+            ? 'No upcoming appointments on this account. Say so gently and offer to book a new one (or, if they wanted to cancel, ask if it might be under a different name or number). Never invent an appointment and never transfer for this.'
+            : 'Sorted soonest-first. Lead with just the soonest one and quote its service, date, and time fields exactly as given — never a long list, never approximated times.',
+      };
     } catch (error) {
       logger.error(
         { tool: 'list_appointments', error: this.formatError(error) },
@@ -2999,7 +3116,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         ok: false,
         error: this.formatError(error),
       });
-      return { error: this.formatError(error) };
+      return {
+        error: this.formatError(error),
+        note: 'Say a brief natural line in your own words and retry this tool once. If it fails again, offer to get Richa involved rather than retrying further.',
+      };
     }
   }
 
