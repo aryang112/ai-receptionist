@@ -60,14 +60,14 @@ describe('buildInstructions — SPAM & TELEMARKETING (S1)', () => {
     expect(instructions).toMatch(/never (transfer|engage)/i);
   });
 
-  it('sits between CONVERSATION POLICY and GENERAL RULES', () => {
+  it('sits in the safety region: after SAFETY & ESCALATION, before NON-CLIENT CALLS', () => {
     const instructions = buildInstructions();
-    const policyIdx = instructions.indexOf('CONVERSATION POLICY');
+    const safetyIdx = instructions.indexOf('SAFETY & ESCALATION');
     const spamIdx = instructions.indexOf('SPAM & TELEMARKETING');
-    const generalIdx = instructions.indexOf('GENERAL RULES');
-    expect(policyIdx).toBeGreaterThan(-1);
-    expect(spamIdx).toBeGreaterThan(policyIdx);
-    expect(generalIdx).toBeGreaterThan(spamIdx);
+    const nonClientIdx = instructions.indexOf('NON-CLIENT CALLS');
+    expect(safetyIdx).toBeGreaterThan(-1);
+    expect(spamIdx).toBeGreaterThan(safetyIdx);
+    expect(nonClientIdx).toBeGreaterThan(spamIdx);
   });
 });
 
@@ -279,7 +279,7 @@ describe('buildInstructions — transfer failback greeting', () => {
     const failback = buildInstructions(NOW, null, { transferFailback: true });
     const greeting = failback.slice(
       failback.indexOf('GREETING (transfer failback'),
-      failback.indexOf('NEVER LEAVE SILENCE:')
+      failback.indexOf('IDENTIFY (required before any account action')
     );
     // A double-quoted fragment inside the paragraph would be a ready-made
     // line the model can lift verbatim into the wrong moment.
@@ -292,19 +292,20 @@ describe('buildInstructions — transfer failback greeting', () => {
     expect(failback).not.toBe(standard);
 
     const upTo = (s: string) => s.slice(0, s.indexOf('GREETING'));
-    const from = (s: string) => s.slice(s.indexOf('NEVER LEAVE SILENCE:'));
+    const from = (s: string) =>
+      s.slice(s.indexOf('IDENTIFY (required before any account action'));
     expect(upTo(failback)).toBe(upTo(standard));
     expect(from(failback)).toBe(from(standard));
 
-    // Spot-check one untouched section explicitly: TRANSFER TO RICHA still
+    // Spot-check one untouched section explicitly: SAFETY & ESCALATION still
     // reads exactly as it does on a normal call.
-    const transferSection = (s: string) =>
+    const safetySection = (s: string) =>
       s.slice(
-        s.indexOf('═══ TRANSFER TO RICHA ═══'),
-        s.indexOf('═══ ENDING THE CALL ═══')
+        s.indexOf('═══ SAFETY & ESCALATION ═══'),
+        s.indexOf('═══ CURRENT STATUS')
       );
-    expect(transferSection(failback)).toBe(transferSection(standard));
-    expect(transferSection(standard).length).toBeGreaterThan(0);
+    expect(safetySection(failback)).toBe(safetySection(standard));
+    expect(safetySection(standard).length).toBeGreaterThan(0);
   });
 
   it('default/omitted opts keep the standard greeting (no behavior change for normal calls)', () => {
@@ -359,5 +360,93 @@ describe('buildInstructions — PRIVACY (P1)', () => {
     });
     expect(failback).toContain('NON-CLIENT CALLS');
     expect(failback).toContain('PRIVACY');
+  });
+});
+
+// Prompt rework (2026-08-26, docs/PROMPT_REWORK_PROPOSAL_2026-08-26.md):
+// restructured to the OpenAI Realtime guide skeleton. These lock the
+// architecture so it doesn't silently regrow into sediment.
+describe('buildInstructions — reworked skeleton (2026-08-26)', () => {
+  it('follows the guide section order, with dynamic CURRENT STATUS dead last', () => {
+    const p = buildInstructions();
+    const order = [
+      '═══ PERSONALITY & TONE ═══',
+      '═══ REFERENCE PRONUNCIATIONS ═══',
+      '═══ CONTEXT ═══',
+      '═══ SERVICES & PRICES ═══',
+      '═══ TOOLS ═══',
+      '═══ INSTRUCTIONS ═══',
+      '═══ PRIVACY',
+      '═══ CONVERSATION FLOW ═══',
+      '═══ SAFETY & ESCALATION ═══',
+      '═══ CURRENT STATUS',
+    ];
+    const idx = order.map((s) => p.indexOf(s));
+    idx.forEach((i, n) => {
+      expect(i, `section missing: ${order[n]}`).toBeGreaterThan(-1);
+      if (n > 0)
+        expect(i, `out of order: ${order[n]}`).toBeGreaterThan(idx[n - 1]!);
+    });
+    // Dynamic values (clock/status) must live at the END — a stable static
+    // prefix is what makes the instructions cache-friendly.
+    expect(p.indexOf('CURRENT DATE & TIME')).toBeGreaterThan(
+      p.indexOf('SAFETY & ESCALATION')
+    );
+  });
+
+  it('has the guide-prescribed blocks: unclear audio, pronunciations, numeric escalation threshold', () => {
+    const p = buildInstructions();
+    expect(p).toContain('UNCLEAR AUDIO');
+    expect(p).toMatch(/never guess at what they said/);
+    expect(p).toMatch(/REE-cha/);
+    expect(p).toMatch(/MORE THAN 2 tool failures/);
+  });
+
+  it('moved-to-tools content is GONE from the prompt (single source of truth)', () => {
+    const p = buildInstructions();
+    // READING RESULTS coaching now rides in suggest_availability results.
+    expect(p).not.toContain('READING suggest_availability RESULTS');
+    expect(p).not.toContain('salonOpenThatDay');
+    // Wire formats live in tool parameter descriptions now.
+    expect(p).not.toMatch(/pass (that|the chosen) slot's value/);
+    // Factually wrong since Phorest enforces its own lead time — deleted.
+    expect(p).not.toContain('No minimum notice');
+    // The old numbered flow scripts are replaced by SERVE states.
+    expect(p).not.toContain('═══ BOOKING ═══');
+    expect(p).not.toContain('═══ CUSTOMER IDENTIFICATION');
+  });
+
+  it('stays under the token budget (was ~5.5k before the rework)', () => {
+    const p = buildInstructions();
+    // chars/4 ≈ tokens; ceiling leaves headroom over the ~3.5k target so
+    // legitimate additions fit, but sediment-scale regrowth fails the build.
+    expect(Math.round(p.length / 4)).toBeLessThan(4200);
+  });
+
+  it('keeps every load-bearing rule family (semantic pin, not position)', () => {
+    const p = buildInstructions();
+    // never-invent family
+    expect(p).toMatch(/NEVER INVENT/);
+    expect(p).toMatch(/EXACTLY as given/);
+    // confirm-before-write
+    expect(p).toMatch(/explicitly confirmed the exact service, day, and time/);
+    // caller-leads + let-finish
+    expect(p).toMatch(/LET THE CALLER LEAD/);
+    expect(p).toMatch(/Let the caller FINISH/);
+    // filler-before-tools (described, never scripted — lessons.md parrot rule)
+    expect(p).toMatch(/filler in your own words/);
+    // English-only + fixed persona
+    expect(p).toMatch(/English only/);
+    expect(p).toMatch(/not a rule change/);
+    // recognized-caller: never ask for the number, never re-lookup a changed one
+    expect(p).toMatch(/NEVER ask for their phone number/);
+    expect(p).toMatch(/number CHANGED/);
+    // multi-service stays normal, no transfer
+    expect(p).toMatch(/second or third/);
+    // mid-flow pivot
+    expect(p).toMatch(/ABANDON the old flow/);
+    // end_call discipline
+    expect(p).toMatch(/SAME turn/);
+    expect(p).toMatch(/never just because the line went quiet/i);
   });
 });
