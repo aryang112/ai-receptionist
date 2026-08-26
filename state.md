@@ -3,6 +3,29 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-26 (3) — 🔴 REWORK REVERTED after failed live test (Fable, direct)
+- Aryan deployed the rework 22:06Z, test-called twice, called it "failing
+  miserably", ordered immediate revert. **Reverted 22:11Z** (c853ba4+1da4b94
+  revert 0cab41d+ba7da39; FYI-text 4b17308 kept — no caller-facing change).
+  Clean boot 63e582731ce8, health 200, 339 tests green. Prod = last night's
+  behavior again.
+- **Evidence from the two test calls** (bad-build logs via deployment id
+  41e0634f, admin transcripts): call 1 — greeting TRUNCATED (no "What can I
+  do for you?"), caller's "hi" got a doubled second open. Call 2 — Erica
+  INTERRUPTED him mid-sentence ("...available at—" → she pounced), then asked
+  "Are you Aryan?" and STEAMROLLED it (ran lookup+availability and answered
+  herself 2s later without waiting). ALSO: the staff-name fix itself WORKED
+  ("which service with Richa" — zero system-speak), and call 2's transcript
+  is EMPTY in the admin API despite logged turns (persistence gap — separate
+  bug lead).
+- **Read**: the flow compression likely lost the turn-taking pacing the old
+  numbered scripts enforced (ask → WAIT → act). Prompt content mostly fine;
+  pacing regressed. Do NOT re-land without a staging test path.
+- **PROCESS FAILURE (Aryan, explicit)**: he wanted to test BEFORE deploy;
+  there is no staging — prod is the only Erica. Next action: build a staging
+  path (second Twilio number → local dev via ngrok, or an erica-staging
+  Railway service) BEFORE any rework retry.
+
 ## 2026-08-26 (2) — 🏗️ PROMPT REWORK SHIPPED (Phases 1–3) + Phorest lead-time fixed (Fable, direct)
 - **Phorest 60-min same-day lead time found & fixed**: Glenda wanted 5:30,
   Erica offered 5:45 — proven (live probes) to be Phorest's own online-booking
