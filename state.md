@@ -25,6 +25,13 @@
   there is no staging — prod is the only Erica. Next action: build a staging
   path (second Twilio number → local dev via ngrok, or an erica-staging
   Railway service) BEFORE any rework retry.
+- **LOCAL TEST PATH BUILT (no second number — Aryan declined buying one)**:
+  `scripts/test-call-local.sh` — Twilio API places an OUTBOUND call from
+  TWILIO_NUMBER to the test cell with Url= the laptop's ngrok /twilio/voice;
+  prod webhook untouched, customers unaffected. Runbook: `npm run dev` +
+  `ngrok http 5050` + the script. Caveats in script header (real Phorest,
+  transfers ring real OWNER_PHONE, caller-ID recognition won't fire, no
+  src saves mid-call). UNTESTED end-to-end — first use = rework v2 testing.
 
 ## 2026-08-26 (2) — 🏗️ PROMPT REWORK SHIPPED (Phases 1–3) + Phorest lead-time fixed (Fable, direct)
 - **Phorest 60-min same-day lead time found & fixed**: Glenda wanted 5:30,
