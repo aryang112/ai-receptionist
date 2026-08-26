@@ -3,6 +3,27 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-25 (2) — 🚀 DEPLOYED + 🏢 company roadmap written (Fable, direct)
+- **DEPLOYED 11:23 PM ET** (deployment 846da90c, container 0397a17a1830):
+  NON-CLIENT CALLS + PRIVACY sections (58dabd1) + de-scripted fillers
+  (008c2f5, b81dae4). Clean boot: catalog 63, client index 4179, health +
+  admin 200, zero log warns. Aryan-directed ("get it deployed for tomorrow").
+  First live traffic will verify; next /call-review should watch job-seeker /
+  privacy behavior specifically.
+- **Company strategy shipped**: docs/AI_SALON_COMPANY_RESEARCH_2026-08-25.md
+  (3-agent web research: Boulevard/moderns, legacy base, vertical-AI
+  playbooks) + docs/COMPANY_ROADMAP_2026-08-25.md (4 products = one AI front
+  desk; Phase 0 prove-at-Richa's → productize → integration breadth →
+  scale). Aryan's other assets: review automation (prod), SMS bot + email
+  marketing agents (WIP this week — build them multi-tenant-shaped, shared
+  per-salon event ledger).
+- Prompt-research learnings (3-agent sweep, NOT yet applied, Aryan deferred):
+  unclear-audio block, numeric escalation thresholds, booking invariants,
+  rule-conflict audit, dynamic-vars-at-end for caching. See session notes /
+  roadmap Phase 0.
+- Deferred decisions: group-1 scripted-phrase sweep (pleasantries), company
+  name/pricing/trial design, Wix careers blurb, multilingual.
+
 ## 2026-08-25 (1) — 📞 call-review sweep + NON-CLIENT CALLS / PRIVACY prompt sections (Fable, direct)
 - **/call-review** (10 new calls: 8× 8/24, 2× 8/25): all 8/24 ugliness =
   known Holly bugs (pre-fix container) + Aryan's test calls; the post-fix
