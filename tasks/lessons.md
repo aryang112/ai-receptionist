@@ -237,6 +237,27 @@ JS's API calls ever ARRIVE — zero arrivals = script never ran (CSP, parse
 error, blocked), not a data/auth problem. (3) Adding app-wide security
 middleware (helmet/CSP) requires re-testing every HTML page it covers.
 
+## 2026-08-26 — The fix ladder: a prompt rule is the LAST resort, not the first
+The Glenda call: Erica said "we don't have a service named Richa in the
+system" while a rule forbidding exactly that sat ~100 lines away in the
+prompt. The rule existed and lost — a SALIENCE failure, not an obedience
+failure. Adding more prompt lines makes the next salience failure MORE
+likely (every line dilutes every other line).
+**Rule — when a call flub appears, fix at the FIRST layer that can hold it:**
+1. **Tool-result `note`** — coaching that arrives at the decision moment
+   (error recovery, state-specific phrasing, "never say X here").
+2. **Tool schema/description** — wire formats, trigger conditions, slot
+   contracts.
+3. **Code** — deterministic invariants (staff-name detection, pre-write
+   re-validation, gates).
+4. **Conversation Flow state** — if it's genuinely a flow-shape change.
+5. **Prompt prose** — only for identity, principles, values (privacy,
+   compliance). If the fix is "add a scenario paragraph", it's a band-aid.
+The prompt is structured to the OpenAI Realtime guide skeleton (locked by
+twilioStream.prompt.test.ts, incl. a ~4.2k-token budget ceiling) — new
+content goes in its section or, better, down the ladder. Full rationale:
+docs/PROMPT_REWORK_PROPOSAL_2026-08-26.md.
+
 ## 2026-08-25 — Never blind-Write living docs (todo.md wiped)
 Writing a fresh plan to `tasks/todo.md` with Write OVERWROTE the 341-line
 2026-07-18 audit roadmap (49 open items) without noticing — caught only via

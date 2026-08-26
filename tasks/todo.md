@@ -362,6 +362,13 @@ shipped) — the moat window favors shipping 4.1–4.3 and proving ROI on Richa
 this quarter over polishing.
 
 ## Nice-to-have backlog (deferred, no date)
+- [ ] Greeting: signal callers they can just talk normally ("thrown-off by
+      AI" feedback, Aryan 2026-08-26) — callers freeze up on an AI
+      receptionist. Constraint: greeting is already long (compliance
+      recording notice is mandatory) so this must NOT lengthen it — explore
+      re-wording within the same breath, or a natural nudge on the first
+      unclear/silent turn instead of the cold open. Do AFTER the prompt
+      rework has soaked in production.
 - [ ] Spam/telemarketer lookup on unrecognized inbound numbers — Twilio
       Lookup + Nomorobo Spam Score add-on ($0.003/lookup, ~$0.20/mo at our
       volume). Aryan installs the add-on in Twilio Console (Marketplace →

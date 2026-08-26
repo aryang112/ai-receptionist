@@ -3,6 +3,32 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-26 (2) — 🏗️ PROMPT REWORK SHIPPED (Phases 1–3) + Phorest lead-time fixed (Fable, direct)
+- **Phorest 60-min same-day lead time found & fixed**: Glenda wanted 5:30,
+  Erica offered 5:45 — proven (live probes) to be Phorest's own online-booking
+  lead time, NOT our code/prompt. Aryan changed the Phorest setting → verified
+  live: earliest slot now 17 min out. Deleted the prompt's false "No minimum
+  notice" line.
+- **`ba7da39` Phase 1 (tool layer)**: staff-name-as-service detection
+  (matchStaffName + listStaffNames on PhorestPort, mock+real), `note`
+  coaching on suggest_availability (notOffered/ambiguous/closed-day/
+  closed-now/fully-booked/error) + list_appointments (empty/success/error),
+  slot time/value contract → tool descriptions. +14 tests.
+- **`0cab41d` Phases 2+3 (skeleton)**: buildInstructions restructured to the
+  OpenAI Realtime guide order, ending with dynamic CURRENT STATUS
+  (cache-friendly prefix). NEW: UNCLEAR AUDIO block, REE-cha pronunciation,
+  MORE THAN 2 failures threshold. DELETED: READING RESULTS, wire formats,
+  4 numbered flow scripts (→ GREETING/IDENTIFY/SERVE/CLOSE states), dupes.
+  5,555 → ~4,040 est tokens (−27%). Skeleton+budget+rule families
+  test-locked (358 green, tsc clean). Parrot audit clean.
+- **lessons.md: the FIX LADDER** (tool-note → schema → code → flow → prompt
+  prose LAST) — the standing rule for every future flub.
+- **⚠️ NOT DEPLOYED — awaiting Aryan's test calls** (scenario script:
+  docs/TEST_CALL_SCRIPT_2026-08-26.md). Deploy = `railway up` after he
+  confirms. ALSO still undeployed: the transfer-FYI text (4b17308).
+- Backlog added (todo.md): "speak normally" greeting nudge (post-rework),
+  spam lookup (earlier today).
+
 ## 2026-08-26 — 📞 call-review + transfer-FYI text shipped (Fable, direct)
 - **/call-review** (3 new: 1 test + 2 real): all ✅. Test call verified the
   846da90c deploy's off-topic deflection (linked-list bait → graceful

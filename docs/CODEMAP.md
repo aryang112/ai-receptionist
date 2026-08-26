@@ -20,7 +20,19 @@ Caller dials Twilio number
 ```
 
 ## src/realtime/
-- **twilioStream.ts** — the brain. Holds Erica's system prompt (`buildInstructions()`),
+- **twilioStream.ts** — the brain. Holds Erica's system prompt (`buildInstructions()` —
+  **2026-08-26 restructured to the OpenAI Realtime guide skeleton**: Role →
+  Personality & Tone → Reference Pronunciations → Context → Tools →
+  Instructions → Privacy → Conversation Flow (GREETING/IDENTIFY/SERVE/CLOSE
+  states) → Safety & Escalation → dynamic CURRENT STATUS last. Section order,
+  required blocks, and a ~4.2k-token budget ceiling are locked by
+  twilioStream.prompt.test.ts. Situational coaching lives in tool-result
+  `note` fields, NOT prompt prose — see the fix ladder in tasks/lessons.md
+  and docs/PROMPT_REWORK_PROPOSAL_2026-08-26.md. `matchStaffName()` +
+  `matchCallerNamedStaff` catch a staff name passed as serviceName (the
+  Glenda flub) and coach via the tool result; suggest_availability /
+  list_appointments results carry state-specific notes; wire formats live in
+  TOOL_DEFINITIONS descriptions),
   `TOOL_DEFINITIONS`, all tool handlers (`handleSuggestAvailability`,
   `handleBookAppointment`, `handleReschedule`, `handleCancel`, `handleGetBusinessHours`,
   `handleGetPrices`, `handleLookupCustomer`, `handleListAppointments`,
