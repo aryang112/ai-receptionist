@@ -746,6 +746,24 @@ export class TwilioRealtimeCall {
   private silenceWatchdogTimer: NodeJS.Timeout | undefined = undefined;
   private mediaWatchdogTimer: NodeJS.Timeout | undefined = undefined;
   private lastMediaFrameAt = 0;
+  // 31924 forensics: outbound-frame accounting + Twilio ping tracking.
+  private outFrames = 0;
+  private outMarks = 0;
+  private outClears = 0;
+  private maxPayloadLen = 0;
+  private lastTwilioPingAt = 0;
+
+  private outboundStats() {
+    return {
+      outFrames: this.outFrames,
+      outMarks: this.outMarks,
+      outClears: this.outClears,
+      maxPayloadLen: this.maxPayloadLen,
+      lastPingAgoMs: this.lastTwilioPingAt
+        ? Date.now() - this.lastTwilioPingAt
+        : null,
+    };
+  }
   // True while a silence-triggered goodbye has been requested and we're in
   // the ~4s grace window waiting to see if the caller speaks up before the
   // actual hangup. Guards the tick from re-requesting the goodbye every 5s
@@ -894,7 +912,25 @@ export class TwilioRealtimeCall {
     logger.info('New Twilio WebSocket connection');
 
     socket.on('message', (data: WebSocket.RawData) => this.handleMessage(data));
-    socket.on('close', () => this.cleanup());
+    // 31924 forensics (2026-08-27): four calls were killed by Twilio with
+    // "Stream - Websocket - Protocol Error" and our socket saw NO close for
+    // minutes (half-open zombie). Log the close code/reason and Twilio's
+    // pings so the next occurrence shows what the transport actually did.
+    socket.on('close', (code: number, reason: Buffer) => {
+      logger.info(
+        {
+          streamSid: this.streamSid,
+          code,
+          reason: reason?.toString() || '',
+          ...this.outboundStats(),
+        },
+        'Twilio socket CLOSED'
+      );
+      this.cleanup();
+    });
+    socket.on('ping', () => {
+      this.lastTwilioPingAt = Date.now();
+    });
     socket.on('error', (err) =>
       this.handleError(
         err instanceof Error ? err : new Error('Twilio socket error')
@@ -1480,6 +1516,9 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     }
 
     try {
+      this.outFrames += 1;
+      if (base64Mulaw.length > this.maxPayloadLen)
+        this.maxPayloadLen = base64Mulaw.length;
       this.socket.send(
         JSON.stringify({
           event: 'media',
@@ -1500,6 +1539,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
   /** Mark each outbound chunk so we can tell when Erica is still mid-utterance. */
   private sendMark() {
     if (!this.streamSid || this.closed) return;
+    this.outMarks += 1;
     this.socket.send(
       JSON.stringify({
         event: 'mark',
@@ -1606,6 +1646,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     );
     this.session.truncateActiveResponse(elapsed);
     if (this.streamSid && !this.closed) {
+      this.outClears += 1;
       this.socket.send(
         JSON.stringify({ event: 'clear', streamSid: this.streamSid })
       );
@@ -1656,7 +1697,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       const quietMs = Date.now() - this.lastMediaFrameAt;
       if (quietMs < MEDIA_INACTIVITY_MS) return;
       logger.warn(
-        { streamSid: this.streamSid, quietMs },
+        { streamSid: this.streamSid, quietMs, ...this.outboundStats() },
         '💀 inbound media stopped — treating the stream as dead'
       );
       this.setEndReasonOnce('stream died — inbound audio stopped');
