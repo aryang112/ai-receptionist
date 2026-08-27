@@ -62,11 +62,18 @@ Verify after either: /health 200, fresh "Server up" hostname in
   a stated name. (4) Multi-match booking discussion parked ("never mind").
 - **Watch (evidence pending from Aryan)**: Erica sometimes "pronounces her
   thinking" aloud — do not fix until he brings examples.
-- **CLEANUP OWED after testing**: cancel tomorrow's 12:45 PM Brow Threading
-  (test booking, client "Prashanna KC" ***5169 id GkGug7O6rR…, REAL calendar
-  entry), delete/merge that test client, restore Aryan's real number
-  (see 2026-08-27 (2) entry). Verified: caller-ID phone fallback + spelled
-  name both landed correctly in Phorest on the 7:03 PM call.
+- **CLEANUP (updated ~19:31 ET)**: DONE — 12:45 PM test booking cancelled;
+  test client "Prashanna KC" (GkGug7O6rR14UfSUGwLVFQ) unmapped from ***5169
+  (mobile → placeholder 410-555-0143; Phorest DELETE returns 500, hard
+  delete impossible via API). Prod restarted (container 15422cdaa628) —
+  fresh index no longer resolves 5169. STILL OWED after testing: restore
+  Aryan's real number on cZnmhQAdjNMKRauaLNjh0w (see 2026-08-27 (2)), and
+  optionally have Richa hard-delete the two placeholder clients (0142/0143)
+  in the Phorest UI. NOTE: any future new-client TEST booking from 5169
+  re-creates this mapping via the caller-ID fallback — either re-unmap
+  after, or Aryan dictates a fictional 555-01XX number during the test.
+  Verified earlier: caller-ID phone fallback + spelled name both landed
+  correctly in Phorest on the 7:03 PM call.
 - Deploys: forensics container 15091806e7e2 → booking fixes e151a8c3d4fc →
   goodbye/name 30075ec6b4c6 (health 200 each). No new 31924s since 21:54.
 
