@@ -10,8 +10,14 @@ Aryan ordered a second revert minutes after the rework-v2 deploy went live.
 main until Aryan explicitly clears the rework for prod again.** The rework
 code stays on main for continued fixing; deploys of it go through
 scripts/test-call-local.sh first, then his explicit go.
-Reason for this revert: not yet diagnosed — awaiting Aryan's observation
-(revert-first-diagnose-after, per the standing rule below).
+Revert reason DIAGNOSED (21:45 ET): mid-greeting "hello" transcribed as
+Latin garble "Cholon." → failed the trivial-word list → classified
+substantive → answered post-greeting (redundant re-open). FIXED on main
+(8fd337e): 1–2 words with no action word = hello/noise → silence.
+IMPORTANT: Aryan then confirmed the SAFE build has the same
+follow-up-after-greeting behavior (it has NO silence mechanism at all, and
+truncates the greeting past 3s) — the revert removed the fix, not the
+problem. Rework redeploy = strictly better on this axis; awaiting his go.
 
 ## 🛟 PROD ROLLBACK POINT (Aryan-mandated, 2026-08-26 — keep until he clears it)
 If ANY issue is noticed on the rework-v2 prod deploy, revert IMMEDIATELY —
