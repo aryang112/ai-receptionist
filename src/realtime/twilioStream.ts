@@ -481,7 +481,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
             name: {
               type: 'string',
               description:
-                "The caller's name as CONFIRMED with them before booking. If they spelled it out, read THAT spelling back to confirm (\"P-R-A-S-H-A-N-N-A, right?\") — never ask them to spell what they already spelled. If the name is unusual or you're unsure you heard it right and they didn't spell it, ask them to spell it, then read it back. A clearly-heard common name needs no spelling ritual.",
+                'The caller\'s first and last name. Ask every caller the same simple way — "Could I get your first and last name?" — and NEVER comment on the name itself (never call it unique, unusual, or difficult, and never announce your confirmation policy). Then judge silently: heard it clearly and certainly → book it, no confirmation ritual. Anything less than certain → confirm before booking: if they spelled it, read THAT spelling back ("P-R-A-S-H-A-N-N-A — did I get that right?") — never ask them to re-spell it; if they didn\'t spell it, read back what you heard or ask them to spell it, giving your own hearing as the reason ("I want to make sure I get it right"), never their name.',
             },
             phone: {
               type: 'string',
@@ -3130,7 +3130,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       });
       return {
         found: false,
-        note: 'No matching client — completely normal for a new caller; booking will create their profile. Before booking, make sure their NAME is confirmed: if the caller spelled it out, read that spelling back to them to confirm — never ask them to spell it again; if it is unusual or was unclear and they did not spell it, ask them to spell it, then read it back. If they said the number they are calling from is fine, it is attached to the booking automatically — do not ask them to dictate it.',
+        note: 'No matching client — completely normal for a new caller; booking will create their profile. Their name: if you heard it clearly and certainly, just proceed — no confirmation ritual. If you are anything less than certain, confirm it before booking: read back the spelling they gave (never ask them to re-spell it), or read back what you heard. Never comment on the name itself — no "unique" or "unusual" — the only reason you ever give is wanting to get it right. If they said the number they are calling from is fine, it is attached to the booking automatically — do not ask them to dictate it.',
       };
     } catch (error) {
       logger.error(
@@ -3557,7 +3557,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
    */
   private async endCallNow(
     reason: string,
-    opts?: { ignoreBargeIn?: boolean }
+    opts?: { ignoreBargeIn?: boolean; expectGoodbye?: boolean }
   ): Promise<{ status: 'ended' | 'aborted' | 'error'; message?: string }> {
     // AUDIT FIX (2026-08-22, P2): one-shot entry guard. `transferring` is set
     // by every hangup/handoff owner (a real transfer, or a previous
@@ -3602,6 +3602,15 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     this.transferring = true;
     // Goodbye lines run longer than the transfer handoff line — cap higher.
     const epochAtRequest = this.bargeInEpoch;
+    // Goodbye race fix (2026-08-27): the model may invoke end_call BEFORE
+    // generating its goodbye (tool-then-speech ordering) — at that instant the
+    // mark queue is empty, the drain below resolves immediately, and the
+    // goodbye is born into a dead call (seen live 7:03 PM: hangup :34.65,
+    // "Take care…" generated :35.9). When a goodbye is expected, give the
+    // post-tool response a short window to START playing before draining it.
+    if (opts?.expectGoodbye) {
+      await this.waitForGoodbyeToStart(3000);
+    }
     await this.waitForPlaybackToDrain(6000);
     // Caller interrupted the goodbye ("oh wait—") → the barge-in cleared the
     // mark queue, which is why the drain resolved. Don't hang up on them.
@@ -3687,7 +3696,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       this.outcome = 'spam';
     }
     const result = await this.endCallNow(
-      reason === 'spam' ? 'spam decline' : 'caller confirmed done'
+      reason === 'spam' ? 'spam decline' : 'caller confirmed done',
+      // Only the model's own end_call expects a goodbye line to follow the
+      // tool call — watchdog/cap hangups must stay immediate.
+      { expectGoodbye: true }
     );
     if (result.status === 'aborted') {
       if (reason === 'spam' && this.outcome === 'spam') {
@@ -3781,6 +3793,33 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
    */
   private async notifyOwnerSms(body: string): Promise<void> {
     return sendOwnerSms(body);
+  }
+
+  /**
+   * Inverse of waitForPlaybackToDrain: wait for outbound audio to APPEAR
+   * (mark queue becoming non-empty), up to capMs. Used by the end_call grace
+   * so a goodbye generated after the tool call still gets spoken; resolves
+   * immediately if audio is already playing or the call closed. A model that
+   * never speaks just costs the cap, then the hangup proceeds.
+   */
+  private waitForGoodbyeToStart(capMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      if (this.markQueue.length > 0 || this.closed) {
+        resolve();
+        return;
+      }
+      const started = Date.now();
+      const timer = setInterval(() => {
+        if (
+          this.markQueue.length > 0 ||
+          this.closed ||
+          Date.now() - started >= capMs
+        ) {
+          clearInterval(timer);
+          resolve();
+        }
+      }, 50);
+    });
   }
 
   private waitForPlaybackToDrain(capMs: number): Promise<void> {
