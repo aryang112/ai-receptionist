@@ -3,6 +3,12 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## ✅ RESOLVED 2026-08-27 ~16:50 ET: PROD == MAIN again (Aryan's explicit go)
+> `bf4781a` (full rework-v2 + all greeting fixes) deployed to prod while
+> Vonage forwarding is OFF — zero customer exposure. Container
+> ba9d84b968ae, health 200, catalog 63, client index 4181. Prod testing
+> happens by dialing the Twilio number directly. Historical banner below.
+
 ## 🚨 PROD ≠ MAIN (2026-08-26 ~21:25 ET — read before ANY deploy)
 Aryan ordered a second revert minutes after the rework-v2 deploy went live.
 **PROD is running the SAFE build (commit `3e3858a`, deployed detached).
@@ -36,6 +42,83 @@ other agents have moved the working tree):
    local-test tooling — the exact code of the safe deployment).
 Verify after either: /health 200, fresh "Server up" hostname in
 `railway logs`, catalog 63, client index ~4179.
+
+## 2026-08-27 (3) — 🔎 test-round findings: invented-service bug + zombie streams (diagnosed, fixes PROPOSED not applied)
+- **BUG 1 — model INVENTS the service.** Call `CAdb79…f4df` 5:20 PM: caller
+  said only "is Richa available at 6 p.m." → model called
+  suggest_availability with `serviceName:"Brow Threading"` it made up,
+  offered 6:15/6:30, and booked WITHOUT ever asking or getting a yes on the
+  service. The 5:22 call ("Can I book Risha?" — no time given) behaved
+  correctly (asked which service). Trigger: caller names a TIME → model
+  rushes to the tool and fills the required serviceName param itself.
+  PROPOSED FIX (ladder: tool layer): suggest_availability +
+  book_appointment description — serviceName MUST be one the caller
+  explicitly named this call; if none, ask first. Not yet applied.
+- **BUG 2 — "mid-call disconnects" were NOT Erica.** Calls `CA4ba6…5087`
+  (5:20:30) and `CA74a3…f358` (5:24:19): Twilio CDRs say both legs ended at
+  15s/9s, status "completed" (normal hangup at carrier/Twilio level, midway
+  through greeting/first turn — Aryan did not hang up; nothing on our side
+  fired: no end_call/watchdog/error). Upstream drop — watch for recurrence;
+  Voice Insights not enabled on the account (405s), so no
+  who-hung-up attribution available.
+- **BUG 3 (real, ours, revealed by #2) — zombie streams.** Neither call's
+  Twilio WS delivered a `stop`; sessions lingered 2.5 min / 43 s past the
+  real call end (admin shows durations 165s/52s and NO endReason — the
+  signature of this failure). Worse: call 1 died mid-caller-speech →
+  `callerSpeaking` stuck true → silence watchdog treats it as activity
+  FOREVER (never fires). PROPOSED FIX: media-inactivity watchdog — Twilio
+  sends continuous inbound frames on a live call, so >5s with zero frames =
+  the call is dead → cleanup with endReason "stream died". Not yet applied.
+- Also verified clean this round: staff-name fix ("Can I book Risha?" →
+  asked which service, no system-speak), caller-ID-number offer, soft
+  "cancel my appointment today" flow incl. name-based lookup fallback, and
+  the ignore-during-greeting behavior on both live calls that survived.
+
+## 2026-08-27 (2) — 🚀 REWORK REDEPLOYED (bf4781a) + Aryan's number scrubbed for new-caller testing
+- Deployed main (`bf4781a`) to prod with Aryan's explicit go, under zero
+  customer exposure (Vonage off). 364 tests green, tsc clean. Verified:
+  container ba9d84b968ae, /health 200, catalog 63, client index 4181.
+  (One flaky test failed on the first `npm test` run, passed on clean
+  re-runs — no details captured; watch for recurrence.)
+- **Aryan's Phorest record TEMPORARILY anonymized so Erica treats him as a
+  NEW caller** (his request, for testing the new-client booking flow):
+  client `cZnmhQAdjNMKRauaLNjh0w` (Aryan Gupta) mobile changed
+  ***5169 → 410-555-0142 (fictional 555-01XX placeholder; Phorest API
+  refuses to blank a mobile — empty/null/omitted all no-op). Record,
+  history, email untouched; only record carrying the number (full-directory
+  scan). Pre-edit JSON backup: scratchpad/aryan-client-backup.json.
+  **RESTORE AFTER TESTING**: PUT mobile back to his number on that
+  clientId — and if his tests created a duplicate "Aryan" client (booking
+  as a new caller creates a profile), merge/delete the DUPLICATE only,
+  keeping this original record.
+- The new-container index (4181) was built AFTER the scrub — prod Erica
+  does not recognize his number. Caller-ID recognition path now testable
+  by calling from any OTHER known number.
+
+## 2026-08-27 — 📴 PROD CALL INTAKE DISABLED (Aryan, via Vonage) + rework validated by real calls
+- **Aryan turned OFF the Vonage after-hours forwarding rule** (~4:15 PM ET).
+  Customers now get the salon's normal pre-Erica behavior; NO real traffic
+  reaches Erica until he re-enables it. Re-enable = Vonage portal →
+  after-hours rule → forward to the Twilio number (+1 410-304-6449, see
+  docs/VONAGE_PILOT.md "rollback in seconds" note).
+- **Consequence: the Twilio number is now a de-facto STAGING line.** Dialing
+  it directly still reaches prod Erica — full prod path including caller-ID
+  recognition (the one thing scripts/test-call-local.sh can't exercise) —
+  with zero customer exposure. This unblocks the "test rework ON PROD before
+  customers see it" gap from the 08-26 revert.
+- /call-review 8/27: today's two real calls both validated the reverted-out
+  rework — Glenda's booking call hit "no service named *Richa*" (fixed on
+  main by Phase 1 staff-name detection) and a NEW client (Prashanna K C,
+  ***8532) abandoned mid-intake at the safe build's phone-number-first
+  booking flow, then booked ONLINE 11 min later (main's BOOK is
+  service-first; would have led with the service question). Full detail in
+  the review above; recordings pulled for both.
+- **Next (awaiting Aryan's go, per the standing PROD ≠ MAIN rule): deploy
+  main to prod and iron out scenarios by calling the Twilio number directly**
+  (docs/TEST_CALL_SCRIPT_2026-08-26.md + today's two real-call scenarios:
+  "book Richa", new-caller booking intake, mid-greeting speech). Expect ZERO
+  customer calls in the next /call-review — any real-traffic call appearing
+  means the Vonage rule is NOT actually off; flag it immediately.
 
 ## 2026-08-26 (4) — 🚀 REWORK v2 DEPLOYED to prod (greeting fixes verified locally)
 - rework-v2 branch (7 commits over the reverted base) ff-merged into main
