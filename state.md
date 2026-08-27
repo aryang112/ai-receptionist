@@ -43,6 +43,35 @@ other agents have moved the working tree):
 Verify after either: /health 200, fresh "Server up" hostname in
 `railway logs`, catalog 63, client index ~4179.
 
+## 2026-08-27 (4) — 🚨 DISCONNECT ROOT CAUSE: Twilio error 31924 kills the calls (investigation open)
+- The mid-call disconnects are **Twilio terminating the call with error
+  31924 "Stream - Websocket - Protocol Error"** ("your WS server sent a
+  malformed message / violated the WS protocol"). Debugger alerts fire at
+  the exact CDR end_time of every dropped call: 21:20:44 (eb5087),
+  21:24:28 (1ff358), 21:25:14 (690eea), 21:54:14 (5e5537). Alert feed:
+  monitor.twilio.com/v1/Alerts (alert_text is EMPTY; per-call
+  Notifications too; Voice Insights not enabled → 404).
+- **Evidence it is NOT our message content**: (1) `git diff 3e3858a..HEAD`
+  shows ZERO changes to any socket.send site — media/mark/clear framing is
+  byte-identical to the safe build; (2) all four deaths land SECONDS AFTER
+  our last outbound send (a malformed frame errors at receipt, not later);
+  (3) zero 31924s in 9+ days of safe-build + ngrok-path traffic, all four
+  in a 34-min window today across TWO containers; (4) surviving calls
+  interleave with dying ones. Best hypothesis: transport-level frame
+  corruption between Railway's edge proxy and Twilio (half-open zombie
+  socket on our side is the classic middlebox signature). No incident on
+  the Railway or Twilio status pages.
+- **Deployed (container 15091806e7e2): forensics** — Twilio-socket close
+  code/reason logging, ping tracking, per-call outbound frame counts + max
+  payload size (logged on close AND on watchdog death). Media-inactivity
+  watchdog (prev deploy) now contains zombies in ≤10s (proved live on the
+  5e5537 call: endReason "stream died — inbound audio stopped").
+- **NEXT: Twilio support ticket** with the four CallSids — only Twilio can
+  see WHICH frame violated the protocol. Draft ready; needs Console
+  sign-in. If drops keep recurring, consider a controlled A/B: run the
+  same build via the ngrok local path and see if 31924 follows the
+  infrastructure (Railway) or the code.
+
 ## 2026-08-27 (3) — 🔎 test-round findings: invented-service bug + zombie streams (diagnosed, fixes PROPOSED not applied)
 - **BUG 1 — model INVENTS the service.** Call `CAdb79…f4df` 5:20 PM: caller
   said only "is Richa available at 6 p.m." → model called
