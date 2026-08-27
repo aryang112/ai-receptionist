@@ -613,9 +613,11 @@ describe('M1 — configureSession session.update payload (OPENAI_INPUT_TRANSCRIP
         threshold: env.OPENAI_VAD_THRESHOLD,
         prefix_padding_ms: env.OPENAI_VAD_PREFIX_MS,
         silence_duration_ms: env.OPENAI_VAD_SILENCE_MS,
-        // Greeting protection: server-side interrupt starts OFF; twilioStream
-        // re-enables it once the greeting has played out (validated live).
+        // Greeting protection: server-side interrupt AND auto-created replies
+        // start OFF; twilioStream re-enables both once the greeting has
+        // played out (setAutoResponses — validated live 2026-08-26).
         interrupt_response: false,
+        create_response: false,
       },
     };
   }

@@ -379,6 +379,52 @@ async function getServiceCatalog() {
     }));
 }
 
+// Words that make a mid-greeting utterance a mere greeting-back/acknowledgment
+// — the case where Erica should say NOTHING after the greeting (its closing
+// question already has the floor). Anything else said during the greeting is
+// substantive and gets answered once the greeting finishes.
+const TRIVIAL_GREETING_WORDS = new Set([
+  'hi',
+  'hey',
+  'hello',
+  'hallo',
+  'howdy',
+  'yo',
+  'yeah',
+  'yes',
+  'ok',
+  'okay',
+  'sure',
+  'um',
+  'uh',
+  'mm',
+  'mhm',
+  'hmm',
+  'hm',
+  'oh',
+  'good',
+  'morning',
+  'afternoon',
+  'evening',
+  'there',
+]);
+
+/**
+ * Is this caller utterance just a greeting-back / acknowledgment / noise?
+ * Non-Latin transcription artifacts ("好", "응?") strip to empty and count as
+ * noise — live calls showed those are what a casual "ok"/"huh" becomes.
+ */
+export function isTrivialGreeting(text: string): boolean {
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z\s']/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) return true;
+  if (words.length > 4) return false;
+  return words.every((w) => TRIVIAL_GREETING_WORDS.has(w.replace(/'/g, '')));
+}
+
 /**
  * True when a caller-supplied "service name" is actually a STAFF member's
  * first name — the Glenda call (2026-08-26) sent serviceName="Richa" and the
@@ -689,6 +735,12 @@ export class TwilioRealtimeCall {
   // mark-queue drain after the call's first outbound chunk). Barge-in
   // truncation is suppressed while false — the greeting always finishes.
   private greetingPlayedOut = false;
+  // Caller turn(s) committed while the greeting was still playing. With
+  // create_response OFF during the greeting, no auto-reply exists for them —
+  // markGreetingPlayedOut() decides: trivial hello → silence (the greeting's
+  // question stands); anything substantive → one manual response.create.
+  private greetingTurnCommitted = false;
+  private greetingUtterances: string[] = [];
   private sessionReady = false;
   // RT-8: media frames that arrive during the ~300–500ms OpenAI handshake (before
   // sessionReady) used to be dropped, swallowing an impatient early "hello?".
@@ -921,7 +973,12 @@ export class TwilioRealtimeCall {
       // evidence base (calls.jsonl). onUserTranscript only ever fires when
       // OPENAI_INPUT_TRANSCRIPTION is enabled (env-gated OFF by default — see
       // openaiSession.ts configureSession).
-      onUserTranscript: (text) => this.pushTranscriptEntry('caller', text),
+      onUserTranscript: (text) => {
+        // Words said while the greeting was playing feed the trivial-hello
+        // vs substantive decision in markGreetingPlayedOut().
+        if (!this.greetingPlayedOut) this.greetingUtterances.push(text);
+        this.pushTranscriptEntry('caller', text);
+      },
       onAssistantTranscript: (text) => this.pushTranscriptEntry('erica', text),
       onUsage: (usage) => this.accumulateUsage(usage),
     });
@@ -1497,7 +1554,24 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
   private markGreetingPlayedOut() {
     if (this.greetingPlayedOut) return;
     this.greetingPlayedOut = true;
-    this.session?.setInterruptResponse?.(true);
+    this.session?.setAutoResponses?.(true);
+    if (this.greetingTurnCommitted) {
+      const said = this.greetingUtterances.join(' ').trim();
+      if (said && isTrivialGreeting(said)) {
+        // A mere "hello" over the greeting: the greeting's closing question
+        // already has the floor — replying would re-open ("Hi there, what
+        // do you need?" — observed live). Deliberate silence.
+        logger.info(
+          { streamSid: this.streamSid, said },
+          '🙊 mid-greeting hello — greeting question stands, no reply'
+        );
+      } else {
+        // Substantive words (or transcript still in flight): answer them
+        // now — create_response was OFF when the turn committed, so this
+        // manual trigger is the only response it will ever get.
+        this.session?.requestResponse?.();
+      }
+    }
   }
 
   private handleCallerSpeechStarted() {
@@ -1539,6 +1613,11 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
   private handleCallerSpeechStopped() {
     this.callerSpeaking = false;
     this.lastActivityAt = Date.now();
+    // A turn that commits while the greeting is still playing has no
+    // auto-response (create_response is off until the greeting drains) —
+    // markGreetingPlayedOut() resolves it: silence for a mere hello, one
+    // manual response for anything substantive.
+    if (!this.greetingPlayedOut) this.greetingTurnCommitted = true;
     // The turn just committed — its async transcription is now in flight. If the
     // caller hangs up in the next moment, cleanup() waits for it (Holly bug).
     this.lastCallerSpeechStoppedAt = this.lastActivityAt;

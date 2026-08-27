@@ -45,7 +45,8 @@ function buildCall() {
   call.session = {
     appendTwilioAudio: (p: string) => appended.push(p),
     truncateActiveResponse: vi.fn(),
-    setInterruptResponse: vi.fn(),
+    setAutoResponses: vi.fn(),
+    requestResponse: vi.fn(() => true),
     close: vi.fn(),
   };
   call.streamSid = 'STREAMSID';
@@ -222,7 +223,7 @@ describe('greeting plays to completion (barge-in suppressed until played out)', 
     expect(call.greetingPlayedOut).toBe(true);
     // Server-side interrupt-on-speech (disabled at session start so speech
     // can't cancel the greeting's GENERATION) is re-armed exactly here.
-    expect(call.session.setInterruptResponse).toHaveBeenCalledWith(true);
+    expect(call.session.setAutoResponses).toHaveBeenCalledWith(true);
 
     // Erica speaks again (a normal turn); caller barge-in must work.
     call.sendAudioToTwilio('turn2');
@@ -248,7 +249,7 @@ describe('greeting plays to completion (barge-in suppressed until played out)', 
     expect(sent.some((f) => f.event === 'clear')).toBe(true);
     // The ceiling path must ALSO re-arm server-side interrupt — otherwise a
     // lost mark ack would leave auto-cancel off for the whole call.
-    expect(call.session.setInterruptResponse).toHaveBeenCalledWith(true);
+    expect(call.session.setAutoResponses).toHaveBeenCalledWith(true);
   });
 
   it('no suppression before Erica has ever spoken (firstAudioChunkAt null)', () => {
@@ -258,5 +259,94 @@ describe('greeting plays to completion (barge-in suppressed until played out)', 
     // the guard itself must not throw or block the normal path.
     call.handleCallerSpeechStarted();
     expect(call.callerSpeaking).toBe(true);
+  });
+});
+
+// 2026-08-26 round 3 (local calls eb18632e/efe46f41/26c42890): with the
+// greeting now finishing, the QUEUED auto-reply to a mid-greeting "hello"
+// fired after it and re-opened ("Hi there, go ahead and let me know what you
+// need"). create_response is now OFF during the greeting, and on drain the
+// committed turn is resolved deterministically: trivial hello → deliberate
+// silence (the greeting's question stands); substantive → one manual
+// response.create (the only reply that turn will ever get).
+describe('mid-greeting caller turn resolution (silence vs answer)', () => {
+  async function drainGreeting(call: any) {
+    await call.handleMessage(Buffer.from(JSON.stringify({ event: 'mark' })));
+  }
+
+  function startGreeting(call: any) {
+    call.sessionReady = true;
+    call.latestMediaTimestamp = 100;
+    call.sendAudioToTwilio('greet1');
+  }
+
+  it('a mere "hello" during the greeting gets NO response after it', async () => {
+    const { call } = buildCall();
+    startGreeting(call);
+    call.handleCallerSpeechStarted();
+    call.handleCallerSpeechStopped(); // turn committed mid-greeting
+    call.greetingUtterances.push('Hello.');
+
+    await drainGreeting(call);
+
+    expect(call.greetingPlayedOut).toBe(true);
+    expect(call.session.setAutoResponses).toHaveBeenCalledWith(true);
+    expect(call.session.requestResponse).not.toHaveBeenCalled();
+  });
+
+  it('substantive words during the greeting get exactly one manual response', async () => {
+    const { call } = buildCall();
+    startGreeting(call);
+    call.handleCallerSpeechStarted();
+    call.handleCallerSpeechStopped();
+    call.greetingUtterances.push('I need to cancel my appointment today');
+
+    await drainGreeting(call);
+
+    expect(call.session.requestResponse).toHaveBeenCalledTimes(1);
+  });
+
+  it('turn committed but transcript still in flight → fail toward answering', async () => {
+    const { call } = buildCall();
+    startGreeting(call);
+    call.handleCallerSpeechStarted();
+    call.handleCallerSpeechStopped(); // no transcript landed yet
+
+    await drainGreeting(call);
+
+    expect(call.session.requestResponse).toHaveBeenCalledTimes(1);
+  });
+
+  it('nothing said during the greeting → no response, no crash', async () => {
+    const { call } = buildCall();
+    startGreeting(call);
+    await drainGreeting(call);
+    expect(call.session.requestResponse).not.toHaveBeenCalled();
+    expect(call.session.setAutoResponses).toHaveBeenCalledWith(true);
+  });
+});
+
+describe('isTrivialGreeting', () => {
+  let isTrivialGreeting: typeof import('../realtime/twilioStream.js').isTrivialGreeting;
+  beforeAll(async () => {
+    ({ isTrivialGreeting } = await import('../realtime/twilioStream.js'));
+  });
+
+  it('greeting-backs, acknowledgments, and noise are trivial', () => {
+    expect(isTrivialGreeting('Hello.')).toBe(true);
+    expect(isTrivialGreeting('Hello?')).toBe(true);
+    expect(isTrivialGreeting('hi hello')).toBe(true);
+    expect(isTrivialGreeting('Good morning!')).toBe(true);
+    expect(isTrivialGreeting('Mhm.')).toBe(true);
+    // Non-Latin transcription artifacts observed live ("好", "응?", "알겠습니다")
+    expect(isTrivialGreeting('알겠습니다.')).toBe(true);
+    expect(isTrivialGreeting('好。')).toBe(true);
+  });
+
+  it('real requests are NOT trivial', () => {
+    expect(isTrivialGreeting('I want to book an appointment')).toBe(false);
+    expect(isTrivialGreeting('is Richa there')).toBe(false);
+    expect(isTrivialGreeting('cancel my appointment')).toBe(false);
+    expect(isTrivialGreeting('hello I need help with a booking')).toBe(false);
   });
 });

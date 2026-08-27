@@ -355,15 +355,18 @@ export class OpenAIRealtimeSession {
               threshold: env.OPENAI_VAD_THRESHOLD,
               prefix_padding_ms: env.OPENAI_VAD_PREFIX_MS,
               silence_duration_ms: env.OPENAI_VAD_SILENCE_MS,
-              // Greeting protection (2026-08-26, validated live): server-side
-              // interrupt-on-speech starts DISABLED so a caller's "hello"
-              // can't cancel the greeting's GENERATION mid-line (the client
-              // grace window only guards Twilio playback — the tail was never
-              // generated). twilioStream re-enables it the moment the
-              // greeting has played out (setInterruptResponse below); every
-              // later turn's barge-in relies on it, so that re-enable is
-              // load-bearing.
+              // Greeting protection (2026-08-26, both fields validated live):
+              // while the greeting plays, a caller's "hello" must neither
+              // CANCEL its generation (interrupt_response) nor SPAWN a
+              // queued reply that re-opens after it ("Hi there, what do you
+              // need?" right after the greeting already asked — observed).
+              // Both start OFF; twilioStream re-enables them the moment the
+              // greeting has played out (setAutoResponses) and manually
+              // triggers ONE response if the caller said something
+              // substantive during it. Every later turn depends on that
+              // re-enable — it is load-bearing.
               interrupt_response: false,
+              create_response: false,
             },
           },
           output: {
@@ -475,13 +478,15 @@ export class OpenAIRealtimeSession {
    * a Twilio `clear` (sent by the caller of this method) to flush buffered audio.
    */
   /**
-   * Toggle OpenAI's server-side interrupt-on-speech (auto-cancel of the
-   * in-progress response when VAD fires). Sent as a partial session.update
-   * carrying the FULL turn_detection object (nested objects replace, not
-   * merge — validated live 2026-08-26, both directions echoed). Fire-and-
-   * forget: an occasional drop just leaves the current default in place.
+   * Toggle OpenAI's automatic response handling on caller speech: both the
+   * auto-cancel of an in-progress response (interrupt_response) and the
+   * auto-created reply to a committed caller turn (create_response). Off
+   * during the greeting; on for the rest of the call. Sent as a partial
+   * session.update carrying the FULL turn_detection object (nested objects
+   * replace, not merge — validated live 2026-08-26, both directions echoed).
+   * Fire-and-forget: an occasional drop just leaves the current state.
    */
-  setInterruptResponse(enabled: boolean) {
+  setAutoResponses(enabled: boolean) {
     this.sendRaw({
       type: 'session.update',
       session: {
@@ -494,6 +499,7 @@ export class OpenAIRealtimeSession {
               prefix_padding_ms: env.OPENAI_VAD_PREFIX_MS,
               silence_duration_ms: env.OPENAI_VAD_SILENCE_MS,
               interrupt_response: enabled,
+              create_response: enabled,
             },
           },
         },
