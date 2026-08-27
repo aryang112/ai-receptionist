@@ -43,6 +43,33 @@ other agents have moved the working tree):
 Verify after either: /health 200, fresh "Server up" hostname in
 `railway logs`, catalog 63, client index ~4179.
 
+## 2026-08-27 (5) — 🛠 goodbye race + name contract fixed; Aryan's pilot decisions logged
+- **Goodbye race FIXED (code)**: model calls end_call BEFORE generating its
+  goodbye → empty mark queue → instant hangup; the 7:03 PM call's "Take
+  care…" was generated 1.3s into a dead line. endCallNow now waits ≤3s for
+  the post-tool goodbye to START (expectGoodbye — end_call tool only;
+  silence/cap hangups unchanged), then drains it. 375 tests green.
+- **Name contract reworded (Aryan's spec)**: ask everyone "first and last
+  name" identically; NEVER characterize the name (the 7:03 call said "if
+  it's a bit unique, feel free to spell it out" — banned); confirm only
+  when less than certain — echo a given spelling back, never re-ask; only
+  stated reason is wanting to get it right.
+- **Aryan's pilot decisions (do NOT re-litigate)**: (1) closed-now answer
+  arriving one turn late (service question first) = ACCEPTED for the pilot
+  — no fix; my proposed optional-serviceName tool change is parked. (2) NO
+  phone-on-file updates when a known client calls from a new number, and
+  don't ask. (3) NO last-four identity checks — human receptionists trust
+  a stated name. (4) Multi-match booking discussion parked ("never mind").
+- **Watch (evidence pending from Aryan)**: Erica sometimes "pronounces her
+  thinking" aloud — do not fix until he brings examples.
+- **CLEANUP OWED after testing**: cancel tomorrow's 12:45 PM Brow Threading
+  (test booking, client "Prashanna KC" ***5169 id GkGug7O6rR…, REAL calendar
+  entry), delete/merge that test client, restore Aryan's real number
+  (see 2026-08-27 (2) entry). Verified: caller-ID phone fallback + spelled
+  name both landed correctly in Phorest on the 7:03 PM call.
+- Deploys: forensics container 15091806e7e2 → booking fixes e151a8c3d4fc →
+  goodbye/name 30075ec6b4c6 (health 200 each). No new 31924s since 21:54.
+
 ## 2026-08-27 (4) — 🚨 DISCONNECT ROOT CAUSE: Twilio error 31924 kills the calls (investigation open)
 - The mid-call disconnects are **Twilio terminating the call with error
   31924 "Stream - Websocket - Protocol Error"** ("your WS server sent a
