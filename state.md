@@ -3,6 +3,40 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 🛟 PROD ROLLBACK POINT (Aryan-mandated, 2026-08-26 — keep until he clears it)
+If ANY issue is noticed on the rework-v2 prod deploy, revert IMMEDIATELY —
+no diagnosis first, no asking. Two independent paths (either works, even if
+other agents have moved the working tree):
+1. **Railway history (fastest, no code needed)**: dashboard → project
+   erica-receptionist → service erica → Deployments → deployment
+   `cb14b1c8-f156-43f6-86c3-d7ab49b41fa9` (the pre-rework SAFE build,
+   container 63e582731ce8, canRedeploy=true) → **Redeploy**.
+2. **Git**: `git checkout 3e3858a && railway up --service erica --detach`
+   (3e3858a = main's pre-merge HEAD: reverted prompt/tools + FYI text +
+   local-test tooling — the exact code of the safe deployment).
+Verify after either: /health 200, fresh "Server up" hostname in
+`railway logs`, catalog 63, client index ~4179.
+
+## 2026-08-26 (4) — 🚀 REWORK v2 DEPLOYED to prod (greeting fixes verified locally)
+- rework-v2 branch (7 commits over the reverted base) ff-merged into main
+  and deployed. On top of the original rework (skeleton + tool notes):
+  - ASK-THEN-WAIT rule, phone-number-first IDENTIFY, casual fillers,
+    BOOK routes through IDENTIFY (315681d)
+  - greeting: word-for-word script + no double-ask clause (b173355)
+  - greeting plays to COMPLETION: client barge-in suppressed until
+    mark-queue drain, 20s failsafe (3132d23)
+  - OpenAI server-side interrupt_response + create_response OFF during
+    greeting, re-armed on drain (validated live both directions);
+    mid-greeting turn resolved deterministically — trivial hello →
+    silence, substantive → one manual response (4e79bb0, a93868c)
+- Verified across ~10 local test calls via scripts/test-call-local.sh
+  (Aryan's ear + logs): greeting completes over "hello", staff-name fix,
+  unclear-audio handling, mid-sentence pauses respected. 366 tests, tsc
+  clean.
+- Watch next /call-review: greeting behavior on real inbound calls
+  (caller-ID recognition path was NOT testable locally), transfer FYI
+  text firing, post-greeting barge-in (re-arm is load-bearing).
+
 ## 2026-08-26 (3) — 🔴 REWORK REVERTED after failed live test (Fable, direct)
 - Aryan deployed the rework 22:06Z, test-called twice, called it "failing
   miserably", ordered immediate revert. **Reverted 22:11Z** (c853ba4+1da4b94
