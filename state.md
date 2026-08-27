@@ -18,6 +18,10 @@ IMPORTANT: Aryan then confirmed the SAFE build has the same
 follow-up-after-greeting behavior (it has NO silence mechanism at all, and
 truncates the greeting past 3s) — the revert removed the fix, not the
 problem. Rework redeploy = strictly better on this axis; awaiting his go.
+FOLLOW-UP (22:00 ET, Aryan-decided): classifier dropped entirely —
+`3a423d9` ANYTHING said during the greeting is ignored (no reply, ever);
+the committed turn stays in history as context for the caller's next
+words. Local re-test via scripts/test-call-local.sh, then his deploy go.
 
 ## 🛟 PROD ROLLBACK POINT (Aryan-mandated, 2026-08-26 — keep until he clears it)
 If ANY issue is noticed on the rework-v2 prod deploy, revert IMMEDIATELY —
