@@ -355,6 +355,15 @@ export class OpenAIRealtimeSession {
               threshold: env.OPENAI_VAD_THRESHOLD,
               prefix_padding_ms: env.OPENAI_VAD_PREFIX_MS,
               silence_duration_ms: env.OPENAI_VAD_SILENCE_MS,
+              // Greeting protection (2026-08-26, validated live): server-side
+              // interrupt-on-speech starts DISABLED so a caller's "hello"
+              // can't cancel the greeting's GENERATION mid-line (the client
+              // grace window only guards Twilio playback — the tail was never
+              // generated). twilioStream re-enables it the moment the
+              // greeting has played out (setInterruptResponse below); every
+              // later turn's barge-in relies on it, so that re-enable is
+              // load-bearing.
+              interrupt_response: false,
             },
           },
           output: {
@@ -465,6 +474,33 @@ export class OpenAIRealtimeSession {
    * assistant message to only the audio that was actually heard. Pair this with
    * a Twilio `clear` (sent by the caller of this method) to flush buffered audio.
    */
+  /**
+   * Toggle OpenAI's server-side interrupt-on-speech (auto-cancel of the
+   * in-progress response when VAD fires). Sent as a partial session.update
+   * carrying the FULL turn_detection object (nested objects replace, not
+   * merge — validated live 2026-08-26, both directions echoed). Fire-and-
+   * forget: an occasional drop just leaves the current default in place.
+   */
+  setInterruptResponse(enabled: boolean) {
+    this.sendRaw({
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        audio: {
+          input: {
+            turn_detection: {
+              type: 'server_vad',
+              threshold: env.OPENAI_VAD_THRESHOLD,
+              prefix_padding_ms: env.OPENAI_VAD_PREFIX_MS,
+              silence_duration_ms: env.OPENAI_VAD_SILENCE_MS,
+              interrupt_response: enabled,
+            },
+          },
+        },
+      },
+    });
+  }
+
   truncateActiveResponse(audioEndMs: number) {
     if (!this.isOpen() || !this.activeItemId) return;
     this.sendRaw({

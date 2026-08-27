@@ -45,6 +45,7 @@ function buildCall() {
   call.session = {
     appendTwilioAudio: (p: string) => appended.push(p),
     truncateActiveResponse: vi.fn(),
+    setInterruptResponse: vi.fn(),
     close: vi.fn(),
   };
   call.streamSid = 'STREAMSID';
@@ -219,6 +220,9 @@ describe('greeting plays to completion (barge-in suppressed until played out)', 
     await call.handleMessage(Buffer.from(JSON.stringify({ event: 'mark' })));
     await call.handleMessage(Buffer.from(JSON.stringify({ event: 'mark' })));
     expect(call.greetingPlayedOut).toBe(true);
+    // Server-side interrupt-on-speech (disabled at session start so speech
+    // can't cancel the greeting's GENERATION) is re-armed exactly here.
+    expect(call.session.setInterruptResponse).toHaveBeenCalledWith(true);
 
     // Erica speaks again (a normal turn); caller barge-in must work.
     call.sendAudioToTwilio('turn2');
@@ -242,6 +246,9 @@ describe('greeting plays to completion (barge-in suppressed until played out)', 
 
     expect(call.session.truncateActiveResponse).toHaveBeenCalledWith(500);
     expect(sent.some((f) => f.event === 'clear')).toBe(true);
+    // The ceiling path must ALSO re-arm server-side interrupt — otherwise a
+    // lost mark ack would leave auto-cancel off for the whole call.
+    expect(call.session.setInterruptResponse).toHaveBeenCalledWith(true);
   });
 
   it('no suppression before Erica has ever spoken (firstAudioChunkAt null)', () => {

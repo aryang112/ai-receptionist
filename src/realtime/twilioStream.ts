@@ -1361,8 +1361,8 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           if (this.markQueue.length === 0) {
             this.responseStartTimestamp = null;
             // First full drain after audio began = the greeting finished
-            // playing; barge-in truncation arms from here on.
-            if (this.firstAudioChunkAt !== null) this.greetingPlayedOut = true;
+            // playing; barge-in (client + server) arms from here on.
+            if (this.firstAudioChunkAt !== null) this.markGreetingPlayedOut();
           }
           break;
         case 'stop':
@@ -1486,6 +1486,20 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
    * last-activity for the silence watchdog HERE — not inside handleBargeIn(),
    * which stays byte-identical — then runs the existing barge-in logic.
    */
+  /**
+   * The greeting-finished transition (idempotent). Flips greetingPlayedOut
+   * AND re-enables OpenAI's server-side interrupt-on-speech, which the
+   * session config starts with DISABLED so caller speech can't cancel the
+   * greeting's generation mid-line. Every later turn's barge-in depends on
+   * that re-enable — this must fire on the mark-drain path AND the failsafe
+   * ceiling path, whichever comes first.
+   */
+  private markGreetingPlayedOut() {
+    if (this.greetingPlayedOut) return;
+    this.greetingPlayedOut = true;
+    this.session?.setInterruptResponse?.(true);
+  }
+
   private handleCallerSpeechStarted() {
     this.lastActivityAt = Date.now();
     // Marks the caller turn OPEN until speech_stopped — see callerSpeaking.
@@ -1505,6 +1519,12 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         '🔇 barge-in ignored — greeting still playing (plays to completion)'
       );
       return;
+    }
+    // Ceiling path: mark acks never drained but the failsafe expired — the
+    // greeting is over as far as we're concerned, so make sure server-side
+    // interrupt is re-armed before running normal barge-in.
+    if (this.firstAudioChunkAt !== null && !this.greetingPlayedOut) {
+      this.markGreetingPlayedOut();
     }
     this.handleBargeIn();
   }
