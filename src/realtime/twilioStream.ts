@@ -69,6 +69,11 @@ const PRE_AUTH_TIMEOUT_MS = 10_000;
 // call was defect D-RT4's class — never again).
 const GREETING_BARGE_IN_MAX_MS = 20000;
 
+// A live Twilio media stream delivers inbound frames continuously (~50/s,
+// silence included). Frames stopping entirely for this long means the call
+// leg is dead even though no 'stop' event arrived.
+const MEDIA_INACTIVITY_MS = 10_000;
+
 // The `host` stream parameter ends up inside a TwiML attribute we build by
 // templating (the <Dial action="…"> URL), and a Host header is ultimately
 // caller-influenced — so accept only what a real host can look like
@@ -427,11 +432,15 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'suggest_availability',
     description:
-      "Find available appointment times for a given SERVICE on a specific date. Call it with any service the caller names, even one you have never heard of — it matches against the live catalog. Returns slots as {time, value} pairs: speak the 'time' (e.g. \"1:10 PM\"); when booking or rescheduling, pass that slot's 'value' (24h) as the time. Only ever offer times that appear in slots.",
+      "Find available appointment times for a given SERVICE on a specific date. Call it with any service the caller names, even one you have never heard of — it matches against the live catalog. Returns slots as {time, value} pairs: speak the 'time' (e.g. \"1:10 PM\"); when booking or rescheduling, pass that slot's 'value' (24h) as the time. Only ever offer times that appear in slots. If the caller has not named a service yet (they only gave a person, a day, or a time), do NOT call this tool — ask which service they'd like first.",
     parameters: {
       type: 'object',
       properties: {
-        serviceName: { type: 'string' },
+        serviceName: {
+          type: 'string',
+          description:
+            'A service the CALLER explicitly named this call, in their words. Never fill this with a guess, a default, or the most popular service — no caller-named service means ask, not call.',
+        },
         date: { type: 'string', description: 'ISO date YYYY-MM-DD' },
         preferredTime: {
           type: 'string',
@@ -450,7 +459,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        serviceName: { type: 'string' },
+        serviceName: {
+          type: 'string',
+          description:
+            'The service the caller explicitly named and said yes to — never one you guessed or assumed on their behalf.',
+        },
         date: { type: 'string', description: 'ISO date YYYY-MM-DD' },
         time: {
           type: 'string',
@@ -731,6 +744,8 @@ export class TwilioRealtimeCall {
   // latches permanently once used.
   private checkInFired = false;
   private silenceWatchdogTimer: NodeJS.Timeout | undefined = undefined;
+  private mediaWatchdogTimer: NodeJS.Timeout | undefined = undefined;
+  private lastMediaFrameAt = 0;
   // True while a silence-triggered goodbye has been requested and we're in
   // the ~4s grace window waiting to see if the caller speaks up before the
   // actual hangup. Guards the tick from re-requesting the goodbye every 5s
@@ -1347,6 +1362,8 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           this.startSilenceWatchdog();
           // G3: arm the max-call-duration cap now that the call is live.
           this.startDurationCap();
+          // Zombie-stream guard: arm the media-inactivity watchdog.
+          this.startMediaWatchdog();
           logger.info(
             { streamSid: this.streamSid },
             '🎙️ Waiting for caller audio...'
@@ -1402,6 +1419,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
 
   private handleMedia(event: TwilioMediaEvent) {
     if (!event.media?.payload || this.closed) return;
+    this.lastMediaFrameAt = Date.now();
     // RT-8: the OpenAI session isn't ready yet (~300–500ms handshake). Rather than
     // drop the caller's early speech (a clipped "hello?"), buffer it up to the cap
     // and flush once ready. Past the cap we drop (bounded memory) — 5s of unheard
@@ -1618,6 +1636,32 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       () => this.tickSilenceWatchdog(),
       5000
     );
+  }
+
+  /**
+   * Zombie-stream guard (2026-08-27): two live calls dropped at the
+   * carrier/Twilio level WITHOUT a 'stop' event ever reaching us — the
+   * sessions lingered minutes past the real call end with wrong durations,
+   * no endReason, and (worse) callerSpeaking stuck true from a turn cut off
+   * mid-speech, which disarms the silence watchdog entirely. Inbound frames
+   * are the ground truth for a live call, so when they stop, tear down.
+   * Not gated on `transferring`: a redirected call's stream gets its own
+   * 'stop' (cleanup clears this timer), and a transfer stuck without media
+   * for 10s is exactly a zombie too.
+   */
+  private startMediaWatchdog() {
+    this.lastMediaFrameAt = Date.now();
+    this.mediaWatchdogTimer = setInterval(() => {
+      if (this.closed) return;
+      const quietMs = Date.now() - this.lastMediaFrameAt;
+      if (quietMs < MEDIA_INACTIVITY_MS) return;
+      logger.warn(
+        { streamSid: this.streamSid, quietMs },
+        '💀 inbound media stopped — treating the stream as dead'
+      );
+      this.setEndReasonOnce('stream died — inbound audio stopped');
+      this.cleanup();
+    }, 2500);
   }
 
   /**
@@ -3820,6 +3864,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     if (this.silenceWatchdogTimer) {
       clearInterval(this.silenceWatchdogTimer);
       this.silenceWatchdogTimer = undefined;
+    }
+    if (this.mediaWatchdogTimer) {
+      clearInterval(this.mediaWatchdogTimer);
+      this.mediaWatchdogTimer = undefined;
     }
     if (this.silenceHangupTimer) {
       clearTimeout(this.silenceHangupTimer);
