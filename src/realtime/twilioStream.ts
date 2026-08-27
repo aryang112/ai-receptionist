@@ -478,11 +478,15 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         customer: {
           type: 'object',
           properties: {
-            name: { type: 'string' },
+            name: {
+              type: 'string',
+              description:
+                "The caller's name as CONFIRMED with them before booking. If they spelled it out, read THAT spelling back to confirm (\"P-R-A-S-H-A-N-N-A, right?\") — never ask them to spell what they already spelled. If the name is unusual or you're unsure you heard it right and they didn't spell it, ask them to spell it, then read it back. A clearly-heard common name needs no spelling ritual.",
+            },
             phone: {
               type: 'string',
               description:
-                'Only needed for a NEW caller with no account on file. Omit when we already know the caller (clientId set / recognized by caller ID).',
+                'A phone number the caller DICTATED aloud, if any. Omit both when we already know the caller (clientId set / recognized by caller ID) AND when they said the number they are calling from is fine — the system attaches the caller-ID number automatically. Never fill this with digits the caller did not say.',
             },
             email: { type: 'string' },
           },
@@ -2458,6 +2462,19 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       );
       const clientId =
         payload.clientId ?? (recognized ? this.prefetch!.clientId : undefined);
+      // MOBILE_REQUIRED fix (2026-08-27): a NEW caller who accepts "the number
+      // you're calling from is fine" never dictates digits, so the model has no
+      // phone to pass — and Phorest refuses to create a client without a
+      // mobile (the 6:13 PM call died on this: two 400s, then a transfer that
+      // rang Richa). The server is the only party that knows the caller ID, so
+      // it must stand behind Erica's promise and attach it.
+      const callerIdPhone = this.normalizePhone(this.callerFrom);
+      if (!payload.customer.phone && !clientId && callerIdPhone) {
+        logger.info(
+          { tool: 'book_appointment', last4: callerIdPhone.slice(-4) },
+          'No dictated phone for new-client booking — attaching caller-ID number'
+        );
+      }
       const bookInput = {
         serviceName: payload.serviceName,
         date: payload.date,
@@ -2469,7 +2486,9 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
             ? { phone: payload.customer.phone }
             : recognized && this.prefetch?.phone
               ? { phone: this.prefetch.phone }
-              : {}),
+              : callerIdPhone
+                ? { phone: callerIdPhone }
+                : {}),
           ...(payload.customer.email ? { email: payload.customer.email } : {}),
         },
       };
@@ -3109,7 +3128,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         ok: true,
         detail: { found: false },
       });
-      return { found: false };
+      return {
+        found: false,
+        note: 'No matching client — completely normal for a new caller; booking will create their profile. Before booking, make sure their NAME is confirmed: if the caller spelled it out, read that spelling back to them to confirm — never ask them to spell it again; if it is unusual or was unclear and they did not spell it, ask them to spell it, then read it back. If they said the number they are calling from is fine, it is attached to the booking automatically — do not ask them to dictate it.',
+      };
     } catch (error) {
       logger.error(
         { tool: 'lookup_customer', error: this.formatError(error) },
