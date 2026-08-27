@@ -48,6 +48,13 @@ function buildCall() {
     close: vi.fn(),
   };
   call.streamSid = 'STREAMSID';
+  // The constructor arms a ~5s pre-auth close timer; under fake timers a long
+  // advance would fire it and close the fake socket mid-test (same clearing
+  // the transferFailback tests do).
+  if (call.preAuthTimer) {
+    clearTimeout(call.preAuthTimer);
+    call.preAuthTimer = undefined;
+  }
   return { call, sent, appended };
 }
 
@@ -154,20 +161,21 @@ describe('RT-4 — barge-in stays armed through the whole audio tail', () => {
   });
 });
 
-// 2026-08-24 (post-deploy test calls): pickup noise / a reflexive "hi" fired
-// VAD ~1.3s into the greeting; barge-in chopped it mid-word and the model
-// re-delivered it — the caller heard the greeting stop, pause, and start
-// again. Inside GREETING_BARGE_IN_GRACE_MS (3s from the call's FIRST audio
-// chunk) speech_started must not truncate — but must still count as caller
-// activity (turn tracking for the silence watchdog stays live).
-describe('greeting barge-in grace (pickup-noise fix)', () => {
+// 2026-08-24 (post-deploy test calls) + 2026-08-26 (rework local testing):
+// the greeting plays to COMPLETION — owner decision. The old fixed 3s window
+// still let a "hello" at second 4 chop the tail. Now speech_started must not
+// truncate until the greeting's audio has fully played out (first mark-queue
+// drain after the call's first audio chunk), with a hard 20s ceiling as a
+// failsafe so a lost mark ack can never disarm barge-in for the whole call
+// (the D-RT4 class). Caller-turn tracking stays live throughout.
+describe('greeting plays to completion (barge-in suppressed until played out)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-24T20:00:00-04:00'));
   });
   afterEach(() => vi.useRealTimers());
 
-  it('speech_started inside the grace window does NOT truncate or clear', () => {
+  it('speech_started early in the greeting does NOT truncate or clear', () => {
     const { call, sent } = buildCall();
     call.sessionReady = true;
     call.latestMediaTimestamp = 100;
@@ -186,13 +194,49 @@ describe('greeting barge-in grace (pickup-noise fix)', () => {
     expect(call.markQueue.length).toBeGreaterThan(0);
   });
 
-  it('speech_started AFTER the grace window truncates normally', () => {
+  it('a "hello" LATE in the greeting (past the old 3s window) still does NOT truncate', () => {
     const { call, sent } = buildCall();
     call.sessionReady = true;
     call.latestMediaTimestamp = 100;
     call.sendAudioToTwilio('greet1');
+    call.sendAudioToTwilio('greet2');
 
-    vi.advanceTimersByTime(3001);
+    vi.advanceTimersByTime(4500); // the exact live failure: "hello" at ~4.5s
+    call.handleCallerSpeechStarted();
+
+    expect(call.session.truncateActiveResponse).not.toHaveBeenCalled();
+    expect(sent.some((f) => f.event === 'clear')).toBe(false);
+  });
+
+  it('after the greeting has PLAYED OUT (mark queue drained), speech truncates normally', async () => {
+    const { call, sent } = buildCall();
+    call.sessionReady = true;
+    call.latestMediaTimestamp = 100;
+    call.sendAudioToTwilio('greet1');
+    call.sendAudioToTwilio('greet2');
+
+    // Twilio acks both chunks — greeting playback finished.
+    await call.handleMessage(Buffer.from(JSON.stringify({ event: 'mark' })));
+    await call.handleMessage(Buffer.from(JSON.stringify({ event: 'mark' })));
+    expect(call.greetingPlayedOut).toBe(true);
+
+    // Erica speaks again (a normal turn); caller barge-in must work.
+    call.sendAudioToTwilio('turn2');
+    vi.advanceTimersByTime(500);
+    call.latestMediaTimestamp = 600;
+    call.handleCallerSpeechStarted();
+
+    expect(call.session.truncateActiveResponse).toHaveBeenCalled();
+    expect(sent.some((f) => f.event === 'clear')).toBe(true);
+  });
+
+  it('failsafe ceiling: if mark acks never drain, suppression ends at 20s', () => {
+    const { call, sent } = buildCall();
+    call.sessionReady = true;
+    call.latestMediaTimestamp = 100;
+    call.sendAudioToTwilio('greet1'); // never acked — queue never drains
+
+    vi.advanceTimersByTime(20001);
     call.latestMediaTimestamp = 600;
     call.handleCallerSpeechStarted();
 
@@ -200,11 +244,11 @@ describe('greeting barge-in grace (pickup-noise fix)', () => {
     expect(sent.some((f) => f.event === 'clear')).toBe(true);
   });
 
-  it('no grace before Erica has ever spoken (firstAudioChunkAt null)', () => {
+  it('no suppression before Erica has ever spoken (firstAudioChunkAt null)', () => {
     const { call } = buildCall();
     call.sessionReady = true;
     // No sendAudioToTwilio yet — handleBargeIn's own no-op guards apply, but
-    // the grace guard itself must not throw or block the normal path.
+    // the guard itself must not throw or block the normal path.
     call.handleCallerSpeechStarted();
     expect(call.callerSpeaking).toBe(true);
   });

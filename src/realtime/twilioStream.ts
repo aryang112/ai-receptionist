@@ -53,18 +53,21 @@ function getTwilioClient() {
 const MAX_CONCURRENT_STREAMS = 20;
 const PRE_AUTH_TIMEOUT_MS = 10_000;
 
-// 2026-08-24 (observed on Aryan's first two post-deploy test calls): pickup
-// noise — a connect click, a breath, a reflexive "hi" — trips VAD ~1.3s into
-// the greeting, and barge-in truncates it MID-WORD; the model then re-delivers
-// the greeting ("stops, then continues" from the caller's ear). During the
-// first moments of the opening line we therefore IGNORE barge-in truncation:
-// the greeting's audio is typically fully buffered on Twilio's side by then,
-// so skipping the flush lets it play out intact. The caller's words are still
-// committed and answered as soon as the greeting finishes — only the
-// mid-word audio cut is suppressed, and only inside this window anchored to
-// the call's FIRST outbound audio chunk (so it never dampens normal mid-call
-// barge-in).
-const GREETING_BARGE_IN_GRACE_MS = 3000;
+// 2026-08-24 (Aryan's post-deploy test calls) + 2026-08-26 (local rework
+// testing): pickup noise or a reflexive "hi"/"hello" ANYWHERE during the
+// greeting trips VAD, and barge-in truncates the opening line mid-word —
+// the old fixed 3s window only shielded the first moments, so a "hello" at
+// second 4 still chopped the tail ("…I can help with bookings or any
+// questions" never played). Owner decision (2026-08-26): the greeting always
+// plays to completion — it's what tells callers they can speak freely. So
+// barge-in truncation is suppressed until the greeting has fully PLAYED OUT
+// (first drain of the mark queue after the call's first outbound audio — see
+// `greetingPlayedOut`), not for a fixed time. The caller's words are still
+// committed and answered the moment the greeting ends; only the audio cut is
+// suppressed. This ceiling is a failsafe only: if Twilio's mark acks never
+// arrive, suppression must not outlive it (a dead barge-in for the whole
+// call was defect D-RT4's class — never again).
+const GREETING_BARGE_IN_MAX_MS = 20000;
 
 // The `host` stream parameter ends up inside a TwiML attribute we build by
 // templating (the <Dial action="…"> URL), and a Host header is ultimately
@@ -682,6 +685,10 @@ export class TwilioRealtimeCall {
   // When the call's first outbound audio chunk (the greeting) was sent —
   // anchors GREETING_BARGE_IN_GRACE_MS. null until Erica first speaks.
   private firstAudioChunkAt: number | null = null;
+  // True once the greeting's audio has fully played out at Twilio (first
+  // mark-queue drain after the call's first outbound chunk). Barge-in
+  // truncation is suppressed while false — the greeting always finishes.
+  private greetingPlayedOut = false;
   private sessionReady = false;
   // RT-8: media frames that arrive during the ~300–500ms OpenAI handshake (before
   // sessionReady) used to be dropped, swallowing an impatient early "hello?".
@@ -1351,7 +1358,12 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           // barge-in for the whole tail. This keeps interruption live through the
           // entire playback without leaving a stale reference for the next turn.
           if (this.markQueue.length > 0) this.markQueue.shift();
-          if (this.markQueue.length === 0) this.responseStartTimestamp = null;
+          if (this.markQueue.length === 0) {
+            this.responseStartTimestamp = null;
+            // First full drain after audio began = the greeting finished
+            // playing; barge-in truncation arms from here on.
+            if (this.firstAudioChunkAt !== null) this.greetingPlayedOut = true;
+          }
           break;
         case 'stop':
           logger.info(
@@ -1478,16 +1490,19 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     this.lastActivityAt = Date.now();
     // Marks the caller turn OPEN until speech_stopped — see callerSpeaking.
     this.callerSpeaking = true;
-    // Greeting grace: pickup noise must not chop the opening line mid-word.
-    // The turn above is still tracked and the caller's words still get
-    // answered — only the audio truncation is skipped in this window.
+    // Greeting protection: speech must not chop the opening line — it plays
+    // to completion (owner decision 2026-08-26). The turn above is still
+    // tracked and the caller's words still get answered right after — only
+    // the audio truncation is skipped, until the greeting has played out
+    // (with a hard ceiling in case mark acks never drain).
     if (
       this.firstAudioChunkAt !== null &&
-      Date.now() - this.firstAudioChunkAt < GREETING_BARGE_IN_GRACE_MS
+      !this.greetingPlayedOut &&
+      Date.now() - this.firstAudioChunkAt < GREETING_BARGE_IN_MAX_MS
     ) {
       logger.info(
         { streamSid: this.streamSid },
-        '🔇 barge-in ignored — inside the greeting grace window (pickup noise)'
+        '🔇 barge-in ignored — greeting still playing (plays to completion)'
       );
       return;
     }
