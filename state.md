@@ -3,6 +3,16 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 🚨 PROD ≠ MAIN (2026-08-26 ~21:25 ET — read before ANY deploy)
+Aryan ordered a second revert minutes after the rework-v2 deploy went live.
+**PROD is running the SAFE build (commit `3e3858a`, deployed detached).
+`main` still contains the full rework-v2 merge — DO NOT `railway up` from
+main until Aryan explicitly clears the rework for prod again.** The rework
+code stays on main for continued fixing; deploys of it go through
+scripts/test-call-local.sh first, then his explicit go.
+Reason for this revert: not yet diagnosed — awaiting Aryan's observation
+(revert-first-diagnose-after, per the standing rule below).
+
 ## 🛟 PROD ROLLBACK POINT (Aryan-mandated, 2026-08-26 — keep until he clears it)
 If ANY issue is noticed on the rework-v2 prod deploy, revert IMMEDIATELY —
 no diagnosis first, no asking. Two independent paths (either works, even if
