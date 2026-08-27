@@ -343,10 +343,19 @@ describe('isTrivialGreeting', () => {
     expect(isTrivialGreeting('好。')).toBe(true);
   });
 
-  it('real requests are NOT trivial', () => {
+  it('short LATIN garble is trivial too — the prod "Cholon." call (a garbled hello must not earn a reply)', () => {
+    expect(isTrivialGreeting('Cholon.')).toBe(true);
+    expect(isTrivialGreeting('Hallo?')).toBe(true);
+    expect(isTrivialGreeting('cholon maroo')).toBe(true); // 2 garble words
+  });
+
+  it('real requests are NOT trivial — action words override even at one word', () => {
     expect(isTrivialGreeting('I want to book an appointment')).toBe(false);
     expect(isTrivialGreeting('is Richa there')).toBe(false);
     expect(isTrivialGreeting('cancel my appointment')).toBe(false);
     expect(isTrivialGreeting('hello I need help with a booking')).toBe(false);
+    expect(isTrivialGreeting('Cancel.')).toBe(false);
+    expect(isTrivialGreeting('an appointment')).toBe(false);
+    expect(isTrivialGreeting('brow threading')).toBe(false);
   });
 });

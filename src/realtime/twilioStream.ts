@@ -409,20 +409,60 @@ const TRIVIAL_GREETING_WORDS = new Set([
   'there',
 ]);
 
+// Words that mark a mid-greeting utterance as a REAL request no matter how
+// short — these always get answered after the greeting.
+const GREETING_ACTION_WORDS = new Set([
+  'book',
+  'booking',
+  'appointment',
+  'appointments',
+  'cancel',
+  'reschedule',
+  'price',
+  'prices',
+  'cost',
+  'hours',
+  'open',
+  'closed',
+  'richa',
+  'message',
+  'running',
+  'late',
+  'threading',
+  'thread',
+  'wax',
+  'waxing',
+  'brow',
+  'brows',
+  'lash',
+  'lashes',
+  'facial',
+  'help',
+  'emergency',
+]);
+
 /**
  * Is this caller utterance just a greeting-back / acknowledgment / noise?
  * Non-Latin transcription artifacts ("好", "응?") strip to empty and count as
- * noise — live calls showed those are what a casual "ok"/"huh" becomes.
+ * noise. Short LATIN garble counts as noise too — the prod "Cholon." call
+ * (2026-08-26): a phone-line "hello" transcribed as a nonsense word, failed
+ * the word-list, and got answered with a redundant re-open. Rule: 1–2 words
+ * with no action word = hello/noise (a real request is never that); silence
+ * fails safe because the greeting's closing question already has the floor.
  */
 export function isTrivialGreeting(text: string): boolean {
   const words = text
     .toLowerCase()
     .replace(/[^a-z\s']/g, ' ')
     .split(/\s+/)
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((w) => w.replace(/'/g, ''));
   if (words.length === 0) return true;
-  if (words.length > 4) return false;
-  return words.every((w) => TRIVIAL_GREETING_WORDS.has(w.replace(/'/g, '')));
+  if (words.some((w) => GREETING_ACTION_WORDS.has(w))) return false;
+  if (words.length <= 2) return true;
+  if (words.length <= 4 && words.every((w) => TRIVIAL_GREETING_WORDS.has(w)))
+    return true;
+  return false;
 }
 
 /**
