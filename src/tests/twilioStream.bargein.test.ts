@@ -262,14 +262,13 @@ describe('greeting plays to completion (barge-in suppressed until played out)', 
   });
 });
 
-// 2026-08-26 round 3 (local calls eb18632e/efe46f41/26c42890): with the
-// greeting now finishing, the QUEUED auto-reply to a mid-greeting "hello"
-// fired after it and re-opened ("Hi there, go ahead and let me know what you
-// need"). create_response is now OFF during the greeting, and on drain the
-// committed turn is resolved deterministically: trivial hello → deliberate
-// silence (the greeting's question stands); substantive → one manual
-// response.create (the only reply that turn will ever get).
-describe('mid-greeting caller turn resolution (silence vs answer)', () => {
+// 2026-08-26 (owner decision after the prod "Cholon." call — a garbled hello
+// defeated word-list classification): ANYTHING said during the greeting is
+// ignored — no reply of any kind, ever. create_response is OFF during the
+// greeting so no auto-reply exists, and markGreetingPlayedOut never triggers
+// a manual one. The committed turn stays in history as context for the
+// caller's NEXT turn; the greeting's closing question keeps the floor.
+describe('mid-greeting caller speech is ALWAYS ignored', () => {
   async function drainGreeting(call: any) {
     await call.handleMessage(Buffer.from(JSON.stringify({ event: 'mark' })));
   }
@@ -280,12 +279,12 @@ describe('mid-greeting caller turn resolution (silence vs answer)', () => {
     call.sendAudioToTwilio('greet1');
   }
 
-  it('a mere "hello" during the greeting gets NO response after it', async () => {
+  it('a "hello" (however it transcribes) gets NO response after the greeting', async () => {
     const { call } = buildCall();
     startGreeting(call);
     call.handleCallerSpeechStarted();
     call.handleCallerSpeechStopped(); // turn committed mid-greeting
-    call.greetingUtterances.push('Hello.');
+    call.greetingUtterances.push('Cholon.'); // the prod garble
 
     await drainGreeting(call);
 
@@ -294,7 +293,7 @@ describe('mid-greeting caller turn resolution (silence vs answer)', () => {
     expect(call.session.requestResponse).not.toHaveBeenCalled();
   });
 
-  it('substantive words during the greeting get exactly one manual response', async () => {
+  it('even a full request during the greeting gets no direct reply — it waits as context', async () => {
     const { call } = buildCall();
     startGreeting(call);
     call.handleCallerSpeechStarted();
@@ -303,10 +302,10 @@ describe('mid-greeting caller turn resolution (silence vs answer)', () => {
 
     await drainGreeting(call);
 
-    expect(call.session.requestResponse).toHaveBeenCalledTimes(1);
+    expect(call.session.requestResponse).not.toHaveBeenCalled();
   });
 
-  it('turn committed but transcript still in flight → fail toward answering', async () => {
+  it('turn committed, transcript still in flight → still no reply', async () => {
     const { call } = buildCall();
     startGreeting(call);
     call.handleCallerSpeechStarted();
@@ -314,48 +313,14 @@ describe('mid-greeting caller turn resolution (silence vs answer)', () => {
 
     await drainGreeting(call);
 
-    expect(call.session.requestResponse).toHaveBeenCalledTimes(1);
+    expect(call.session.requestResponse).not.toHaveBeenCalled();
   });
 
-  it('nothing said during the greeting → no response, no crash', async () => {
+  it('nothing said during the greeting → no response, auto-responses re-armed', async () => {
     const { call } = buildCall();
     startGreeting(call);
     await drainGreeting(call);
     expect(call.session.requestResponse).not.toHaveBeenCalled();
     expect(call.session.setAutoResponses).toHaveBeenCalledWith(true);
-  });
-});
-
-describe('isTrivialGreeting', () => {
-  let isTrivialGreeting: typeof import('../realtime/twilioStream.js').isTrivialGreeting;
-  beforeAll(async () => {
-    ({ isTrivialGreeting } = await import('../realtime/twilioStream.js'));
-  });
-
-  it('greeting-backs, acknowledgments, and noise are trivial', () => {
-    expect(isTrivialGreeting('Hello.')).toBe(true);
-    expect(isTrivialGreeting('Hello?')).toBe(true);
-    expect(isTrivialGreeting('hi hello')).toBe(true);
-    expect(isTrivialGreeting('Good morning!')).toBe(true);
-    expect(isTrivialGreeting('Mhm.')).toBe(true);
-    // Non-Latin transcription artifacts observed live ("好", "응?", "알겠습니다")
-    expect(isTrivialGreeting('알겠습니다.')).toBe(true);
-    expect(isTrivialGreeting('好。')).toBe(true);
-  });
-
-  it('short LATIN garble is trivial too — the prod "Cholon." call (a garbled hello must not earn a reply)', () => {
-    expect(isTrivialGreeting('Cholon.')).toBe(true);
-    expect(isTrivialGreeting('Hallo?')).toBe(true);
-    expect(isTrivialGreeting('cholon maroo')).toBe(true); // 2 garble words
-  });
-
-  it('real requests are NOT trivial — action words override even at one word', () => {
-    expect(isTrivialGreeting('I want to book an appointment')).toBe(false);
-    expect(isTrivialGreeting('is Richa there')).toBe(false);
-    expect(isTrivialGreeting('cancel my appointment')).toBe(false);
-    expect(isTrivialGreeting('hello I need help with a booking')).toBe(false);
-    expect(isTrivialGreeting('Cancel.')).toBe(false);
-    expect(isTrivialGreeting('an appointment')).toBe(false);
-    expect(isTrivialGreeting('brow threading')).toBe(false);
   });
 });

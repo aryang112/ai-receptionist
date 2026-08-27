@@ -265,7 +265,7 @@ Erica cannot connect a caller to Richa while she's away — offer to pass a mess
   // sentence in a prompt WILL be parroted in the wrong context (lessons.md).
   const greetingSection = opts.transferFailback
     ? `GREETING (transfer failback — this is NOT a new call): the caller is mid-call with you already. They asked for Richa, you tried to connect them, and her phone did not pick up; the line has just come back to you. Open immediately, without waiting for them to speak. In one or two warm, apologetic sentences, let them know Richa couldn't be reached right now, and offer them the choice of leaving a message for her (which reaches her as a text) or letting you help them yourself. Word it fresh, in your own voice, then stop and let them answer. Do NOT re-deliver the recorded-line greeting, do NOT introduce yourself at length, and do NOT ask who is calling or restart the conversation — this is the SAME phone call, and they have already heard the greeting and the recording notice. If a noise or brief word from them cuts into your opening while it plays, never deliver the opening again — treat it as heard in full and respond naturally from there.`
-    : `GREETING: Open the call yourself, immediately and warmly, with this line delivered IN FULL, word for word — never shortened, paraphrased, or cut before its final question: "Hi, this is Erica, the virtual receptionist at ${businessHours.name}, on a recorded line — I can help with bookings or any questions. What can I do for you?" Then STOP and wait for the caller. (Maryland is a two-party-consent state and we keep a record of the call, so that brief "on a recorded line" phrase IS the recording notice and is not optional — always include it, kept light and friendly.) If the caller speaks while the greeting is playing, let it finish and never deliver the greeting a second time. Your NEXT turn depends on what they said during it: something substantive (a request, a question) → answer that directly, skipping any pleasantries. Only a greeting back, an acknowledgment, or noise ("hello", "mm-hm") → do NOT greet them again and do NOT re-ask what you can help with — the greeting just asked that and the question is still theirs to answer; give at most a word or two of warm acknowledgment and let them speak.`;
+    : `GREETING: Open the call yourself, immediately and warmly, with this line delivered IN FULL, word for word — never shortened, paraphrased, or cut before its final question: "Hi, this is Erica, the virtual receptionist at ${businessHours.name}, on a recorded line — I can help with bookings or any questions. What can I do for you?" Then STOP and wait for the caller. (Maryland is a two-party-consent state and we keep a record of the call, so that brief "on a recorded line" phrase IS the recording notice and is not optional — always include it, kept light and friendly.) If the caller speaks while the greeting is playing, let it finish and never deliver the greeting a second time. Anything said during the greeting gets NO reply of its own — the greeting's closing question has the floor, so after it ends, WAIT silently for the caller. Whatever they said during it is background context only: when they speak next, respond with it in mind and never make them repeat what you already caught.`;
 
   // H1: full catalog present → replace the tool-first price paragraph with
   // the hot-loaded, alphabetized list + its own quote-only-from-list rule.
@@ -377,92 +377,6 @@ async function getServiceCatalog() {
       price: s.price,
       durationMin: s.durationMin,
     }));
-}
-
-// Words that make a mid-greeting utterance a mere greeting-back/acknowledgment
-// — the case where Erica should say NOTHING after the greeting (its closing
-// question already has the floor). Anything else said during the greeting is
-// substantive and gets answered once the greeting finishes.
-const TRIVIAL_GREETING_WORDS = new Set([
-  'hi',
-  'hey',
-  'hello',
-  'hallo',
-  'howdy',
-  'yo',
-  'yeah',
-  'yes',
-  'ok',
-  'okay',
-  'sure',
-  'um',
-  'uh',
-  'mm',
-  'mhm',
-  'hmm',
-  'hm',
-  'oh',
-  'good',
-  'morning',
-  'afternoon',
-  'evening',
-  'there',
-]);
-
-// Words that mark a mid-greeting utterance as a REAL request no matter how
-// short — these always get answered after the greeting.
-const GREETING_ACTION_WORDS = new Set([
-  'book',
-  'booking',
-  'appointment',
-  'appointments',
-  'cancel',
-  'reschedule',
-  'price',
-  'prices',
-  'cost',
-  'hours',
-  'open',
-  'closed',
-  'richa',
-  'message',
-  'running',
-  'late',
-  'threading',
-  'thread',
-  'wax',
-  'waxing',
-  'brow',
-  'brows',
-  'lash',
-  'lashes',
-  'facial',
-  'help',
-  'emergency',
-]);
-
-/**
- * Is this caller utterance just a greeting-back / acknowledgment / noise?
- * Non-Latin transcription artifacts ("好", "응?") strip to empty and count as
- * noise. Short LATIN garble counts as noise too — the prod "Cholon." call
- * (2026-08-26): a phone-line "hello" transcribed as a nonsense word, failed
- * the word-list, and got answered with a redundant re-open. Rule: 1–2 words
- * with no action word = hello/noise (a real request is never that); silence
- * fails safe because the greeting's closing question already has the floor.
- */
-export function isTrivialGreeting(text: string): boolean {
-  const words = text
-    .toLowerCase()
-    .replace(/[^a-z\s']/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((w) => w.replace(/'/g, ''));
-  if (words.length === 0) return true;
-  if (words.some((w) => GREETING_ACTION_WORDS.has(w))) return false;
-  if (words.length <= 2) return true;
-  if (words.length <= 4 && words.every((w) => TRIVIAL_GREETING_WORDS.has(w)))
-    return true;
-  return false;
 }
 
 /**
@@ -1595,22 +1509,16 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     if (this.greetingPlayedOut) return;
     this.greetingPlayedOut = true;
     this.session?.setAutoResponses?.(true);
+    // Owner decision (2026-08-26, after the "Cholon." call): ANYTHING said
+    // during the greeting is ignored — no reply of any kind. The greeting's
+    // closing question has the floor and the caller speaks next. The
+    // committed turn stays in conversation history, so their next words get
+    // answered with that context (create_response is live again from here).
     if (this.greetingTurnCommitted) {
-      const said = this.greetingUtterances.join(' ').trim();
-      if (said && isTrivialGreeting(said)) {
-        // A mere "hello" over the greeting: the greeting's closing question
-        // already has the floor — replying would re-open ("Hi there, what
-        // do you need?" — observed live). Deliberate silence.
-        logger.info(
-          { streamSid: this.streamSid, said },
-          '🙊 mid-greeting hello — greeting question stands, no reply'
-        );
-      } else {
-        // Substantive words (or transcript still in flight): answer them
-        // now — create_response was OFF when the turn committed, so this
-        // manual trigger is the only response it will ever get.
-        this.session?.requestResponse?.();
-      }
+      logger.info(
+        { streamSid: this.streamSid, said: this.greetingUtterances.join(' ') },
+        '🙊 mid-greeting speech ignored — greeting question stands, no reply'
+      );
     }
   }
 
@@ -1619,10 +1527,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     // Marks the caller turn OPEN until speech_stopped — see callerSpeaking.
     this.callerSpeaking = true;
     // Greeting protection: speech must not chop the opening line — it plays
-    // to completion (owner decision 2026-08-26). The turn above is still
-    // tracked and the caller's words still get answered right after — only
-    // the audio truncation is skipped, until the greeting has played out
-    // (with a hard ceiling in case mark acks never drain).
+    // to completion, and whatever was said during it gets NO reply (owner
+    // decision 2026-08-26; see markGreetingPlayedOut). The turn above is
+    // still tracked for the watchdog; only truncation is skipped here, until
+    // the greeting has played out (hard ceiling in case marks never drain).
     if (
       this.firstAudioChunkAt !== null &&
       !this.greetingPlayedOut &&
