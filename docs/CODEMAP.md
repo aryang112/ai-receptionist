@@ -3,6 +3,9 @@
 Orientation map so agents don't have to scan every file. See `state.md` for status
 and `tasks/lessons.md` for the gotchas.
 
+For a current architecture, Realtime 2.1, quirks, and operations handoff, start
+with [`GPT-SOL/README.md`](GPT-SOL/README.md).
+
 ## Data flow (a call)
 ```
 Caller dials Twilio number
@@ -114,8 +117,6 @@ Caller dials Twilio number
   `Service`, `CustomerResult`, `AppointmentSummary`.
 - **booking.ts** — `suggestSlots`, `bookAppointment`, `findServiceByName` (fuzzy match
   + `SERVICE_ALIASES`, e.g. "lash lamination"→"Lash Lift"), Zod schemas.
-- **ai.ts**, **twilio.ts** — legacy helpers.
-
 ## src/core/
 - **hours.ts** — `getHoursStatus(date)` (open/closed/closedRightNow/nextOpen),
   `getOpenClose(date)`. Reads `config/business.json` (the hours source of truth).
@@ -154,7 +155,7 @@ Caller dials Twilio number
   booked, est cost, after-hours capture, spam), `/admin/api/transcript/:sid`,
   `/admin/api/recording/:sid` (auth-proxied Twilio audio — creds never reach
   the browser).
-- **appointment.ts**, **metadata.ts**, **health.ts** — REST/health endpoints.
+- **metadata.ts**, **health.ts** — REST/health endpoints.
 
 ## src/config/
 - **env.ts** — all env (model, voice, VAD knobs `OPENAI_VAD_*`, `OPENAI_NOISE_REDUCTION`,
@@ -163,7 +164,7 @@ Caller dials Twilio number
   `BLOCKLIST_PATH`, `SPAM_BLOCK_THRESHOLD` (2), `OPENAI_INPUT_TRANSCRIPTION`
   (⚠️ default 'off' — session-shape change, flip only after a live call
   validates it), `RECORD_CALLS` ('true'), `ADMIN_TOKEN` (set in prod!),
-  `DIGEST_ENABLED`/`DIGEST_TIME` ('19:30')/`DIGEST_TO`,
+  `DIGEST_ENABLED`/`DIGEST_TIME` ('08:30')/`DIGEST_TO`,
   `TRANSFER_WINDOW_START`/`TRANSFER_WINDOW_END` ('09:00'/'21:00' — Richa's
   live-transfer calling hours, decoupled from salon hours),
   `TRANSFER_DIAL_TIMEOUT_S` (15 — how long her phone rings before the dial
@@ -174,7 +175,7 @@ Caller dials Twilio number
   to SMS message-taking, injects the prompt block; edit this for future
   vacations) + `location` (address for the prompt/hours tool). **Do not change casually.**
 
-## src/tests/  (vitest, 329 tests)
+## src/tests/  (vitest, 42 files / 384 tests as of 2026-08-28)
 phorest.client.test.ts (URL/range/client_id/timezone/retry regressions),
 hours.test.ts, booking.alias/match.test.ts, slots.test.ts (clean-grid snapping),
 wsAuth, middleware, twilioStream.bargein/contracts, phorest.mock/selector,
@@ -196,6 +197,7 @@ usage/duration/cost summed, transcript concatenated by ts).
 
 ## scripts/  (read-only diagnostics + ops)
 inspect-appointment.ts, list-services.ts, check-availability.ts, test-appt-filter.ts,
+test-call-local.sh (direct-call staging harness), Realtime/integration diagnostics,
 set-twilio-webhook.sh, tail-log.mjs (pretty live view of data/dev.log — `npm run logs`).
 
 ## Tools the model can call

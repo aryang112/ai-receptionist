@@ -3,6 +3,22 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-28 — GPT-SOL agent handoff documented (documentation only)
+
+- Added `docs/GPT-SOL/` as a durable orientation and knowledge-transfer package:
+  architecture, component boundaries, current production state, critical
+  Phorest/Realtime/telephony invariants, operating protocol, and an independent
+  Realtime 2.1 call analysis.
+- Captured the latest call evidence: Richa was correctly treated as a person,
+  while duplicate preambles and repeated identity confirmation remain the next
+  focused conversation issues.
+- Captured the early-arrival/multitasking requirement as **not implemented**:
+  no squeeze-in during an overlapping facial, haircut, or Brazilian waxing;
+  most other overlapping services may permit it after a deterministic policy is
+  built and tested.
+- No code, deployment, prompt, model, voice, reasoning effort, Phorest data, or
+  Vonage forwarding setting changed in this documentation pass.
+
 ## ✅ STAGED 2026-08-28 ~18:36 ET: GPT Realtime 2.1 direct-call test
 - Upgraded only the Realtime model from `gpt-realtime` to
   `gpt-realtime-2.1`; prompts, tools, reasoning settings, and salon logic
