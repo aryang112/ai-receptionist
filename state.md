@@ -3,6 +3,21 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## ✅ STAGED 2026-08-28 ~18:36 ET: GPT Realtime 2.1 direct-call test
+- Upgraded only the Realtime model from `gpt-realtime` to
+  `gpt-realtime-2.1`; prompts, tools, reasoning settings, and salon logic
+  were intentionally left unchanged for a clean listening comparison.
+- Live pre-deploy validation accepted the production session shape (Marin,
+  PCMU, transcription, VAD/noise reduction, truncation, and a function tool)
+  and returned audio plus the expected transcript; first audio arrived in
+  674 ms.
+- Updated the text-output cost estimate from $16/M to $24/M; audio pricing
+  is unchanged. Tests: 384 passed; TypeScript build clean.
+- Railway deployment `cd713d30-a303-4573-a2f4-9206ed7b9dac` succeeded,
+  `/health` returned 200, and the effective model variable is 2.1.
+- Vonage forwarding remains OFF. Next action: Aryan calls the direct Twilio
+  staging number and compares voice behavior before any Richa logic changes.
+
 ## ✅ RESOLVED 2026-08-27 ~16:50 ET: PROD == MAIN again (Aryan's explicit go)
 > `bf4781a` (full rework-v2 + all greeting fixes) deployed to prod while
 > Vonage forwarding is OFF — zero customer exposure. Container
