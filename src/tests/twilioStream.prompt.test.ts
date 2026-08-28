@@ -238,11 +238,16 @@ describe("buildInstructions — transfer window (RICHA'S LINE)", () => {
 // call pattern: a caller before opening time asking to book "today" must
 // hear openings, not a volunteered "we're closed right now."
 describe('buildInstructions — GREETING compression + never-volunteer-closed', () => {
-  it('greeting: compressed recorded-line phrasing, no old scripted line', () => {
+  it('greeting: classic salon pickup (2026-08-27), recorded-line notice kept, no AI label', () => {
     const instructions = buildInstructions();
     expect(instructions).toContain('on a recorded line');
-    expect(instructions).toContain('What can I do for you?');
+    expect(instructions).toContain(
+      'this is Erica on a recorded line — how can I help you?'
+    );
+    expect(instructions).not.toContain('virtual receptionist');
     expect(instructions).not.toContain('this call may be recorded');
+    // The honesty companion rule: never claim to be human when asked.
+    expect(instructions).toContain('NEVER claim to be human');
   });
 
   it('never volunteers closed status — pre-open booking goes straight to availability', () => {
