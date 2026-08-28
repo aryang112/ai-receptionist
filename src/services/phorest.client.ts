@@ -536,14 +536,19 @@ function splitName(fullName: string): { firstName: string; lastName: string } {
   return { firstName, lastName };
 }
 
+// US numbers never start with 0 (NANP area codes are 2–9), so leading zeros
+// are always a formatting artifact (UI national notation / typed prefix) —
+// strip them, then strip a leading country 1: we store and match on the bare
+// 10-digit number (Aryan's convention, 2026-08-27).
 function sanitisePhone(phone?: string) {
   if (!phone) return undefined;
-  const digits = phone.replace(/[^0-9]/g, '');
+  let digits = phone.replace(/[^0-9]/g, '').replace(/^0+/, '');
+  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
   return digits || undefined;
 }
 
 function normalizePhone(phone: string): string {
-  const digits = phone.replace(/\D/g, '');
+  const digits = phone.replace(/\D/g, '').replace(/^0+/, '');
   return digits.length === 11 && digits.startsWith('1')
     ? digits.slice(1)
     : digits;

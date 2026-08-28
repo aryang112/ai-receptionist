@@ -3844,10 +3844,14 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     });
   }
 
-  /** 10-digit US phone (strip non-digits + a leading country 1). null if unusable. */
+  /**
+   * 10-digit US phone (strip non-digits, leading zeros, and a leading
+   * country 1). Leading zeros are always junk on NANP numbers (area codes
+   * start 2–9 — seen live as a UI/typed "00" prefix). null if unusable.
+   */
   private normalizePhone(raw?: string): string | undefined {
     if (!raw) return undefined;
-    let digits = raw.replace(/\D/g, '');
+    let digits = raw.replace(/\D/g, '').replace(/^0+/, '');
     if (digits.length === 11 && digits.startsWith('1'))
       digits = digits.slice(1);
     return digits.length === 10 ? digits : undefined;
