@@ -455,7 +455,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'book_appointment',
     description:
-      'Book an appointment once all details are confirmed with the caller. For a caller we already recognized (their account is on file), you do NOT need their phone number — book with just their name.',
+      'Book an appointment once all details are confirmed with the caller. For a caller we already recognized (their account is on file), you do NOT need their phone number — book with just their name. For a NEW caller (no clientId), one step is MANDATORY before calling this tool: ask, exactly once, "Is the number you\'re calling from the best one for your file?" — YES → omit customer.phone (the system attaches their caller-ID number); NO → ask what number to use and pass it in customer.phone — never book after a "no" without a number they gave you; they won\'t give one → warmly explain a phone number is needed to hold the booking, and help another way if they decline.',
     parameters: {
       type: 'object',
       properties: {
@@ -486,7 +486,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
             phone: {
               type: 'string',
               description:
-                'A phone number the caller DICTATED aloud, if any. Omit both when we already know the caller (clientId set / recognized by caller ID) AND when they said the number they are calling from is fine — the system attaches the caller-ID number automatically. Never fill this with digits the caller did not say.',
+                "A phone number the caller DICTATED aloud. REQUIRED whenever they said the number they are calling from is NOT the right one. Omit when we already know the caller (clientId set / recognized by caller ID), or when they answered YES to the number-you're-calling-from question — the system attaches that number automatically. Never fill this with digits the caller did not say.",
             },
             email: { type: 'string' },
           },
@@ -3130,7 +3130,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       });
       return {
         found: false,
-        note: 'No matching client — completely normal for a new caller; booking will create their profile. Their name: if you heard it clearly and certainly, just proceed — no confirmation ritual. If you are anything less than certain, confirm it before booking: read back the spelling they gave (never ask them to re-spell it), or read back what you heard. Never comment on the name itself — no "unique" or "unusual" — the only reason you ever give is wanting to get it right. If they said the number they are calling from is fine, it is attached to the booking automatically — do not ask them to dictate it.',
+        note: 'No matching client — completely normal for a new caller; booking will create their profile. Their name: if you heard it clearly and certainly, just proceed — no confirmation ritual. If you are anything less than certain, confirm it before booking: read back the spelling they gave (never ask them to re-spell it), or read back what you heard. Never comment on the name itself — no "unique" or "unusual" — the only reason you ever give is wanting to get it right. Their number: before booking, ALWAYS ask once "Is the number you\'re calling from the best one for your file?" — yes → it is attached automatically, never ask them to dictate it; no → ask what number to use and pass it when booking.',
       };
     } catch (error) {
       logger.error(
