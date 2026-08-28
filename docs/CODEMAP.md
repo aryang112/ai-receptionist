@@ -13,7 +13,7 @@ Caller dials Twilio number
       'start' event → connect to OpenAI Realtime, configureSession(instructions+tools),
                       warmCallerContext(caller#)  [prefetch], requestGreeting()
       'media' events → forward g711 µ-law frames verbatim to OpenAI (no transcoding)
-  → OpenAI Realtime (gpt-realtime, speech-to-speech)  (realtime/openaiSession.ts)
+  → OpenAI Realtime (gpt-realtime-2.1, speech-to-speech)  (realtime/openaiSession.ts)
       emits audio deltas → forwarded verbatim back to Twilio
       emits function calls → tool handlers in twilioStream.ts → Phorest
   → Phorest API  (services/phorest.client.ts)  — booking/availability/clients

@@ -69,7 +69,7 @@ type EndEntry = {
   // Optional: Erica's accumulated spoken text for the call (F10e / 4.1 digest).
   assistantTranscript?: string | undefined;
   // M1: token usage for the whole call, and a dollar ESTIMATE derived from it
-  // (see twilioStream.ts estimateCostUsd — gpt-realtime audio rates). Absent
+  // (see twilioStream.ts estimateCostUsd — gpt-realtime-2.1 rates). Absent
   // when the call never reported usage (e.g. it never opened a session).
   usage?: UsageAccumulator | undefined;
   estCostUsd?: number | undefined;

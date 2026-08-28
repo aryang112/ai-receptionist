@@ -97,7 +97,7 @@ const TRANSCRIPT_GRACE_MS = 1500;
 // plausibly in flight at teardown (see TRANSCRIPT_GRACE_MS).
 const TRANSCRIPT_INFLIGHT_WINDOW_MS = 3000;
 
-// M1: gpt-realtime audio-token rate ESTIMATE (2026-08, OpenAI's realtime
+// M1: gpt-realtime-2.1 audio-token rate ESTIMATE (2026-08, OpenAI's realtime
 // pricing page) — dollars per 1,000,000 tokens. Cached input is priced far
 // below fresh input, which is exactly why the truncation.retention_ratio
 // lever (openaiSession.ts, the mid-call-freeze fix) also matters for cost.
@@ -112,7 +112,7 @@ const REALTIME_OUTPUT_USD_PER_M = 64;
 // text/audio split (falls back to the all-audio formula otherwise).
 const REALTIME_TEXT_INPUT_USD_PER_M = 4;
 const REALTIME_TEXT_CACHED_INPUT_USD_PER_M = 0.4;
-const REALTIME_TEXT_OUTPUT_USD_PER_M = 16;
+const REALTIME_TEXT_OUTPUT_USD_PER_M = 24;
 
 const HOURS_DAY_LABELS: Array<[string, keyof typeof businessHours.hours]> = [
   ['Mon', 'mon'],
@@ -1993,7 +1993,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
   }
 
   /**
-   * M1: ESTIMATE only — gpt-realtime rates (module constants above) applied
+   * M1: ESTIMATE only — gpt-realtime-2.1 rates (module constants above) applied
    * to this call's accumulated usage.
    *
    * ANALYTICS AUDIT FIX (2026-08-22, P1): when the text/audio modality split

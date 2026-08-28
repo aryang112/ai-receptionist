@@ -6,9 +6,11 @@ export const env = {
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
   OPENAI_REALTIME_API_KEY:
     process.env.OPENAI_REALTIME_API_KEY || process.env.OPENAI_API_KEY || '',
-  // GA Realtime model. The old 'gpt-4o-realtime-preview' (and the realtime beta
-  // endpoint) were shut off by OpenAI in May 2026 — gpt-realtime is the GA model.
-  OPENAI_REALTIME_MODEL: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime',
+  // Current Realtime model. gpt-realtime-2.1 keeps the GA WebSocket/session
+  // contract while improving tool use, alphanumeric recognition, noise/silence,
+  // and interruption handling over the now-deprecated gpt-realtime model.
+  OPENAI_REALTIME_MODEL:
+    process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1',
   // 'cedar' / 'marin' are OpenAI's newest, most natural Realtime voices (recommended).
   // Other options: alloy, ash, ballad, coral, echo, sage, shimmer, verse.
   OPENAI_REALTIME_VOICE: process.env.OPENAI_REALTIME_VOICE || 'cedar',
