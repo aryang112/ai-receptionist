@@ -43,6 +43,14 @@ other agents have moved the working tree):
 Verify after either: /health 200, fresh "Server up" hostname in
 `railway logs`, catalog 63, client index ~4179.
 
+## 2026-08-27 (11) — 😊 call-wide warmth (tone not speed) + person-ban on serviceName
+- Tone: "smile in your voice on EVERY turn — never flat or clinical
+  (warmth is tone, not speed)" — Aryan liked the brisk version's warmth;
+  pace stays greeting-only. Budget paid with prose trims (384 green).
+- suggest_availability serviceName description now bans person names at
+  the source ("Richa or a stylist is WHO, not a service — ask which
+  service first"); token-wise matcher remains as the safety net.
+
 ## 2026-08-27 (10) — 🎯 staff-match hardened to phrases + pace scoped to greeting line
 - 9:56 PM call regression: model passed serviceName "Richa availability" →
   whole-string edit distance missed → "no service called Richa availability"
