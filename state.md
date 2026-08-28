@@ -43,6 +43,28 @@ other agents have moved the working tree):
 Verify after either: /health 200, fresh "Server up" hostname in
 `railway logs`, catalog 63, client index ~4179.
 
+## 2026-08-27 (7) — 👋 GREETING CHANGED (Aryan trial, few days) + IDENTIFY slimmed to branches
+- **New greeting (word-for-word)**: "Richa's Threading Salon, this is Erica
+  on a recorded line — how can I help you?" — "virtual receptionist"
+  dropped (Aryan: it turns callers off; Glenda hung up mid-greeting).
+  Recorded-line notice KEPT (MD two-party consent — non-negotiable while
+  recording). Companion rule: asked if AI/human → one honest cheerful
+  line, NEVER claim to be human. Trial for a few days; watch hang-up-at-
+  greeting rate in /call-review vs before.
+- IDENTIFY rewritten as crisp conditional branches (existing-appt actions
+  vs booking yes/no path); booking tool desc + lookup note slimmed to
+  defer to it — net prompt SHORTER (~4.19k est tokens, budget test <4200).
+- Number-ask ordering: BEFORE name; no-path = silent lookup of dictated
+  number (found → their account; miss → say nothing, take name).
+- Repetition review (Aryan: leave as-is — selective confirming is fine).
+  Noted for his evidence file: reflexive echo ("you're looking to do
+  something"), double restatement on cancel, and a leaked meta-line
+  ("Call ended. The appointment was successfully canceled.") in the 8:59
+  PM call — thinking-out-loud exhibit #2. ALSO: 8:57 PM call booked 3:45
+  after caller accepted 4:30 (garble-heavy call; watch for recurrence).
+- Deploy chain today (all health 200): bc406abd9cc9 → 7f1ba7684b74 →
+  c46045aa377d (greeting).
+
 ## 2026-08-27 (6) — ☎️ number-on-file ask now MANDATORY for new-caller bookings (Aryan's 4-rule contract)
 - Tool-layer contract (book_appointment description + phone param + lookup
   no-match note): before booking any NEW caller, ask exactly once "Is the
