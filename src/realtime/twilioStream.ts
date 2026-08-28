@@ -332,7 +332,8 @@ ${greetingSection}
 
 IDENTIFY (required before any account action — booking, rescheduling, cancelling, running late. Knowing their name is NOT identification — the phone number is):
 - A background note says this caller was already recognized by caller ID → NEVER ask for their phone number, and confirm who they are only when and how the note says.
-- Otherwise ask for their phone number FIRST — before their name; the number is how their existing account is found, and a name-only booking risks a duplicate record → lookup_customer. No match → ask their first AND last name → lookup_customer with both (needLastName means you searched a first name alone — ask the last name and search again; never tell them they weren't found off a first name alone). Several matches → ask when their appointment is and match on it. No match at all → no problem, take their name and continue warmly — booking creates their profile.
+- Not recognized + an EXISTING appointment (reschedule, cancel, running late) → ask their phone number → lookup_customer. No match → ask their first AND last name → lookup_customer with both (needLastName means you searched a first name alone — ask the last name, search again; never call them not-found off a first name alone). Several matches → ask when their appointment is and match on it.
+- Not recognized + BOOKING → confirm first: "Is the number you're calling from the best one for your file?" YES → ask their name → book (the system attaches the number). NO → ask their number → lookup_customer silently: found → that's their account; not found → say nothing, ask their name → book with the number they gave.
 - A recognized caller says their number CHANGED → keep their account (never treat them as new, never re-run lookup on the new number — it isn't on file). When booking, pass BOTH their clientId AND the new number in customer.phone so the booking stays on their account and updates the number.
 - Once identified: use their first name warmly in your own words, and if they already said why they're calling, go STRAIGHT to it — never make them repeat it or ask "how can I help" again.
 
@@ -455,7 +456,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'book_appointment',
     description:
-      'Book an appointment once all details are confirmed with the caller. For a caller we already recognized (their account is on file), you do NOT need their phone number — book with just their name. For a NEW caller (no clientId), once the service and time are settled, identity goes IN THIS ORDER — the number question comes FIRST, BEFORE their name: ask, exactly once, "Is the number you\'re calling from the best one for your file?" — YES → omit customer.phone (the system attaches their caller-ID number), then ask their name. NO → ask what number to use, then SILENTLY run lookup_customer with it: found → that is their account, use its clientId (no need to create anything); not found → say NOTHING about it (never announce they are not in the system) — just ask their name as usual and pass the dictated number in customer.phone. Never book after a "no" without a number they gave you; they won\'t give one → warmly explain a phone number is needed to hold the booking, and help another way if they decline.',
+      'Book an appointment once all details are confirmed with the caller. Recognized caller (account on file) → book with just their name, no phone needed. NEW caller → identify per IDENTIFY (the number question comes BEFORE their name); never book after a "no" without a number the caller gave — if they won\'t give one, warmly explain a number is needed to hold the booking.',
     parameters: {
       type: 'object',
       properties: {
@@ -3130,7 +3131,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       });
       return {
         found: false,
-        note: 'No matching client — completely normal for a new caller; booking will create their profile. Their name: if you heard it clearly and certainly, just proceed — no confirmation ritual. If you are anything less than certain, confirm it before booking: read back the spelling they gave (never ask them to re-spell it), or read back what you heard. Never comment on the name itself — no "unique" or "unusual" — the only reason you ever give is wanting to get it right. Their number: before booking, ALWAYS ask once — BEFORE asking their name — "Is the number you\'re calling from the best one for your file?" — yes → it is attached automatically, never ask them to dictate it; no → ask what number to use, look it up silently (their account may live under it), and if nothing matches, never say so — just move on to their name and pass that number when booking.',
+        note: 'No matching client — completely normal for a new caller; booking will create their profile. Their name: if you heard it clearly and certainly, just proceed — no confirmation ritual. If you are anything less than certain, confirm it before booking: read back the spelling they gave (never ask them to re-spell it), or read back what you heard. Never comment on the name itself — no "unique" or "unusual" — the only reason you ever give is wanting to get it right. Their number: the calling-from question comes BEFORE their name — yes → attached automatically, never ask them to dictate it; no → silently look up the number they give; no match → never say so, just take their name.',
       };
     } catch (error) {
       logger.error(
