@@ -43,6 +43,15 @@ other agents have moved the working tree):
 Verify after either: /health 200, fresh "Server up" hostname in
 `railway logs`, catalog 63, client index ~4179.
 
+## 2026-08-27 (10) — 🎯 staff-match hardened to phrases + pace scoped to greeting line
+- 9:56 PM call regression: model passed serviceName "Richa availability" →
+  whole-string edit distance missed → "no service called Richa availability"
+  spoken aloud. matchStaffName now token-wise (>=3-char tokens, distance
+  <=2) — catalog-miss-gated, real services safe. +1 test (384 green).
+- Greeting pace direction scoped: quick pace THIS line ONLY, normal relaxed
+  pace after (Aryan: whole call had sped up). If his ear says the call is
+  still fast, REMOVE the pace direction entirely (his standing instruction).
+
 ## 2026-08-27 (9) — 🗣 greeting pacing + failed-cancel diagnosed (fix PARKED by Aryan)
 - Greeting delivery direction added: brisk upbeat front-desk pace, warm,
   smile in voice, never slow/read-out — paid for with in-paragraph trims
