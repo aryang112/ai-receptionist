@@ -43,6 +43,19 @@ other agents have moved the working tree):
 Verify after either: /health 200, fresh "Server up" hostname in
 `railway logs`, catalog 63, client index ~4179.
 
+## 2026-08-27 (8) — 📱 phone normalization: bare 10 digits everywhere (Aryan's convention)
+- Both normalizers + the write-path sanitiser now strip leading zeros
+  (NANP-safe: area codes never start 0 — the "00" Aryan saw on UI-created/
+  archived clients is always junk) AND a country 1 → store/match the bare
+  10-digit number. +8 tests (383 green). Container ceec5a25fff7.
+- Note: the client-list census (active only) found NO stored leading-zero
+  mobiles — the 00 records Aryan saw are archived, invisible to Erica.
+- PARKED (designed, awaiting go): "usual service" personalization — enrich
+  caller-ID prefetch + lookup_customer results with last-90-days usual
+  service/last visit (3 parallel 31-day windows, identity-gated, offer not
+  recite). Test plan incl. back-dated-booking probe in the 2026-08-27
+  conversation; Aryan exploring how to test before building.
+
 ## 2026-08-27 (7) — 👋 GREETING CHANGED (Aryan trial, few days) + IDENTIFY slimmed to branches
 - **New greeting (word-for-word)**: "Richa's Threading Salon, this is Erica
   on a recorded line — how can I help you?" — "virtual receptionist"
