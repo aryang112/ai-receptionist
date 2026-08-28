@@ -43,6 +43,23 @@ other agents have moved the working tree):
 Verify after either: /health 200, fresh "Server up" hostname in
 `railway logs`, catalog 63, client index ~4179.
 
+## 2026-08-27 (6) — ☎️ number-on-file ask now MANDATORY for new-caller bookings (Aryan's 4-rule contract)
+- Tool-layer contract (book_appointment description + phone param + lookup
+  no-match note): before booking any NEW caller, ask exactly once "Is the
+  number you're calling from the best one for your file?" — yes → omit
+  phone (system attaches caller-ID); no → MUST collect a dictated number
+  and pass it (dictated beats the fallback, test-locked); refuses → explain
+  a number is needed to hold the booking. Closes the consent hole where a
+  skipped ask (or an unresolved "no") silently attached the caller-ID.
+- Residual (accepted): the server cannot hear a "no" — if the model books
+  after a "no" without a number, the fallback still attaches the rejected
+  caller-ID. The mandatory ask shrinks this window; watch test calls.
+- Also observed (7:55 PM call, evidence for Aryan's watchlist): when the
+  CALLER says bye first, the model may generate NO goodbye — the grace
+  waits 3s of silence then hangs up. Mechanically correct; socially cold.
+  Not fixed (Aryan gathering evidence on her judgment calls).
+- Deployed container bc406abd9cc9, health 200, 375 tests green.
+
 ## 2026-08-27 (5) — 🛠 goodbye race + name contract fixed; Aryan's pilot decisions logged
 - **Goodbye race FIXED (code)**: model calls end_call BEFORE generating its
   goodbye → empty mark queue → instant hangup; the 7:03 PM call's "Take
