@@ -60,6 +60,13 @@ describe('matchStaffName — staff-name detection', () => {
     expect(matchStaffName('', STAFF)).toBeNull();
     expect(matchStaffName('wax', STAFF)).toBeNull();
   });
+  it('matches the staff name inside a phrase (the "Richa availability" call, 2026-08-27 9:56 PM)', () => {
+    expect(matchStaffName('Richa availability', STAFF)).toBe('Richa');
+    expect(matchStaffName('with Risha', STAFF)).toBe('Richa');
+    expect(matchStaffName('Richa appointment tomorrow', STAFF)).toBe('Richa');
+    // tiny tokens can never false-hit a name
+    expect(matchStaffName('at a wax', STAFF)).toBeNull();
+  });
 });
 
 describe('suggest_availability — staff member passed as serviceName', () => {
