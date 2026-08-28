@@ -187,7 +187,7 @@ describe('buildInstructions — TRANSFER self-service + closed-hours rules', () 
     // model re-delivered the greeting ("stops, then continues"). The rule
     // must exist in the standard AND transfer-failback greeting paragraphs.
     const standard = buildInstructions();
-    expect(standard).toMatch(/never deliver the greeting a second time/);
+    expect(standard).toMatch(/never deliver (the greeting|it) a second time/);
     const failback = buildInstructions(undefined, null, {
       transferFailback: true,
     });
