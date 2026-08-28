@@ -43,6 +43,22 @@ other agents have moved the working tree):
 Verify after either: /health 200, fresh "Server up" hostname in
 `railway logs`, catalog 63, client index ~4179.
 
+## 2026-08-27 (9) — 🗣 greeting pacing + failed-cancel diagnosed (fix PARKED by Aryan)
+- Greeting delivery direction added: brisk upbeat front-desk pace, warm,
+  smile in voice, never slow/read-out — paid for with in-paragraph trims
+  (budget test <4200 green). 383 tests.
+- 9:42 PM failed cancel DIAGNOSED: model passed the just-booked
+  APPOINTMENT id as list_appointments clientId (twice) → Phorest 404/500 →
+  >2-failures → transfer → after-hours window → SMS to Richa (SMS path =
+  long-standing design, NOT a new change). Cancel itself never ran. The 4PM
+  booking was cancelled manually via API; Aryan's record clean (0 upcoming).
+- **PARKED (Aryan: fix only if it recurs)**: 3-layer guard — booking-result
+  note (cancel THIS appt by id directly), list_appointments clientId param
+  description (never an appointmentId), code short-circuit when a served
+  appointmentId lands in the clientId slot. Watch /call-review for repeats.
+- Caller-ID recognition verified working with Aryan's restored record on
+  the 9:42 call ("am I speaking with Aryan?" + booking on cZnmhQAd…).
+
 ## 2026-08-27 (8) — 📱 phone normalization: bare 10 digits everywhere (Aryan's convention)
 - Both normalizers + the write-path sanitiser now strip leading zeros
   (NANP-safe: area codes never start 0 — the "00" Aryan saw on UI-created/
