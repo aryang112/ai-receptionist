@@ -124,8 +124,8 @@ audio before treating the input transcript as ground truth.
 | Wrong person/service interpretation | Tool arguments, handler guard result, recording             | Prompt/tool schema/entity guard; not necessarily input transcript |
 | Wrong appointment time/day          | Raw provider timestamp and normalized salon time            | Phorest adapter timezone boundary                                 |
 | Model offers unavailable slot       | Offered-slot cache, fresh-check result, snapped slots       | Slot policy or provider race                                      |
-| Repeated spoken filler              | Response phases and transcript around tool call             | Realtime preamble + prompt overlap                                |
-| Name requested twice                | Identity state and exact previous caller answer             | Conflicting prompt/state flow                                     |
+| Repeated spoken filler              | Response phases and transcript around the whole tool sequence | Native preamble duplication or selective-preamble rule regression |
+| Name requested twice                | Caller-context note and exact previous caller answer        | Model-tracked identity state failed to resolve                     |
 | Silent caller after a tool          | Active response/pending response-create and tool completion | Response collision/retry orchestration                            |
 | Call drops mid-sentence             | Twilio error, OpenAI close, Railway deploy lifecycle        | Telephony/network/container rather than prompt                    |
 | Richa receives no transfer          | transfer window, vacation, Dial status/failback, SMS result | Transfer policy or carrier outcome                                |
@@ -155,7 +155,9 @@ Every meaningful agent handoff should answer:
 - What is the exact safest next action?
 - What rollback point exists?
 
-For the current handoff, the safest next action is a focused prompt/state design
-for one-preamble-per-tool and single-question identity confirmation, followed
-by tests and a direct Twilio call. The early-arrival policy should remain a
-separate subsequent implementation, as requested by the owner.
+For the current handoff, the prompt/state design and local tests are complete.
+The safest next action is a direct Twilio staging evaluation of the scenarios in
+[`PROMPT_ARCHITECTURE.md`](PROMPT_ARCHITECTURE.md), followed by an explicit
+deploy decision. Response-phase instrumentation and deterministic server-owned
+identity state are the next hardening layers if the staged evidence requires
+them. The early-arrival policy remains a separate subsequent implementation.

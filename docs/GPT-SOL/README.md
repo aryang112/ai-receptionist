@@ -19,9 +19,12 @@ does not replace the canonical sources below.
    current state, and design assessment.
 5. [`QUIRKS_AND_INVARIANTS.md`](QUIRKS_AND_INVARIANTS.md) — the short list of
    rules that prevent expensive regressions.
-6. [`REALTIME_2_1_ANALYSIS.md`](REALTIME_2_1_ANALYSIS.md) — model controls,
-   latest test-call evidence, and the two newly exposed conversation issues.
-7. [`OPERATIONS_AND_AGENT_PROTOCOL.md`](OPERATIONS_AND_AGENT_PROTOCOL.md) — how
+6. [`PROMPT_ARCHITECTURE.md`](PROMPT_ARCHITECTURE.md) — the implemented prompt
+   layers, natural-conversation policy, rationale, limitations, and release
+   evaluation gate.
+7. [`REALTIME_2_1_ANALYSIS.md`](REALTIME_2_1_ANALYSIS.md) — model controls,
+   test-call evidence, the prompt changes it motivated, and remaining risks.
+8. [`OPERATIONS_AND_AGENT_PROTOCOL.md`](OPERATIONS_AND_AGENT_PROTOCOL.md) — how
    to inspect, change, test, deploy, and hand the project off safely.
 
 `PLAN.md` and `tasks/todo.md` are useful history, but their old unchecked items
@@ -43,18 +46,22 @@ are not automatically current work. Confirm every item against the newest
   change was made as part of this documentation pass.
 - Vonage forwarding is OFF. Production can be tested only by calling the
   direct Twilio number until the owner deliberately re-enables forwarding.
-- The test baseline at this refresh is 42 test files and 384 passing tests.
+- The prompt rework is implemented and locally tested but was not deployed in
+  this documentation/change pass. Production still requires a direct Twilio
+  staging call and explicit release decision.
+- The test baseline at this refresh is 42 test files and 394 passing tests.
 - Call records, tool history, both-side transcripts when enabled, recording
   references, usage, cost estimates, and warnings are available through the
   protected admin surface and the append-only call store.
 
 ## Highest-value open work
 
-1. Resolve Realtime 2.1's duplicate spoken preambles without damaging latency
-   or tool reliability. The latest call exposed a conflict between the model's
-   native preambles and the prompt's “before every tool call” filler rule.
-2. Resolve recognized-caller identity flow so Erica never asks two questions in
-   one turn or re-asks a name after an ambiguous reply.
+1. Stage and listen-test the 2026-08-28 prompt release. Verify zero preambles on
+   routine price lookup, at most one across a two-date availability sequence,
+   and identity as the only question in its turn.
+2. Add response-phase instrumentation and deterministic server-owned identity
+   states if staged evidence shows prompt guidance alone is insufficient. The
+   current `UNCONFIRMED`/`CONFIRMED`/`REJECTED` contract is model-tracked.
 3. Design and implement the owner-defined squeeze-in policy. It is not yet in
    production: an early caller may be accepted during another appointment only
    when the in-progress service permits multitasking; facials, haircuts, and

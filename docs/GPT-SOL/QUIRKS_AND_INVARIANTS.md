@@ -48,6 +48,10 @@ contains the full history and must still be read before relevant changes.
   invalidation on long calls.
 - Keep the stable instruction/tool prefix stable. Add caller-specific context
   after it so prompt caching survives personalization.
+- Tool preambles are selective: at most one brief action update for a whole
+  noticeably slow lookup sequence. Routine price lookup, direct answers,
+  confirmations, corrections, unclear/background audio, and `end_call` have no
+  preamble. See [`PROMPT_ARCHITECTURE.md`](PROMPT_ARCHITECTURE.md).
 - The current turn detector is `server_vad`. During the greeting,
   `interrupt_response` and `create_response` are deliberately disabled and then
   re-enabled with the **full** turn-detection object. Nested partial updates
@@ -69,8 +73,9 @@ contains the full history and must still be read before relevant changes.
   reason and an end-to-end call test.
 - Caller-ID warming races the OpenAI connection. A timeout is not a negative
   match; the late lookup may still adopt the recognized caller.
-- Never cold-greet a recognized caller by name. Confirm identity only after
-  they state a salon request.
+- Never cold-greet a recognized caller by name. Public information needs no
+  identity check; immediately before the first account-specific read/write,
+  make identity the only question in that turn and wait.
 - `callerSpeaking` is true between VAD speech-started and speech-stopped. A long
   monologue is active speech, not mutual silence.
 - Silence behavior is 20 seconds to one check-in, then 15 more seconds to a
@@ -91,8 +96,12 @@ contains the full history and must still be read before relevant changes.
 
 ## Write-path and privacy invariants
 
-- Identification requires the phone number for account actions; knowing a name
-  alone is not identity.
+- Identification requires a confirmed warmed caller-ID account or a successful
+  lookup for account actions; knowing a name alone is not identity. Never ask a
+  recognized caller for their phone number.
+- The recognized caller's `UNCONFIRMED`/`CONFIRMED`/`REJECTED` transition is
+  currently model-tracked prompt state, not a deterministic server enum. Do not
+  report it as server-enforced until tool authorization is implemented.
 - Appointment details may be discussed only with the identified appointment
   owner. Never confirm another person's appointment, schedule, or whereabouts.
 - Never speak or log a private phone number. A transfer connects the call

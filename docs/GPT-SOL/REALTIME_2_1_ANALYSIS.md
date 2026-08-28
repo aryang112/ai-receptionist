@@ -42,9 +42,10 @@ because it is higher. No such experiment is authorized or implemented now.
 ### Prompt literalness
 
 Realtime 2 follows explicit instructions closely. That improves structured
-flows, but conflicting rules become more visible. Instructions such as “one
-question at a time,” “check identity in the same breath,” and “before every
-tool call say filler” cannot all be left to soft interpretation.
+flows, but conflicting rules become more visible. The prompt used for the first
+2.1 call simultaneously said “one question at a time,” “check identity in the
+same breath,” and “before every tool call say filler.” Those conflicts were
+removed in the local 2026-08-28 prompt release.
 
 Prefer:
 
@@ -57,10 +58,13 @@ Prefer:
 ### Preambles and response phases
 
 Realtime 2 can speak brief preambles before tool use and can produce multiple
-response phases. Erica's prompt already requires spoken filler before every
-tool call. If both mechanisms fire, the caller hears two versions of “let me
-check that.” The application currently forwards all audio and does not record a
-phase label, so it cannot distinguish or suppress duplicate commentary.
+response phases. The prompt used for the audited call also required spoken
+filler before every tool call. Both mechanisms fired, so the caller heard
+duplicate commentary. The local prompt now permits at most one action update
+for a whole noticeably slow lookup sequence and explicitly skips routine price
+lookups and several other fast paths. The application still forwards all audio
+and does not record a phase label, so prompt success must be verified by a
+staged call and phase instrumentation remains useful.
 
 ### Transcription is not hearing
 
@@ -125,16 +129,19 @@ then two similar “let me check” preambles once the service was known.
 “before EVERY tool call” filler instruction overlap. The code then streams all
 spoken phases. This is a policy collision, not a Phorest or latency failure.
 
-**Proposed experiment, not implemented:**
+**Implemented locally, not yet deployed:**
 
-1. Capture/log response phase metadata first so the source is measurable.
-2. Replace the universal filler mandate with one narrow latency rule: speak one
-   brief acknowledgment only when a tool is actually about to run and no
-   equivalent preamble has already been spoken in that turn.
-3. Add transcript-level tests for exactly zero or one preamble per tool call.
-4. Stage calls across price, availability, booking, and slow/error paths.
-5. Consider suppressing a commentary phase in code only if the model/prompt
-   change cannot make output consistent and the phase contract is stable.
+1. The universal filler mandate was removed.
+2. The prompt allows at most one brief action update for a whole lookup
+   sequence and treats two date checks as one sequence.
+3. Direct answers, corrections, confirmations, unclear/background audio,
+   routine fast lookups, and `end_call` explicitly receive no preamble.
+4. Tests lock the policy and both fallback/full-catalog prompt budgets.
+
+**Still required:** stage price, availability, booking, and slow/error calls.
+Capture response-phase metadata so a recurrence can be attributed. Suppress a
+provider commentary phase in code only if the prompt cannot make output
+consistent and the phase contract proves stable.
 
 Avoid a brittle list of forbidden phrases; the duplication is structural.
 
@@ -146,22 +153,25 @@ remained unresolved. After the tool result Erica bundled identity and booking
 again; an ambiguous reply led to another name request, which frustrated the
 caller.
 
-**Analysis:** the prompt contains a direct contradiction. Its global rule says
-one question at a time, while recognized-caller context instructs Erica to
-acknowledge the request and check the name “in the same breath.” The first turn
-created two answerable questions, and the model had no deterministic identity
-state transition because the reply did not answer both.
+**Analysis:** the prompt used for that call contained a direct contradiction.
+Its global rule said one question at a time, while recognized-caller context
+told Erica to acknowledge the request and check the name “in the same breath.”
+The first turn created two answerable questions, and the model had no
+deterministic identity state transition because the reply did not answer both.
 
-**Proposed experiment, not implemented:**
+**Implemented locally, not yet deployed:** recognized-caller context starts at
+`UNCONFIRMED`, makes identity the only question in the turn, requires a stop and
+wait, preserves the original request, and defines clear yes/no/unrelated-answer
+handling. Public hours, services, prices, and availability do not require
+identity. The old “same breath” direction and candidate reply scripts are gone,
+and the caller-context builders now have focused tests.
 
-1. Make identity confirmation a discrete state with a single question.
-2. Do not ask service/date/time in the identity-confirmation turn.
-3. Track identity as `unknown`, `confirmed`, or `rejected` in server-side call
-   state when possible; do not infer confirmation from an unrelated answer.
-4. If a reply is ambiguous, acknowledge it once and ask one short identity
-   question. Never bundle it with booking consent.
-5. Add scripted tests for partial answers, corrections, nicknames, “no,” and
-   conversational detours before another live call.
+**Remaining limitation:** those identity labels are a model-facing
+conversation contract, not a server-owned enum that authorizes every account
+tool. A future hardening pass should track `unconfirmed`, `confirmed`, and
+`rejected` in call state and reject account reads/writes while unresolved. The
+staged release test must still cover partial answers, corrections, “no,” and a
+conversational detour.
 
 ## Person versus service: current conclusion
 

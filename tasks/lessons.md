@@ -99,8 +99,13 @@ with no args returns the warmed account. (Injection lives in `warmCallerContext`
 - **Don't assume intent.** Erica was greeting then immediately running tools and
   driving the flow ("let me pull up your appointments…") unprompted. Greet → STOP
   → WAIT. Only act on a clearly-stated request; ask if unclear.
-- **Mask tool latency with a spoken filler** ("let me check that…") before every
-  tool call so the line never goes dead.
+- **Use selective preambles, not filler before every tool** (supersedes the
+  earlier rule on 2026-08-28). Realtime 2.1 can produce its own spoken
+  preamble; the old universal filler rule caused duplicate check-in lines.
+  Give at most one brief action update for a whole noticeably slow lookup
+  sequence, and none for direct answers, confirmations, corrections, unclear
+  audio, routine price lookup, or `end_call`. Never put a canned filler line in
+  the prompt.
 - **Telephony has no echo cancellation** — the agent's own greeting can echo back
   (esp. speakerphone) and falsely trigger a turn. `semantic_vad` (waits for
   semantic end-of-turn) is the candidate fix; verify its GA shape first.

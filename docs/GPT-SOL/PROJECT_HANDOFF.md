@@ -48,7 +48,7 @@ or services.
 - Direct PCMU passthrough minimizes latency and removes a fragile audio
   transcoding/resampling layer.
 - Per-call state belongs naturally in one `TwilioRealtimeCall` instance.
-- Tool execution is close to the Realtime socket, making filler speech and
+- Tool execution is close to the Realtime socket, making spoken preambles and
   tool-result continuation easier to coordinate.
 - `PhorestPort` provides the important boundary: the voice/orchestration layer
   does not need to know whether the appointment implementation is real or mock.
@@ -138,6 +138,9 @@ When a behavior is safety- or write-critical, a prompt-only fix is incomplete.
   fixed after the first emitted audio in a Realtime session.
 - Prompt, tool definitions, salon policy, and explicit reasoning configuration
   were not changed as part of the model upgrade.
+- A subsequent 2026-08-28 prompt release is implemented and tested locally but
+  is not claimed as deployed. It changes conversation guidance and high-salience
+  tool descriptions without changing the Realtime session shape.
 - Reasoning effort is omitted, so provider/default behavior applies.
 - Vonage forwarding is disabled. A direct Twilio call is the staging path.
 - Production and `main` are aligned again. Older `state.md` banners that say
@@ -152,7 +155,8 @@ treated Richa as a service. The transcript model produced near-homophones for
 some names, but the conversation behavior and a later high-quality recording
 transcription indicate the speech model understood the intended names.
 
-The same call exposed two prompt/model interaction problems:
+The same call exposed two prompt/model interaction problems in the prompt that
+was deployed for that test:
 
 1. Realtime 2.1 produced repeated tool preambles. The model appears to combine
    native preamble behavior with the prompt's mandatory filler-before-every-tool
@@ -163,8 +167,18 @@ The same call exposed two prompt/model interaction problems:
    “one question at a time” and tells the model to check the recognized name
    “in the same breath” as acknowledging the request.
 
-See [`REALTIME_2_1_ANALYSIS.md`](REALTIME_2_1_ANALYSIS.md) for evidence and
-proposed experiments.
+The local prompt release removes both collisions: tool commentary is now
+selective and capped at one action update for a whole lookup sequence, while
+recognized identity is the sole question in its turn followed by an explicit
+wait. It also removes forced vocal tics, reflexive request echoing, and
+ready-made dialogue from later system notes. This is an implemented contract,
+not yet live evidence. Identity transitions remain model-tracked rather than a
+deterministic server authorization state, and response phases are not yet
+persisted.
+
+See [`PROMPT_ARCHITECTURE.md`](PROMPT_ARCHITECTURE.md) for the implementation
+rationale and release gate, and
+[`REALTIME_2_1_ANALYSIS.md`](REALTIME_2_1_ANALYSIS.md) for the source evidence.
 
 ## Requirements that are documented but not implemented
 
@@ -195,9 +209,10 @@ as unavailable and does not encode multitasking exceptions.
 - A prior cancel failure passed an appointment ID where `list_appointments`
   expected a client ID. It is parked pending recurrence/evidence.
 - “Usual service” personalization is designed but not implemented.
-- Full phone-on-file update behavior, last-four identity checking, and
-  multiple phone-match handling remain owner decisions rather than hidden
-  assumptions.
+- The owner explicitly chose no phone-on-file updates and no last-four identity
+  check. The prompt preserves the resolved account and does not ask for a new
+  number when a known caller mentions one. Multiple phone-match handling
+  remains parked.
 - Historical Twilio 31924 disconnects have additional forensics. Escalate to
   Twilio support with a call-specific evidence bundle if they recur.
 

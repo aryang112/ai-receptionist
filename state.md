@@ -3,6 +3,41 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-08-28 — GPT Realtime 2.1 prompt release implemented locally (not deployed)
+
+- Reworked Erica's effective prompt across the core instructions, tool
+  descriptions, caller-ID context, and later silence/duration/goodbye notes.
+  The prompt now has explicit precedence, short-turn/one-question discipline,
+  no reflexive echo or internal narration, selective action-only preambles,
+  and no forced smile/laugh/backchannel behavior.
+- Removed the two conflicts exposed by the first 2.1 call: universal filler
+  before every tool and recognized identity “in the same breath” as another
+  question. Recognized identity is now the only question in its turn followed
+  by a wait; public hours/services/prices/availability remain identity-free.
+- Preserved owner decisions and production invariants: the exact recorded-line
+  greeting, no phone-number update or ask for a recognized account, explicit
+  confirmation before appointment writes, result-before-next-step behavior,
+  privacy, transfer/vacation behavior, and all deterministic handler guards.
+- Added pure/testable caller-context builders, centralized unscripted later
+  context notes, and placed confirmation/success language beside all three
+  appointment write tools.
+- Added `docs/GPT-SOL/PROMPT_ARCHITECTURE.md` and refreshed the GPT-SOL handoff,
+  Realtime analysis, codemap, and the superseded filler lesson. The doc records
+  the rationale, effective prompt layers, known limitation, and staged-call
+  acceptance matrix.
+- Verification: 42 test files / 394 tests pass; `npm run build` and
+  `git diff --check` pass. Estimated fallback prompt is ~3.9k tokens; the test
+  path with 63 realistic services + active vacation + transfer failback is
+  under 5k.
+- **Known limitation:** identity status is still a model-facing conversation
+  contract, not a server-owned enum that gates every account tool. Response
+  phases are also not persisted, so unit tests cannot prove audible preamble
+  count.
+- **Next action:** use the direct Twilio staging number for the prompt eval
+  matrix before any deploy decision. No deployment, model/voice/reasoning/VAD
+  change, forwarding change, Phorest write, or Realtime session-field change
+  occurred in this pass.
+
 ## 2026-08-28 — GPT-SOL agent handoff documented (documentation only)
 
 - Added `docs/GPT-SOL/` as a durable orientation and knowledge-transfer package:
