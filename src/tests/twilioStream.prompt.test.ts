@@ -378,6 +378,17 @@ describe('buildInstructions — PRIVACY (P1)', () => {
 // with the OpenAI Realtime prompting guide and kept compact enough for the
 // full production service catalog.
 describe('buildInstructions — production prompt architecture (2026-08-28)', () => {
+  it('uses one specific, natural warmth instruction without performative cheerfulness', () => {
+    const p = buildInstructions();
+    expect(p).toContain(
+      'Sound like a warm, familiar salon receptionist: relaxed, attentive, and genuinely glad to help.'
+    );
+    expect(p).toContain(
+      'Keep it natural—never bubbly, theatrical, or overly enthusiastic.'
+    );
+    expect(p).not.toContain('Warm, calm, capable, and attentive.');
+  });
+
   it('follows the guide section order, with dynamic CURRENT STATUS dead last', () => {
     const p = buildInstructions();
     const order = [
