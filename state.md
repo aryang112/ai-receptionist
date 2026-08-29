@@ -3,23 +3,23 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
-## ⏳ DEPLOYMENT QUEUED 2026-08-28 ~21:09 ET: Realtime 2.1 prompt release
+## ✅ DEPLOYED 2026-08-29 ~11:06 ET: natural-warmth listening trial
 
-- Aryan explicitly approved deploying prompt commit `e276f4c`. Pre-deploy
-  verification passed: 42 test files / 394 tests, TypeScript build, and
-  `git diff --check` are clean.
-- Railway deployment `7a266ff2-cb27-4318-9ec2-c0104de9ef13` compiled
-  successfully but remains at `BUILDING` / image push. One identical safe
-  retry, `31a24a46-9dac-467d-8921-f7e0a1500766`, remains `INITIALIZING`.
-- Railway has an active platform incident, "Deployments slow to start," caused
-  by a networking issue and deployment backlog. Do not claim the prompt is
-  live until one of the two IDs reports `SUCCESS` and post-deploy checks pass.
-- The prior healthy deployment `cd713d30-a303-4573-a2f4-9206ed7b9dac`
-  continues serving and is the rollback point. Vonage forwarding remains OFF;
-  there is no customer call exposure.
-- **Pending:** wait for either queued deployment to succeed, verify `/health`,
-  startup logs (server, catalog, client index), and effective model/voice, then
-  update this entry and tell Aryan the direct Twilio comparison call is ready.
+- Prompt commit `8b172b6` replaced only Erica's broad opening tone sentence
+  with a specific, lean direction: sound like a warm, familiar salon
+  receptionist—relaxed, attentive, genuinely glad to help, and natural rather
+  than bubbly, theatrical, or overly enthusiastic. No flow, tool, business,
+  session, model, voice, reasoning, VAD, or Phorest behavior changed.
+- Added one prompt-contract test. Verification: 42 test files / 395 tests,
+  TypeScript build, and `git diff --check` pass.
+- Railway deployment `835c8fa8-9c2e-43ec-b2d8-dc82e534b26d` is `SUCCESS`;
+  `/health` returned OK, catalog warmed with 63 services, and the complete
+  client index loaded 4,185 clients across 28 pages.
+- Effective runtime remains `gpt-realtime-2.1` with `marin`. The immediately
+  preceding prompt release `31a24a46-9dac-467d-8921-f7e0a1500766` is the
+  rollback point in Railway history. Vonage forwarding remains OFF.
+- **Next action:** Aryan calls the direct Twilio staging number and compares
+  warmth/naturalness without conflating this trial with other behavior fixes.
 
 ## 2026-08-28 — GPT Realtime 2.1 prompt release implemented locally (not deployed)
 
