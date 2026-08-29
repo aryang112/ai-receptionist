@@ -3,6 +3,24 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## ⏳ DEPLOYMENT QUEUED 2026-08-28 ~21:09 ET: Realtime 2.1 prompt release
+
+- Aryan explicitly approved deploying prompt commit `e276f4c`. Pre-deploy
+  verification passed: 42 test files / 394 tests, TypeScript build, and
+  `git diff --check` are clean.
+- Railway deployment `7a266ff2-cb27-4318-9ec2-c0104de9ef13` compiled
+  successfully but remains at `BUILDING` / image push. One identical safe
+  retry, `31a24a46-9dac-467d-8921-f7e0a1500766`, remains `INITIALIZING`.
+- Railway has an active platform incident, "Deployments slow to start," caused
+  by a networking issue and deployment backlog. Do not claim the prompt is
+  live until one of the two IDs reports `SUCCESS` and post-deploy checks pass.
+- The prior healthy deployment `cd713d30-a303-4573-a2f4-9206ed7b9dac`
+  continues serving and is the rollback point. Vonage forwarding remains OFF;
+  there is no customer call exposure.
+- **Pending:** wait for either queued deployment to succeed, verify `/health`,
+  startup logs (server, catalog, client index), and effective model/voice, then
+  update this entry and tell Aryan the direct Twilio comparison call is ready.
+
 ## 2026-08-28 — GPT Realtime 2.1 prompt release implemented locally (not deployed)
 
 - Reworked Erica's effective prompt across the core instructions, tool
