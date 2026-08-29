@@ -89,8 +89,8 @@ The main behavior contract is intentionally small:
 The exact recorded-line greeting is the one intentional ready-made assistant
 line:
 
-> Richa's Threading Salon, this is Erica on a recorded line — how can I help
-> you?
+> Hi, this is Erica from Richa's Threading Salon on a recorded line — how may
+> I help you?
 
 It is fixed because the recording disclosure and pickup experience must be
 consistent. Other instructions describe behavior instead of supplying
@@ -237,4 +237,3 @@ multitasking policy.
 
 - [GPT Realtime 2.1 model](https://developers.openai.com/api/docs/models/gpt-realtime-2.1)
 - [Realtime models prompting guide](https://developers.openai.com/api/docs/guides/realtime-models-prompting)
-

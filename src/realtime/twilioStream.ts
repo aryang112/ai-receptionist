@@ -329,7 +329,7 @@ Erica cannot connect a caller to Richa while she's away — offer to pass a mess
   // sentence in a prompt WILL be parroted in the wrong context (lessons.md).
   const greetingSection = opts.transferFailback
     ? `GREETING (transfer failback — not a new call): the caller is back after Richa did not pick up. Open immediately with one or two warm, apologetic sentences offering either a text message to Richa or your help. Then wait. Do not repeat the greeting or recording notice, reintroduce yourself, ask who is calling, or restart the conversation. If they speak over this opening, finish it once, retain what they said, and never repeat it.`
-    : `GREETING: Start immediately with this exact line, in full and at a brisk, warm pace: "${businessHours.name}, this is Erica on a recorded line — how can I help you?" Then STOP and wait. This fixed line supplies Maryland's recording notice and must occur exactly once. If the caller speaks over it, finish it but never repeat it or answer the overlap separately; retain what they said and wait for their next addressed speech.`;
+    : `GREETING: Start immediately with this exact line, in full and at a brisk, warm pace: "Hi, this is Erica from ${businessHours.name} on a recorded line — how may I help you?" Then STOP and wait. This fixed line supplies Maryland's recording notice and must occur exactly once. If the caller speaks over it, finish it but never repeat it or answer the overlap separately; retain what they said and wait for their next addressed speech.`;
 
   // H1: full catalog present → replace the tool-first price paragraph with
   // the hot-loaded, alphabetized list + its own quote-only-from-list rule.
@@ -425,7 +425,7 @@ SERVE — hear what the caller actually NEEDS before acting. Callers almost neve
 CLOSE: after you finish helping with something, ask if there's anything else. Something more → keep helping the same way, and ask again after. They say they're done / goodbye → say ONE warm goodbye and then IMMEDIATELY call end_call in that SAME turn — don't keep chatting after the goodbye, and don't wait for them to hang up.
 
 ═══ SAFETY & ESCALATION ═══
-ASKED FOR RICHA: honor an explicit request for Richa or a real person promptly, without probing or persuasion. If RICHA'S LINE says POSSIBLE and no active away notice applies, transfer. Otherwise say briefly that a live transfer is unavailable and offer to text her a message. Never promise a transfer and retract it.
+ASKED FOR RICHA: "Is Richa available, free, or there?" alone is AMBIGUOUS, not permission to transfer. Ask exactly: "Are you checking Richa's availability for an appointment, or would you like me to connect you with her?" Then STOP and WAIT. Appointment service, date, or time context follows the booking flow. An explicit connection request says speak, talk, connect, or transfer to Richa or a real person; honor that promptly without probing or persuasion. If RICHA'S LINE says POSSIBLE and no active away notice applies, transfer. Otherwise say briefly that a live transfer is unavailable and offer to text her a message. Never promise a transfer and retract it.
 
 SELF-SERVICE FIRST: if the caller describes a problem or asks to send a message without explicitly asking for Richa, first offer to handle any supported task. If they cannot make an appointment, offer a new time; if they do not want one, offer cancellation. After helping, offer a message only if something personal remains.
 
@@ -493,6 +493,28 @@ export function matchStaffName(
     }
   }
   return null;
+}
+
+/**
+ * "Is Richa available?" can mean either appointment availability or a live
+ * phone connection. Keep that ambiguity from becoming an irreversible dial.
+ * Phone transcription commonly renders Richa as "Richard", so staff-name
+ * matching deliberately reuses the same fuzzy boundary as availability.
+ */
+function isAmbiguousRichaAvailabilityRequest(text: string): boolean {
+  if (!matchStaffName(text, ['Richa'])) return false;
+  if (!/\b(?:available|availability|free|working|there)\b/i.test(text)) {
+    return false;
+  }
+
+  const explicitlyWantsConnection =
+    /\b(?:speak|speaking|talk|talking|connect|connecting|transfer|transferring)\b/i.test(
+      text
+    ) ||
+    /\bput\s+(?:me|us)\s+through\b/i.test(text) ||
+    /\bget\s+(?:richa|her)\s+on\s+(?:the\s+)?(?:phone|line)\b/i.test(text);
+
+  return !explicitlyWantsConnection;
 }
 
 function editDistance(a: string, b: string): number {
@@ -706,7 +728,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'transfer_to_owner',
     description:
-      'Transfer the call to Richa (the salon owner) — or, outside her calling hours, deliver a message to her phone as a text. Use PROMPTLY when the caller explicitly asks for Richa or a real person. Otherwise LAST RESORT — you handle booking (including multiple services), rescheduling, cancelling, hours, and running-late yourself; use only for: a group booking for several DIFFERENT people; a tool that keeps failing AFTER you retried it; or a caller who is clearly upset and wants a human.',
+      'Transfer the call to Richa (the salon owner) — or, outside her calling hours, deliver a message to her phone as a text. Use PROMPTLY only when the caller explicitly asks to speak or talk with Richa, be connected or transferred to her, or asks for a real person. Is Richa available/free/there alone is ambiguous and MUST NOT trigger this tool: clarify appointment availability versus a live connection, then wait. Appointment service/date/time context follows the booking flow, not transfer. Otherwise LAST RESORT — you handle booking (including multiple services), rescheduling, cancelling, hours, and running-late yourself; use only for: a group booking for several DIFFERENT people; a tool that keeps failing AFTER you retried it; or a caller who is clearly upset and wants a human.',
     parameters: {
       type: 'object',
       properties: {
@@ -3416,6 +3438,26 @@ export class TwilioRealtimeCall {
         return { error: parsed.error };
       }
       const payload = parsed.data as { reason: string };
+
+      // The Realtime model can still overgeneralize "asked for Richa" into a
+      // transfer despite prompt/schema guidance. The latest final caller
+      // transcript gives us a deterministic guard immediately before the
+      // irreversible dial. Return high-salience state guidance so Erica asks
+      // one clarifying question and waits instead of silently transferring.
+      const latestCallerText =
+        [...this.transcript].reverse().find((entry) => entry.role === 'caller')
+          ?.text ?? '';
+      if (isAmbiguousRichaAvailabilityRequest(latestCallerText)) {
+        logger.info(
+          { tool: 'transfer_to_owner', callSid: this.callSid },
+          'Transfer blocked — Richa availability intent is ambiguous'
+        );
+        return {
+          transferred: false,
+          clarificationRequired: true,
+          note: `Do not transfer: the caller asked whether Richa is available without explicitly asking to speak with her. If they included appointment service, date, or time context, continue the booking availability flow and ask only the next missing booking detail. Otherwise ask exactly: "Are you checking Richa's availability for an appointment, or would you like me to connect you with her?" Then stop and wait. Call transfer_to_owner again only if they choose a live connection.`,
+        };
+      }
 
       // FAILBACK GATE (2026-08-24): this segment EXISTS because a live dial to
       // Richa just rang out on this very call. Dialing her again would loop

@@ -98,6 +98,52 @@ describe('transfer_to_owner — transfer-window gate', () => {
     expect(notifyOwnerSms).not.toHaveBeenCalled();
   });
 
+  it('AMBIGUOUS AVAILABILITY: asks appointment-versus-transfer before dialing', async () => {
+    vi.setSystemTime(new Date('2026-08-25T14:00:00-04:00'));
+    const call = buildCall();
+    call.transcript = [
+      {
+        role: 'caller',
+        text: 'Hey Erica, is Richard available?',
+        ts: Date.now(),
+      },
+    ];
+    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    call.notifyOwnerSms = notifyOwnerSms;
+
+    const result = await call.handleTransferToOwner({
+      reason: 'Caller requested to speak with Richa directly.',
+    });
+
+    expect(result).toEqual({
+      transferred: false,
+      clarificationRequired: true,
+      note: expect.stringMatching(/appointment.*live connection/i),
+    });
+    expect(notifyOwnerSms).not.toHaveBeenCalled();
+  });
+
+  it('EXPLICIT CONNECTION: availability wording plus speak request still dials', async () => {
+    vi.setSystemTime(new Date('2026-08-25T14:00:00-04:00'));
+    const call = buildCall();
+    call.transcript = [
+      {
+        role: 'caller',
+        text: 'Is Richa available? I need to speak with her.',
+        ts: Date.now(),
+      },
+    ];
+    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    call.notifyOwnerSms = notifyOwnerSms;
+
+    const result = await call.handleTransferToOwner({
+      reason: 'Caller explicitly asked to speak with Richa.',
+    });
+
+    expect(result).toEqual({ error: 'Transfer unavailable' });
+    expect(notifyOwnerSms).not.toHaveBeenCalled();
+  });
+
   it('THE HOLLY FIX — Mon 11:46am (14 min before noon opening): DIALS', async () => {
     // Holly's actual call: Monday 2026-08-24, 11:46 AM — salon opens at
     // noon, so the old salon-hours gate blocked the dial and Erica had to

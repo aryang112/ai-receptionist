@@ -233,10 +233,19 @@ describe("buildInstructions — transfer window (RICHA'S LINE)", () => {
     );
   });
 
-  it('asked-for-Richa fast path: honor promptly, never promise-then-walk-back', () => {
+  it('asked-for-Richa gate: clarify availability, honor explicit connection requests', () => {
     const instructions = buildInstructions();
     expect(instructions).toMatch(/ASKED FOR RICHA/);
-    expect(instructions).toMatch(/honor an explicit request.*promptly/);
+    expect(instructions).toMatch(/available, free, or there.*AMBIGUOUS/i);
+    expect(instructions).toContain(
+      "Are you checking Richa's availability for an appointment, or would you like me to connect you with her?"
+    );
+    expect(instructions).toMatch(
+      /Appointment service, date, or time context follows the booking flow/i
+    );
+    expect(instructions).toMatch(
+      /explicit connection request says speak, talk, connect, or transfer/i
+    );
     expect(instructions).toMatch(/Never promise a transfer and retract it/);
   });
 });
@@ -245,11 +254,12 @@ describe("buildInstructions — transfer window (RICHA'S LINE)", () => {
 // call pattern: a caller before opening time asking to book "today" must
 // hear openings, not a volunteered "we're closed right now."
 describe('buildInstructions — GREETING compression + never-volunteer-closed', () => {
-  it('greeting: classic salon pickup (2026-08-27), recorded-line notice kept, no AI label', () => {
+  it('greeting: warm introduction (2026-08-29), recorded-line notice kept, no AI label', () => {
     const instructions = buildInstructions();
-    const legalGreeting = `${businessHours.name}, this is Erica on a recorded line — how can I help you?`;
+    const legalGreeting = `Hi, this is Erica from ${businessHours.name} on a recorded line — how may I help you?`;
     expect(instructions).toContain('on a recorded line');
     expect(instructions.split(legalGreeting)).toHaveLength(2);
+    expect(instructions).not.toContain(`${businessHours.name}, this is Erica`);
     expect(instructions).not.toContain('virtual receptionist');
     expect(instructions).not.toContain('this call may be recorded');
     expect(instructions).not.toMatch(/smile in your voice/i);
@@ -615,5 +625,21 @@ describe('high-salience write tool descriptions', () => {
     );
     expect(tool!.description).toMatch(/same turn/i);
     expect(tool!.description).not.toMatch(/"/);
+  });
+
+  it('keeps ambiguous Richa availability out of the transfer tool', () => {
+    const tool = TOOL_DEFINITIONS.find(
+      (candidate) => candidate.name === 'transfer_to_owner'
+    );
+    expect(tool).toBeDefined();
+    expect(tool!.description).toMatch(
+      /available\/free\/there.*MUST NOT trigger/i
+    );
+    expect(tool!.description).toMatch(
+      /appointment availability versus a live connection/i
+    );
+    expect(tool!.description).toMatch(
+      /speak or talk.*connected or transferred/i
+    );
   });
 });
