@@ -3,6 +3,40 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## ✅ DEPLOYED 2026-08-29 ~11:49 ET: warmer greeting + ambiguous Richa transfer guard
+
+- The 11:23 ET production trace on deployment
+  `835c8fa8-9c2e-43ec-b2d8-dc82e534b26d` confirmed both reported symptoms.
+  Erica spoke the old fixed greeting; the caller then asked, “Is Richard
+  available?” (the transcription of “Richa”), and 255 ms later the model
+  called `transfer_to_owner` with the invented interpretation that the caller
+  wanted to speak with her directly. Twilio redirected immediately, so the
+  model's later “Connecting you” sentence was generated only after the media
+  socket had closed and could not be heard.
+- Commit `ade8b16` changes the exact greeting to: “Hi, this is Erica from
+  Richa's Threading Salon on a recorded line — how may I help you?” No model,
+  voice, VAD, reasoning, session-field, Phorest, or forwarding setting changed.
+- “Is Richa available/free/there?” alone is now explicitly ambiguous in both
+  the core prompt and the `transfer_to_owner` tool contract. Erica must ask
+  whether the caller means appointment availability or a live connection.
+  Service/date/time context stays in the booking flow; explicit speak/talk/
+  connect/transfer language still uses the prompt transfer path.
+- A deterministic handler guard checks the latest caller transcript immediately
+  before dialing. It recognizes phone transcription variants such as “Richard,”
+  blocks an ambiguous transfer even if the model violates its instructions,
+  and returns the exact clarification as state-specific tool-result coaching.
+- Verification: 42 test files / 398 tests pass, TypeScript build and
+  `git diff --check` pass. The repository's existing `npm run lint` command is
+  not runnable because ESLint 9 cannot find a flat `eslint.config.*` file.
+- Railway deployment `51d62be6-07e1-4352-81dd-d463aa14b34a` is `SUCCESS`;
+  `/health` returned OK, the catalog warmed with 63 services, and the complete
+  client index loaded 4,185 clients across 28 pages. Deployment
+  `835c8fa8-9c2e-43ec-b2d8-dc82e534b26d` is the immediate rollback point.
+  Vonage forwarding remains OFF.
+- **Next action:** Aryan calls the direct Twilio staging number, listens to the
+  new greeting, and tests both “Is Richa available?” and “Can I speak with
+  Richa?” The first must clarify without dialing; the second may transfer.
+
 ## ✅ DEPLOYED 2026-08-29 ~11:06 ET: natural-warmth listening trial
 
 - Prompt commit `8b172b6` replaced only Erica's broad opening tone sentence
