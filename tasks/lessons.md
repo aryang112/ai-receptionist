@@ -232,3 +232,41 @@ real `index.ts` app (all app-level middleware), not a bare router mount.
 JS's API calls ever ARRIVE — zero arrivals = script never ran (CSP, parse
 error, blocked), not a data/auth problem. (3) Adding app-wide security
 middleware (helmet/CSP) requires re-testing every HTML page it covers.
+
+## 🔀 Every precomputed prompt fact must be derived from the SAME gates as the handler (2026-09-01)
+RICHA'S LINE was computed from the transfer window alone, while the handler
+checks failback → vacation → window. On the first vacation day the prompt
+said "POSSIBLE right now — trust this verbatim" directly under "Richa is
+away" — the exact promise-then-walk-back that produced the Holly complaint.
+Rule: when a handler has N gates, the prompt's precomputed status must
+evaluate all N (or call the same function), and a test must render the
+prompt at a timestamp where the gates DISAGREE (in-window + on vacation).
+Same family: a prompt rule that says "call tool X to do Y" must be checked
+against what tool X does in every gate branch — "FYI Richa via
+transfer_to_owner" live-dialed her phone whenever the window was open.
+Deterministic side effects (an FYI text) belong in the handler, not the
+prompt.
+
+## 📅 A bare weekday is ambiguous a week out (2026-09-01)
+`nextOpen` said "Thursday at 12 PM" on Tue Sept 1 — meaning Sept 10 (the
+vacation swallowed Sept 3), but any caller hears "this Thursday". Any
+relative day label ≥7 days away must carry the date.
+
+## 🏁 Stamp the outcome BEFORE the awaited Twilio redirect (2026-09-01)
+`calls().update({twiml})` makes Twilio tear down the media stream; its
+'stop' event routinely arrives BEFORE the HTTP promise resolves, so anything
+set after the `await` is too late for the end row (prod: 2 of 5 real dials
+logged as "caller hung up"). Set outcome/endReason first, revert in catch.
+
+## 🚢 `railway up` deploys the WORKING TREE, not the commit (2026-09-01)
+Prod ran a greeting + an endReason string that exist on no branch for five
+days; the audit's fixes could have silently overwritten that work. Rule:
+commit before every `railway up`, and the deploy record in state.md must
+name the commit hash the container was built from.
+
+## 🔇 "Dead air" callers: check the recording RMS before touching VAD (2026-09-01)
+Two real callers said nothing for 45–50s → "are you still there?" → goodbye.
+Tempting to lower OPENAI_VAD_THRESHOLD; the dual-channel recordings showed
+the caller channel FLAT (−60 / −46 dBFS) the whole call — genuinely silent
+lines. `scripts` don't have ffmpeg on the cloud box; `mpg123-decoder` (WASM)
++ a 1s RMS loop works anywhere (see the audit doc). Measure, then tune.

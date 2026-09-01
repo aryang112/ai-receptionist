@@ -184,7 +184,19 @@ usage/duration/cost summed, transcript concatenated by ts).
 
 ## scripts/  (read-only diagnostics + ops)
 inspect-appointment.ts, list-services.ts, check-availability.ts, test-appt-filter.ts,
-set-twilio-webhook.sh, tail-log.mjs (pretty live view of data/dev.log — `npm run logs`).
+set-twilio-webhook.sh, tail-log.mjs (pretty live view of data/dev.log — `npm run logs`),
+render-prompt.ts (`npx tsx scripts/render-prompt.ts 2026-09-06T10:00:00 [fb]` —
+prints the exact system prompt for that salon-local moment; `fb` = the
+transfer-failback greeting variant. Use it to check TODAY'S STATUS / RICHA'S
+LINE / VACATION at the timestamps where the gates disagree).
+
+2026-09-01 audit additions: `OpenAIRealtimeSession.beginHangup()/endHangup()`
+(tool results delivered but no response.create once end_call/transfer has
+started — the post-goodbye stray fix), `notifyOwnerOfClosedHoursChange` in
+twilioStream (server-side FYI text after a closed-hours cancel/reschedule),
+`callerNumberForSms`, transfer outcome stamped before the awaited redirect.
+Tests: twilioStream.closedHoursFyi.test.ts, + cases in openaiSession /
+transferFailback / prompt / hours. Full findings: `docs/AUDIT_2026-09-01.md`.
 
 ## Tools the model can call
 `suggest_availability(serviceName, date, preferredTime?)`, `book_appointment`,

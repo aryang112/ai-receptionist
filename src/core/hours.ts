@@ -115,8 +115,17 @@ export function getHoursStatus(
     if (!r.length) continue;
     const open = rangeStart(d, r[0]!);
     if (open > nowDt) {
+      // AUDIT FIX (2026-09-01): a bare weekday is ambiguous once the next
+      // opening is a week or more away (vacation): on Tue Sept 1 "Thursday at
+      // 12 PM" meant Sept 10, but callers hear Sept 3. Add the date then.
       const dayLabel =
-        i === 0 ? 'today' : i === 1 ? 'tomorrow' : d.toFormat('cccc');
+        i === 0
+          ? 'today'
+          : i === 1
+            ? 'tomorrow'
+            : i >= 7
+              ? d.toFormat('cccc, MMMM d')
+              : d.toFormat('cccc');
       nextOpen = `${dayLabel} at ${fmtTime(open)}`;
       break;
     }

@@ -75,6 +75,8 @@ function buildCall(callSid: string) {
     truncateActiveResponse: vi.fn(),
     injectContext: vi.fn(),
     requestResponse: vi.fn(() => true),
+    beginHangup: vi.fn(),
+    endHangup: vi.fn(),
     close: vi.fn(),
   };
   call.streamSid = 'STREAMSID';
@@ -145,6 +147,68 @@ describe('handleTransferToOwner — timed dial with a dial-status action', () =>
     expect(lastDialTwiml()).toBe(
       `<Response><Dial>${env.OWNER_PHONE}</Dial></Response>`
     );
+  });
+});
+
+// AUDIT FIX (2026-09-01): Twilio's 'stop' event routinely beats the REST
+// redirect's HTTP response, so the outcome must be stamped BEFORE the await —
+// prod counted only 2 of 5 real dials as transfers.
+describe('handleTransferToOwner — outcome survives a stop event that beats the redirect', () => {
+  let recordToolCallSpy: ReturnType<typeof vi.spyOn>;
+  let endCallSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-25T14:00:00-04:00'));
+    callsMock.mockClear();
+    recordToolCallSpy = vi
+      .spyOn(CallStore, 'recordToolCall')
+      .mockImplementation(() => {});
+    endCallSpy = vi.spyOn(CallStore, 'endCall').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    recordToolCallSpy.mockRestore();
+    endCallSpy.mockRestore();
+  });
+
+  it("the end row says 'transferred' even when the stream stops mid-redirect", async () => {
+    const call = buildCall('CA_race');
+    call.startedAtMs = Date.now();
+    call.sessionReady = true;
+    // The redirect "applies" (stream stops → stop handler → cleanup) BEFORE
+    // the HTTP promise resolves — exactly the observed prod ordering.
+    updateMock.mockClear().mockImplementation(async () => {
+      await call.handleMessage(
+        Buffer.from(JSON.stringify({ event: 'stop', streamSid: 'STREAMSID' }))
+      );
+      return {};
+    });
+
+    await call.handleTransferToOwner({ reason: 'wants Richa' });
+
+    expect(call.outcome).toBe('transferred');
+    expect(call.endReason).toBe('transferred to owner');
+    expect(endCallSpy).toHaveBeenCalledTimes(1);
+    expect(endCallSpy.mock.calls[0]![1]).toEqual(
+      expect.objectContaining({ outcome: 'transferred' })
+    );
+    expect(call.session.beginHangup).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed redirect reverts the provisional outcome', async () => {
+    const call = buildCall('CA_race_fail');
+    updateMock.mockClear().mockRejectedValue(new Error('twilio 500'));
+
+    const result = await call.handleTransferToOwner({ reason: 'wants Richa' });
+
+    expect(result).toEqual(
+      expect.objectContaining({ error: expect.any(String) })
+    );
+    expect(call.outcome).toBe('none');
+    expect(call.endReason).toBeUndefined();
+    expect(call.session.endHangup).toHaveBeenCalledTimes(1);
   });
 });
 

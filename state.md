@@ -3,6 +3,64 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-09-01 — 🔍 FULL AUDIT (prompt + bundle + prod calls + voice platform) → `docs/AUDIT_2026-09-01.md`
+Fable orchestrating 3 parallel agents (adversarial code review of
+2b42c88..HEAD, call-QA sweep of all 66 prod calls Aug 23–29 via /admin API +
+recording RMS forensics, web research on OpenAI Realtime vs Grok vs
+ElevenLabs). Branch `claude/prompt-audit-agent-deploy-s9aswj`, NOT deployed.
+**🚨 PROD ≠ GIT since 8/27 9:42 PM ET**: every later call uses a greeting on
+no branch ("Richa's Threading Salon, this is Erica on a recorded line — how
+can I help you?" — drops "virtual receptionist"), and `endReason "stream died
+— inbound audio stopped"` exists in no commit. `railway up` shipped a local
+uncommitted tree. Aryan must commit that tree, then rebase this branch on it
+before any deploy. Post-8/27 calls also show a style regression (two Erica
+turns per caller turn, "Just say yes…", triple identity check) that the
+repo prompt would not produce.
+**Shipped on this branch** (333→347 tests, both TZs, tsc clean, prompt text +
+handler logic only — no session.update shape change):
+- RICHA'S LINE now says NOT possible during the ACTIVE vacation (was
+  "POSSIBLE — trust this verbatim" under the away-notice: the Holly
+  promise-then-walk-back, live TODAY).
+- `nextOpen` carries the date when ≥7 days out ("Thursday, September 10 at
+  12 PM" — was "Thursday", which callers hear as Sept 3).
+- Closed-hours FYI to Richa after a self-handled cancel/reschedule is now
+  SERVER-SIDE (`notifyOwnerOfClosedHoursChange`, `!isOpenNow()`); the old
+  prompt rule ("via transfer_to_owner") LIVE-DIALED her cell whenever the
+  salon was closed but her 9–21 window was open (Sunday daytime, Mon <noon).
+- Transfer outcome race: outcome/endReason stamped BEFORE the awaited Twilio
+  redirect (its 'stop' beat the HTTP reply — prod counted 2 of 5 dials).
+- Post-goodbye stray response (seen 8/23 10:51 PM + 8/27 8:59 PM "Call
+  ended. The appointment was successfully canceled."): new
+  `session.beginHangup()` — tool results still delivered, never a
+  response.create once end_call/transfer starts; `endHangup()` on abort.
+- Owner SMS now carries the caller's number; failback segment gets a
+  same-call caller note (was re-ordering the standard greeting + name check).
+- Prompt: hours/prices "use the tool" contradiction removed; identity
+  confirmed at most once and never for price/hours; RUNNING LATE no longer
+  scripts a cold phone ask; "Is Richa available?" = availability question
+  (Glenda 8/26: "Richa" was passed as a service name and the error read
+  aloud); clear-yes-only before book/cancel (8/27: booked 3:45 off "OK" after
+  offering 4:30; cancelled off a "キャンセルを" artifact); vacation range in
+  the HOURS `Closed on:` list; skip today/tomorrow lookups when closed.
+- `scripts/render-prompt.ts <ISO> [fb]` renders the prompt for any moment.
+**Prod review verdict**: 34 ✅ / 20 ⚠️ / 12 🚨 of 66; $6.36 total; the two
+silent real callers (8/25 3:09 PM, 8/26 11:41 AM) were GENUINELY silent
+(caller channel flat −60 / −46 dBFS) — watchdog correct. Real booking lost
+8/27 1:40 PM to the identify-first flow ("What's your phone number?" before
+"what service?"). No real-customer call since 8/27 1:40 PM and no calls at
+all since 8/29 — verify Vonage forwarding survived the vacation change.
+**Voice platform**: stay on OpenAI Realtime; upgrade model string to
+`gpt-realtime-2.1` (Jul 2026, same price, better interruption/noise/
+alphanumerics — validate on a live call first per lessons.md), then A/B
+`2.1-mini`. Grok = optional experiment (no `truncate`, April outage).
+ElevenLabs = slower on real calls + a rewrite. Skip.
+**PENDING (Aryan)**: (1) commit the local prod tree + decide on "virtual
+receptionist" in the greeting; (2) identify-first vs help-first for new
+callers; (3) keep or drop the in-window live dial after two tool failures;
+(4) cloud QA routine rubric still expects "this call may be recorded" —
+update to "on a recorded line". Backlog in the audit doc (zombie legs /
+`socket.close` endReason, stale barge-in anchor after greeting grace).
+
 ## 2026-08-24 (9) — 🔊 GREETING BARGE-IN GRACE shipped + deployed (Fable, direct)
 Aryan's first two post-deploy test calls (23:53Z + 23:58Z): pickup noise /
 reflexive "hi" fired VAD ~1.3s into the greeting → barge-in chopped it

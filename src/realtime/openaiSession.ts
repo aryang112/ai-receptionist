@@ -101,6 +101,16 @@ export class OpenAIRealtimeSession {
   private activeResponse = false;
   /** Set when a tool result arrived mid-response; drains on response.done. */
   private pendingResponseCreate = false;
+  /**
+   * AUDIT FIX (2026-09-01): set by beginHangup() once the goodbye / transfer
+   * handoff has started. While true, tool results are still delivered (the
+   * model's state stays consistent) but never spawn a response.create, and
+   * the RT-2 deferred drain is skipped — the post-goodbye stray follow-up
+   * ("I've passed that along… anything else?" after "have a great day")
+   * observed on two production calls came from exactly those two paths.
+   * (Distinct from `closing`, which is the WebSocket teardown flag.)
+   */
+  private hangingUp = false;
   // --- RT-3: application-error circuit breaker ------------------------------
   /** True from configureSession() until session.created/updated (or a reject). */
   private awaitingSessionAck = false;
@@ -414,11 +424,26 @@ export class OpenAIRealtimeSession {
    * is the RT-2/RT-3 call-killer. Mirrors the guard already inside
    * scheduleFailedRetry.
    */
+  /**
+   * Enter hangup mode: no further response.create from tool results or the
+   * deferred drain (see `hangingUp`). Idempotent. Reverse with endHangup()
+   * when a hangup is aborted (caller barged in during the goodbye) so the
+   * call can continue normally.
+   */
+  beginHangup(): void {
+    this.hangingUp = true;
+    this.pendingResponseCreate = false;
+  }
+
+  endHangup(): void {
+    this.hangingUp = false;
+  }
+
   requestResponse(): boolean {
     // AUDIT FIX (2026-08-22): report whether the response.create actually
     // fired, so callers (duration-cap goodbye) can retry instead of hanging
     // up after a goodbye that was silently dropped mid-conversation.
-    if (!this.isOpen() || this.activeResponse) return false;
+    if (!this.isOpen() || this.activeResponse || this.hangingUp) return false;
     this.sendRaw({ type: 'response.create' });
     return true;
   }
@@ -735,7 +760,7 @@ export class OpenAIRealtimeSession {
         // response.create was deferred — send it now (exactly once).
         if (this.pendingResponseCreate) {
           this.pendingResponseCreate = false;
-          if (this.isOpen() && !this.activeResponse) {
+          if (this.isOpen() && !this.activeResponse && !this.hangingUp) {
             this.tToolResultSent = Date.now();
             this.sendRaw({ type: 'response.create' });
           }
@@ -938,6 +963,15 @@ export class OpenAIRealtimeSession {
     // Mark the start of the post-tool turn so first-audio latency is attributed
     // to "after-tool" rather than the (older) caller-turn timestamp.
     this.tToolResultSent = Date.now();
+    // Hangup in progress (end_call / transfer): the model got its result, but
+    // any spoken follow-up would play over or after the goodbye.
+    if (this.hangingUp) {
+      this.log.debug(
+        { callId },
+        'Tool result delivered during hangup — no response.create'
+      );
+      return;
+    }
     // RT-2: if a response is still active (e.g. VAD auto-created one when the
     // caller interrupted during the tool), a second response.create collides and
     // drops the call. Defer it — response.done will drain exactly one instead.

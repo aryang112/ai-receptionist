@@ -190,12 +190,63 @@ describe('buildInstructions — TRANSFER self-service + closed-hours rules', () 
     expect(failback).toMatch(/never deliver the opening again/);
   });
 
-  it('closed-hours: never promise a live transfer, FYI Richa after self-handled changes', () => {
+  it('closed-hours: never promise a live transfer; the FYI to Richa is automatic, never a transfer_to_owner call', () => {
     const instructions = buildInstructions();
     expect(instructions).toMatch(/NEVER say "let me get her"/);
-    expect(instructions).toMatch(
+    // AUDIT FIX (2026-09-01): the old "send Richa an FYI via
+    // transfer_to_owner" clause live-dialed her cell whenever the salon was
+    // closed but her window was open. The FYI is server-side now.
+    expect(instructions).not.toMatch(
       /handled a schedule change yourself while the salon is closed/
     );
+    expect(instructions).toMatch(/texted to Richa AUTOMATICALLY/);
+    expect(instructions).toMatch(
+      /never call transfer_to_owner just to send her an FYI/
+    );
+  });
+
+  it('no contradicting "use the tool" rules for hours/prices; identity confirmed once', () => {
+    const instructions = buildInstructions();
+    expect(instructions).not.toMatch(
+      /Never guess at hours — use get_business_hours/
+    );
+    expect(instructions).not.toMatch(/Never guess prices — call get_prices/);
+    expect(instructions).toMatch(
+      /Confirm who you're speaking with at most ONCE per call/
+    );
+    // Running-late no longer scripts a cold phone-number ask.
+    expect(instructions).not.toMatch(
+      /"No problem! What's your phone number\?"/
+    );
+    // "Is Richa available?" is an availability question, not a service name.
+    expect(instructions).toMatch(/Never pass "Richa"/);
+  });
+});
+
+// AUDIT FIX (2026-09-01): the precomputed RICHA'S LINE must agree with the
+// handler's vacation gate, and the weekly table must list the vacation as
+// closed days.
+describe('buildInstructions — active vacation', () => {
+  it("RICHA'S LINE says NOT possible while she's away, even inside the window", () => {
+    // Tue Sept 1 2026, 2 PM — inside the 9–21 window, vacation Sept 1–9 active.
+    const instructions = buildInstructions(at('2026-09-01T14:00'));
+    expect(instructions).toMatch(/Richa is away right now/);
+    expect(instructions).not.toMatch(/live transfer to Richa is POSSIBLE/);
+    expect(instructions).toMatch(
+      /live transfer to Richa is NOT possible right now \(Richa is away until September 10/
+    );
+  });
+
+  it('the HOURS line lists the vacation range under Closed on', () => {
+    const instructions = buildInstructions(at('2026-08-20T14:00'));
+    expect(instructions).toMatch(
+      /Closed on: 2026-09-01 through 2026-09-09 \(Richa is away\), 2026-11-26, 2026-12-25\./
+    );
+  });
+
+  it('next-open carries a date when it is a week or more away', () => {
+    const instructions = buildInstructions(at('2026-09-01T14:00'));
+    expect(instructions).toMatch(/next open Thursday, September 10 at 12 PM/);
   });
 });
 

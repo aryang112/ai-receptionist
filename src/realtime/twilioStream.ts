@@ -144,8 +144,17 @@ function buildHoursLine(): string {
     ([label, key]) =>
       `${label} ${formatDayHours(businessHours.hours[key] ?? [])}`
   ).join(' · ');
-  const closed = businessHours.closedDates.length
-    ? ` Closed on: ${businessHours.closedDates.join(', ')}.`
+  // AUDIT FIX (2026-09-01): vacation ranges are closed days too — without
+  // them the weekly table says "Tue 12 PM–7 PM" for a Tuesday inside the
+  // vacation, and "what are your Tuesday hours?" is answered from the table.
+  const closedItems = [
+    ...(businessHours.vacations ?? []).map(
+      (v) => `${v.from} through ${v.to} (${v.note ?? 'closed'})`
+    ),
+    ...businessHours.closedDates,
+  ];
+  const closed = closedItems.length
+    ? ` Closed on: ${closedItems.join(', ')}.`
     : '';
   return `${days}.${closed}`;
 }
@@ -214,7 +223,7 @@ export function buildInstructions(
   // env-tunable transfer window), not the salon's opening hours. Precomputed
   // server-side and handed over as a finished fact — same never-re-derive
   // principle as TODAY'S STATUS above.
-  const transferPossibleNow = isWithinTransferWindow(now);
+  const transferWindowOpen = isWithinTransferWindow(now);
   const todayStatusLine = todayStatus
     ? `TODAY'S STATUS (precomputed — trust this verbatim, do NOT re-derive it from the weekly table): today is ${now.toFormat('cccc')} and the salon is ${
         todayStatus.hoursThatDay === 'Closed'
@@ -238,6 +247,17 @@ export function buildInstructions(
     vacation.from <= todayISO &&
     todayISO <= vacation.to
   );
+  // AUDIT FIX (2026-09-01): RICHA'S LINE must agree with the handler. The
+  // handler's vacation gate outranks the transfer window (no dial while she's
+  // away), so the precomputed line says NOT possible during an active
+  // vacation — otherwise "trust this verbatim… POSSIBLE" sat right under the
+  // away-notice and invited the promise-then-walk-back Holly failure.
+  const richaLineStatus =
+    vacationActive && vacation
+      ? `NOT possible right now (Richa is away until ${DateTime.fromISO(vacation.reopenISO, { zone: env.TIMEZONE }).toFormat('MMMM d')} — messages reach her as a text)`
+      : transferWindowOpen
+        ? 'POSSIBLE right now'
+        : 'NOT possible right now (outside her calling hours)';
   // AUDIT FIX (2026-08-22, P1): the transfer-becomes-a-text instruction is
   // ONLY true while the vacation is ACTIVE (the handler gate is active-only).
   // During the upcoming window it told the model to promise "I'll text her
@@ -300,6 +320,7 @@ ${vacationBlock}
 ${servicesSection}
 
 Callers often use different names for a service (e.g. "lash lamination" for our "Lash Lift"). Don't rely on a memorised list — for ANY service a caller names, just try to book it: suggest_availability matches it against the live catalog. NEVER tell a caller "we don't offer that," and never transfer just because a service wasn't in a memorised list.
+Richa is the only stylist — every appointment is with her. "Is Richa available / free at 5?" is an AVAILABILITY question, not a service: if they haven't named a service yet, ask which one, then check that day and time. Never pass "Richa" (or "Richa availability") to a tool as the service name, and never read a tool's error or lookup text aloud — rephrase what it means for the caller.
 
 ═══ CUSTOMER IDENTIFICATION (always do this first) ═══
 0. If a background note says this caller was already recognized by caller ID, SKIP steps 1–2: never ask for their phone number. Do NOT confirm who they are right away — the background note says exactly when and how to confirm.
@@ -325,8 +346,9 @@ Callers often use different names for a service (e.g. "lash lamination" for our 
    - Call suggest_availability for today, and again for tomorrow (two calls).
    - Offer a couple of options from each: "I have [time] or [time] today, and [time] or [time] tomorrow — what works best?"
    - If the caller names a desired time (e.g. "4 PM", "evening", "morning"), ALWAYS pass it to suggest_availability as preferredTime (24h HH:MM, e.g. "16:00" for 4 PM, "18:00" for evening) so the returned slots are centered on what they asked for — then offer the closest ones.
+   - If TODAY'S STATUS says today (and tomorrow) are closed, don't check them at all — go straight to the next open day it names and offer times there.
 4. Confirm: "Perfect — so [service] on [day] at [time] for [First Name]. Shall I go ahead and book that?"
-5. Call book_appointment ONLY after they say yes.
+5. Call book_appointment ONLY after a CLEAR yes to that exact slot. A garbled, unclear, or one-word reply after you offered more than one time is NOT a yes — re-state the single slot you're about to book and ask again. Never treat noise as consent.
 6. "You're all set! See you [day] at [time]. Anything else I can help with?"
 
 Booking MORE THAN ONE service is completely normal and expected. If, after "Anything else?", the caller wants another service, just run the booking flow again for it (another suggest_availability + book_appointment). Keep going for as many services as they want. NEVER transfer to Richa just because they're booking a second or third service.
@@ -362,20 +384,20 @@ If the caller changes their mind mid-flow (e.g. asks to cancel instead) → ABAN
    - NO appointments → "I'm not seeing any upcoming appointments under your account to cancel — is it possibly under a different name or number?" Do NOT invent an appointment, and do NOT transfer for this.
 3. The list is sorted soonest-first. Lead with the SOONEST one only: "I see your next appointment is [service] on [day] at [time] — would you like to cancel that one?" If they say no and there are others, mention the next. NEVER guess or make up an appointment, service, day, or time that wasn't in the list_appointments result, and don't read out a long list.
 4. Get an explicit yes: "Just to confirm — cancelling [service] on [day] at [time]?"
-5. Only after they confirm, call cancel_appointment with that appointment's id.
+5. Only after they CLEARLY confirm, call cancel_appointment with that appointment's id. A garbled or unclear reply is not a yes — ask again. Cancelling is irreversible, so never act on a sound you're guessing at.
 6. ONLY say it's cancelled if cancel_appointment came back successfully (no error). If it returns an error → "Hmm, that didn't go through — let me try once more" and retry; if it still fails, offer Richa. Never tell a caller it's cancelled unless the tool confirmed it.
 7. On success: "Done! Your appointment's cancelled. Hope to see you again soon!"
 
 ═══ RUNNING LATE ═══
-1. "No problem! What's your phone number?"
-2. Call lookup_customer → then list_appointments (filter to today)
+1. Identify the customer (see CUSTOMER IDENTIFICATION — a caller already recognized by caller ID is never asked for their number).
+2. lookup_customer (if not already recognized) → then list_appointments (filter to today)
 3. Identify which appointment they mean
 4. Call log_running_late with clientId, appointmentId, AND detail — a short summary in the caller's words of what they told you, including HOW late if they said (e.g. "running about 5 minutes late")
 5. If response has squeezed: false → "No worries at all — I'll let Richa know. Take your time, see you soon!"
 6. If response has squeezed: true → "Thanks for letting us know — I'll let Richa know, and we'll do our best to squeeze you in. See you soon!"
 
 ═══ TRANSFER TO RICHA ═══
-RICHA'S LINE (precomputed — trust this verbatim, do NOT re-derive it from the clock or the salon hours): a live transfer to Richa is ${transferPossibleNow ? 'POSSIBLE right now' : 'NOT possible right now (outside her calling hours)'}. Transfers ring Richa's own phone, so this is INDEPENDENT of whether the salon is open — she takes calls beyond salon hours.
+RICHA'S LINE (precomputed — trust this verbatim, do NOT re-derive it from the clock or the salon hours): a live transfer to Richa is ${richaLineStatus}. Transfers ring Richa's own phone, so this is INDEPENDENT of whether the salon is open — she takes calls beyond salon hours.
 
 ASKED FOR RICHA — when a caller explicitly asks to speak to Richa (or to a real person), honor it promptly: don't quiz them about why, don't re-explain that you're the virtual receptionist, and never try to talk them out of it. If RICHA'S LINE above says POSSIBLE (and no away-notice above), transfer on the spot. If it says NOT possible, say so honestly in one short sentence and offer to text her a message right away instead — never promise the transfer first and then walk it back.
 
@@ -390,7 +412,8 @@ Do NOT transfer just because: a service isn't in the memorised price list (try t
 
 ONLY when a live transfer is actually possible RIGHT NOW (RICHA'S LINE above says POSSIBLE, no away-notice above): say ONLY one short handoff sentence first (a brief "let me get Richa for you" in your own words — one sentence, nothing more), then call transfer_to_owner. Any explanation of WHY (e.g. "since it's for two different people…") comes BEFORE that sentence in your previous turn, or not at all; the call hands off right after you finish speaking, so a long final sentence risks being cut off.
 EXCEPTION — if a note above says Richa is currently away on her time off: do NOT say you'll get her or promise a transfer. Offer to pass a message along instead, and once they give it, call transfer_to_owner with the message as the reason — it reaches her as a text, not a call.
-OUTSIDE CALLING HOURS — when RICHA'S LINE above says NOT possible: NEVER say "let me get her" or promise a live transfer — not even for a moment before correcting yourself. Offer to pass a message along; transfer_to_owner delivers it straight to her phone as a text, and after it succeeds, confirm in your own words that Richa already has the text and will follow up. And if you handled a schedule change yourself while the salon is closed (a cancellation or reschedule affecting today or the next open day), still send Richa a short FYI afterwards via transfer_to_owner so she isn't caught off guard.
+OUTSIDE CALLING HOURS — when RICHA'S LINE above says NOT possible: NEVER say "let me get her" or promise a live transfer — not even for a moment before correcting yourself. Offer to pass a message along; transfer_to_owner delivers it straight to her phone as a text, and after it succeeds, confirm in your own words that Richa already has the text and will follow up.
+A cancellation or reschedule you handle yourself while the salon is closed is texted to Richa AUTOMATICALLY by the system — never call transfer_to_owner just to send her an FYI (when her line is open, that would ring her phone).
 
 ═══ ENDING THE CALL ═══
 After you finish helping with something (booking confirmed, question answered, cancellation done), ask: "Anything else I can help you with?"
@@ -413,8 +436,8 @@ After you finish helping with something (booking confirmed, question answered, c
 - LET THE CALLER LEAD. After greeting, wait for them to say what they need. Never assume why they're calling, and never pull up appointments, prices, or availability until they've actually asked. If you didn't clearly hear a request, ask "Sorry, what can I help you with today?" and WAIT — do not guess and proceed.
 - Let the caller FINISH. Don't jump in during a short pause; only respond once they've clearly finished their thought.
 - Never read appointment IDs aloud — use human-readable descriptions
-- Never guess at hours — use get_business_hours
-- Never guess prices — call get_prices
+- Never guess hours or prices — say only what HOURS / TODAY'S STATUS / the price list above state, or what a tool returned. get_business_hours and get_prices are for anything not covered above.
+- Confirm who you're speaking with at most ONCE per call, and only when a request needs their account (booking, reschedule, cancel, running late) — never for a price or hours question. Once they've confirmed, never ask again.
 - Never invent appointments, services, times, or prices — only state what a tool actually returned
 - When telling a caller about an appointment, read the 'service', 'date', and 'time' fields from list_appointments EXACTLY as given — never round, shift, guess, or approximate the time
 - If you mishear something, just say "Sorry, could you say that again?"
@@ -1023,7 +1046,9 @@ export class TwilioRealtimeCall {
         // We have the caller's number (caller ID) but no Phorest match (yet).
         // Let Erica offer that number later instead of asking cold. (Raw number
         // is NOT logged — only injected into the model's private context.)
-        this.pendingCallerContext = `We could not match this caller ID, so greet them normally and ask what they need. If you later need a phone number for their file, offer the one they're calling from — "Is the number you're calling from the best one for your file?" — rather than asking cold.`;
+        this.pendingCallerContext = this.transferFailback
+          ? `BACKGROUND (do not read aloud): this is the SAME caller as before the transfer attempt — they've already heard the greeting; open only with the failback apology described above. Their number isn't on file; if you later need a number for their file, offer the one they're calling from rather than asking cold.`
+          : `We could not match this caller ID, so greet them normally and ask what they need. If you later need a phone number for their file, offer the one they're calling from — "Is the number you're calling from the best one for your file?" — rather than asking cold.`;
         if (timedOut) {
           // Seen live 2026-08-21: a call seconds after boot races the client
           // phone-index build (~5s for 4k clients) and the 700ms cap loses by
@@ -1103,6 +1128,14 @@ export class TwilioRealtimeCall {
       .catch(() => {});
     // Tell Erica who's calling (the looked-up name, not a hardcoded one).
     const fullName = `${customer.firstName} ${customer.lastName}`.trim();
+    // AUDIT FIX (2026-09-01): a transfer-FAILBACK segment is the same phone
+    // call — the standard note below would re-order the recorded-line
+    // greeting and a fresh name check, exactly what the failback GREETING
+    // paragraph forbids. Give it a note that fits the moment instead.
+    if (this.transferFailback) {
+      this.pendingCallerContext = `BACKGROUND (do not read aloud): this is the SAME phone call as before the transfer attempt, and the number matches ${customer.firstName} (full name ${fullName}) on file. Do NOT deliver the standard greeting and do NOT run a name check — open only with the failback apology described above. Use their account silently: lookup_customer with NO arguments returns it, and bookings need no phone number (the system attaches their account). Use their first name naturally where it fits.`;
+      return;
+    }
     if (opts.late) {
       this.pendingCallerContext = `BACKGROUND (do not read aloud): UPDATE — the number this caller is phoning from has NOW been matched to an existing client on file: ${customer.firstName} (full name ${fullName}). The match arrived after your greeting, so weave it in naturally from here. If they already told you a DIFFERENT name, ignore this match entirely and continue as you were. Otherwise, if you haven't yet confirmed who they are, check ONCE — in your own words, at the next natural moment AFTER they've stated an actual request (never in response to just "hi", silence, or unclear audio) — that you're speaking with ${customer.firstName}. Once confirmed: do NOT ask for their phone number and NEVER read a phone number aloud — the system already has their account. If they were mid-way through giving you a number, a warm "actually, I've just found your file — no number needed!" is perfect. When you need their details, call lookup_customer with NO arguments (it returns this account instantly). When you book for them you do NOT need a phone number — just book with their name; the system attaches their account (clientId) automatically. Never re-ask anything they already told you.`;
       return;
@@ -2520,6 +2553,9 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         ok: true,
         detail: { date: payload.date, time: payload.time },
       });
+      this.notifyOwnerOfClosedHoursChange(
+        `moved their ${this.servedAppointmentServices.get(payload.appointmentId) ?? 'appointment'} to ${payload.date} at ${payload.time}`
+      );
       return {
         appointmentId: payload.appointmentId,
         date: payload.date,
@@ -2578,6 +2614,9 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
         ok: true,
         detail: { appointmentId: payload.appointmentId },
       });
+      this.notifyOwnerOfClosedHoursChange(
+        `cancelled their ${this.servedAppointmentServices.get(payload.appointmentId) ?? 'appointment'}`
+      );
       return { appointmentId: payload.appointmentId, cancelled: true };
     } catch (error) {
       logger.error(
@@ -3103,6 +3142,18 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     );
   }
 
+  /**
+   * AUDIT FIX (2026-09-01): the caller's number for Richa's text, formatted
+   * for a human — an after-hours "a caller called — please follow up" with no
+   * number is a follow-up she can't make. Empty when caller ID was withheld.
+   * (Goes to the OWNER's phone only — never logged.)
+   */
+  private callerNumberForSms(): string {
+    const digits = this.normalizePhone(this.callerFrom);
+    if (!digits || digits.length !== 10) return '';
+    return ` (${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  }
+
   private async handleTransferToOwner(args: unknown) {
     try {
       const parsed = parseToolArgs('transfer_to_owner', args);
@@ -3130,7 +3181,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           'Transfer suppressed — Richa already did not answer on this call; sending SMS instead'
         );
         void this.notifyOwnerSms(
-          `Hi Richa, it's Erica. I couldn't reach you just now: ${this.callerDisplayName()} called — ${payload.reason}. I let them know you'd follow up.`
+          `Hi Richa, it's Erica. I couldn't reach you just now: ${this.callerDisplayName()}${this.callerNumberForSms()} called — ${payload.reason}. I let them know you'd follow up.`
         );
         this.markInfoOutcome();
         CallStore.recordToolCall(this.callSid, {
@@ -3169,7 +3220,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           'Transfer suppressed — Richa is on vacation; sending SMS instead'
         );
         void this.notifyOwnerSms(
-          `Hi Richa, it's Erica. While you're away: ${this.callerDisplayName()} called — ${payload.reason}. I let them know you're away.`
+          `Hi Richa, it's Erica. While you're away: ${this.callerDisplayName()}${this.callerNumberForSms()} called — ${payload.reason}. I let them know you're away.`
         );
         this.markInfoOutcome();
         CallStore.recordToolCall(this.callSid, {
@@ -3207,7 +3258,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
           'Transfer suppressed — outside transfer window; sending SMS instead'
         );
         void this.notifyOwnerSms(
-          `Hi Richa, it's Erica. After-hours message: ${this.callerDisplayName()} called — ${payload.reason}. I let them know you'll follow up as soon as you can.`
+          `Hi Richa, it's Erica. After-hours message: ${this.callerDisplayName()}${this.callerNumberForSms()} called — ${payload.reason}. I let them know you'll follow up as soon as you can.`
         );
         this.markInfoOutcome();
         CallStore.recordToolCall(this.callSid, {
@@ -3267,21 +3318,35 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       // /twilio/dial-status, which reconnects them to Erica (transferFailed=1).
       // No host (an old session, or a malformed Host header) ⇒ today's exact
       // bare <Dial>: a half-configured action URL would be worse than none.
-      await client.calls(this.callSid).update({
-        twiml: this.publicHost
-          ? `<Response><Dial timeout="${env.TRANSFER_DIAL_TIMEOUT_S}" action="https://${this.publicHost}/twilio/dial-status" method="POST">${env.OWNER_PHONE}</Dial></Response>`
-          : `<Response><Dial>${env.OWNER_PHONE}</Dial></Response>`,
-      });
+      // AUDIT FIX (2026-09-01): stamp the outcome BEFORE the awaited redirect.
+      // Twilio tears down the media stream as part of applying the new TwiML,
+      // and its 'stop' event routinely lands before this HTTP call resolves —
+      // the stop handler then wrote the end row as outcome 'none' / 'caller
+      // hung up' (prod: only 2 of 5 real dials were counted as transfers).
+      // Reverted below if the redirect itself fails.
+      this.outcome = 'transferred';
+      this.setEndReasonOnce('transferred to owner');
+      // The {transferred:true} tool result must not spawn a phantom response
+      // while Richa's phone is ringing (see OpenAIRealtimeSession.beginHangup).
+      this.session?.beginHangup?.();
+      try {
+        await client.calls(this.callSid).update({
+          twiml: this.publicHost
+            ? `<Response><Dial timeout="${env.TRANSFER_DIAL_TIMEOUT_S}" action="https://${this.publicHost}/twilio/dial-status" method="POST">${env.OWNER_PHONE}</Dial></Response>`
+            : `<Response><Dial>${env.OWNER_PHONE}</Dial></Response>`,
+        });
+      } catch (redirectError) {
+        if (this.outcome === 'transferred') this.outcome = 'none';
+        if (this.endReason === 'transferred to owner')
+          this.endReason = undefined;
+        this.session?.endHangup?.();
+        throw redirectError;
+      }
 
       logger.info(
         { tool: 'transfer_to_owner', callSid: this.callSid },
         'Call transferred successfully'
       );
-      // Set the outcome + record the tool call BEFORE cleanup() — cleanup writes
-      // the endCall record using this.outcome.
-      this.outcome = 'transferred';
-      // M1: set BEFORE cleanup() — same ordering reason as this.outcome above.
-      this.setEndReasonOnce('transferred to owner');
       CallStore.recordToolCall(this.callSid, {
         name: 'transfer_to_owner',
         ok: true,
@@ -3362,6 +3427,10 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
     // Block the fatal-error failover path: tearing down a deliberately-ended
     // call must never redirect the (already gone) caller to the owner.
     this.transferring = true;
+    // AUDIT FIX (2026-09-01): from here on no tool result may spawn another
+    // response — a queued follow-up ("I've passed that along… anything
+    // else?" / "Call ended.") played AFTER the goodbye on two prod calls.
+    this.session?.beginHangup?.();
     // Goodbye lines run longer than the transfer handoff line — cap higher.
     const epochAtRequest = this.bargeInEpoch;
     await this.waitForPlaybackToDrain(6000);
@@ -3376,6 +3445,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       !this.closed
     ) {
       this.transferring = false;
+      this.session?.endHangup?.();
       logger.info(
         { tool: 'end_call', callSid: this.callSid, reason },
         'Hangup aborted — caller spoke during the goodbye'
@@ -3409,6 +3479,7 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
       // Mirror F10c: the hangup didn't happen, so a later fatal error must
       // still be able to failover to the owner.
       this.transferring = false;
+      this.session?.endHangup?.();
       CallStore.recordToolCall(this.callSid, {
         name: 'end_call',
         ok: false,
@@ -3543,6 +3614,21 @@ Either way: do NOT pull up appointments, do NOT call any tools, and do NOT assum
    */
   private async notifyOwnerSms(body: string): Promise<void> {
     return sendOwnerSms(body);
+  }
+
+  /**
+   * AUDIT FIX (2026-09-01): the "FYI Richa after a closed-hours schedule
+   * change" rule used to live in the prompt as "call transfer_to_owner" —
+   * which LIVE-DIALS her cell whenever the salon is closed but her transfer
+   * window is open (Sunday daytime, Monday before noon). Now deterministic
+   * and server-side: a cancel/reschedule performed while the salon is closed
+   * sends her one FYI text. Fire-and-forget, never throws.
+   */
+  private notifyOwnerOfClosedHoursChange(what: string): void {
+    if (isOpenNow()) return;
+    void this.notifyOwnerSms(
+      `Hi Richa, it's Erica. Heads-up while the salon is closed: ${this.callerDisplayName()}${this.callerNumberForSms()} just ${what}. FYI!`
+    );
   }
 
   private waitForPlaybackToDrain(capMs: number): Promise<void> {

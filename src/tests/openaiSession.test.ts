@@ -88,6 +88,51 @@ describe('RT-2 response.create collision avoidance', () => {
   });
 });
 
+// AUDIT FIX (2026-09-01): once the goodbye / transfer handoff has started,
+// tool results are still delivered but must never spawn another response —
+// the post-goodbye stray ("I've passed that along… anything else?" after
+// "have a great day") came from exactly these paths on two production calls.
+describe('beginHangup — no response.create after the goodbye starts', () => {
+  it('delivers the tool output but sends no response.create', () => {
+    const { session, sent } = buildSession();
+    session.beginHangup();
+    session.sendToolResult('call_end', { status: 'ended' });
+    expect(types(sent)).toEqual(['conversation.item.create']);
+  });
+
+  it('drops an RT-2 deferred response.create instead of draining it on response.done', async () => {
+    const { session, sent } = buildSession();
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_goodbye' },
+    });
+    // Tool result lands mid-goodbye → deferred.
+    session.sendToolResult('call_transfer', { transferred: false });
+    expect(session.pendingResponseCreate).toBe(true);
+    session.beginHangup();
+    expect(session.pendingResponseCreate).toBe(false);
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_goodbye', status: 'completed' },
+    });
+    expect(types(sent)).toEqual(['conversation.item.create']);
+  });
+
+  it('requestResponse reports false while hanging up; endHangup restores normal behavior', () => {
+    const { session, sent } = buildSession();
+    session.beginHangup();
+    expect(session.requestResponse()).toBe(false);
+    session.endHangup();
+    expect(session.requestResponse()).toBe(true);
+    session.sendToolResult('call_2', { ok: true });
+    expect(types(sent)).toEqual([
+      'response.create',
+      'conversation.item.create',
+      'response.create',
+    ]);
+  });
+});
+
 describe('RT-3 error classification', () => {
   it('softens a lone application error (no onError, session stays alive)', async () => {
     const onError = vi.fn();

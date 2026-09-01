@@ -40,6 +40,20 @@ describe('getHoursStatus', () => {
     expect(s.salonOpenThatDay).toBe(false);
     expect(s.closedRightNow).toBe(true); // today + closed all day
   });
+
+  // AUDIT FIX (2026-09-01): "Thursday at 12 PM" on Tue Sept 1 meant Sept 10
+  // (the vacation swallows Sept 3) — a bare weekday is ambiguous a week out.
+  it('nextOpen within the week stays a bare weekday', () => {
+    const s = getHoursStatus('2026-06-21', at('2026-06-21T13:00')); // Sun -> Mon
+    expect(s.nextOpen).toBe('tomorrow at 12 PM');
+    const s2 = getHoursStatus('2026-06-18', at('2026-06-18T20:00'));
+    expect(s2.nextOpen).toBe('tomorrow at 12 PM');
+  });
+
+  it('nextOpen a week or more away carries the date (vacation)', () => {
+    const s = getHoursStatus('2026-09-01', at('2026-09-01T14:00'));
+    expect(s.nextOpen).toBe('Thursday, September 10 at 12 PM');
+  });
 });
 
 describe('vacations (V1)', () => {
