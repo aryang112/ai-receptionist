@@ -68,6 +68,15 @@ describe('P0 — closed/vacation days must yield ZERO open slots (fetchOpenSlots
     });
     expect(res.salonOpenThatDay).toBe(false);
     expect(res.slots ?? []).toHaveLength(0);
+    // 2026-09-01 owner decision: the decision-moment note tells the away
+    // story in the owner's words — "away from the salon", the reopen day
+    // with its date, never the word "vacation", never "fully booked".
+    expect(res.note).toMatch(/Richa is away from the salon/);
+    expect(res.note).toMatch(/reopens Thursday, September 10/);
+    // The only permitted occurrence is the explicit ban clause itself.
+    const rest = res.note.replace(/never say vacation, holiday, or trip/gi, '');
+    expect(rest.toLowerCase()).not.toMatch(/\bvacation\b/);
+    expect(res.note).toMatch(/Never call a closed day fully booked/);
   });
 
   it('book_appointment on a vacation date is REJECTED at the pre-write re-check (the no-prior-suggest warn-allow path)', async () => {
@@ -107,7 +116,7 @@ describe('P0 — closed/vacation days must yield ZERO open slots (fetchOpenSlots
 });
 
 describe('P1 — aborted spam hangup rolls the outcome back', () => {
-  it("outcome returns to its pre-spam value when the caller barges in on the decline", async () => {
+  it('outcome returns to its pre-spam value when the caller barges in on the decline', async () => {
     const call = buildCall();
     call.callSid = 'CA_spamabort';
     call.outcome = 'none';

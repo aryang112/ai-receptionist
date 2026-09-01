@@ -28,6 +28,7 @@ import {
   getHoursStatus,
   getOpenClose,
   getActiveOrUpcomingVacation,
+  getVacationForDate,
   fmtTime,
   isOpenNow,
   isWithinTransferWindow,
@@ -310,17 +311,41 @@ export function buildInstructions(
   // During the upcoming window it told the model to promise "I'll text her
   // right now" while transfer_to_owner still live-dialed Richa — so the
   // upcoming variant now says transfers work normally until she leaves.
+  // OWNER DECISION (2026-09-01): callers hear only that Richa is "away from
+  // the salon" — never "vacation", "holiday", "trip", or a guessed reason.
+  // The section header deliberately avoids the word too: a header is prompt
+  // text the model can echo. The reopen day carries its full date because a
+  // bare weekday is ambiguous across a closure longer than a week.
+  const reopenLabel = vacation
+    ? DateTime.fromISO(vacation.reopenISO, { zone: env.TIMEZONE }).toFormat(
+        'cccc, MMMM d'
+      )
+    : '';
+  const awayRangeLabel = vacation
+    ? `${DateTime.fromISO(vacation.from, { zone: env.TIMEZONE }).toFormat('MMMM d')} through ${DateTime.fromISO(vacation.to, { zone: env.TIMEZONE }).toFormat('MMMM d')}`
+    : '';
   const vacationBlock = vacation
     ? `
 
-═══ VACATION (Richa is away) ═══
+═══ RICHA IS AWAY FROM THE SALON ═══
+- Wording: say only that Richa is away from the salon. Never say vacation, holiday, or trip, and never guess or explain why she is away.
 ${
   vacationActive
-    ? `Richa is away right now, back ${DateTime.fromISO(vacation.reopenISO, { zone: env.TIMEZONE }).toFormat('MMMM d')}. The salon is closed while she's away — if a caller asks for one of those dates, explain warmly and offer the first days after she's back. Keep booking normally for dates after her return.
-Erica cannot connect a caller to Richa while she's away — offer to pass a message along instead and call transfer_to_owner after the caller gives the message; it delivers the message to her as a text.`
-    : `Richa will be away ${DateTime.fromISO(vacation.from, { zone: env.TIMEZONE }).toFormat('MMMM d')}–${DateTime.fromISO(vacation.to, { zone: env.TIMEZONE }).toFormat('MMMM d')}, back ${DateTime.fromISO(vacation.reopenISO, { zone: env.TIMEZONE }).toFormat('MMMM d')}. The salon is closed those dates — if a caller asks for one, explain warmly and offer the first days after she's back. Until she leaves, everything works normally (including transferring to Richa).`
+    ? `- Richa is away right now, ${awayRangeLabel}; the salon is closed until she is back on ${reopenLabel}.
+- Any appointment request for a date through ${DateTime.fromISO(vacation.to, { zone: env.TIMEZONE }).toFormat('MMMM d')} (today, tomorrow, this week, a walk-in): say warmly that Richa is away from the salon and the salon reopens ${reopenLabel}, then offer to check the first days after she is back. Never call those days fully booked. Book normally for ${reopenLabel} onward.
+- Erica cannot connect a caller to Richa while she is away. Offer to pass a message along instead; after the caller gives the message, call transfer_to_owner — it delivers the message to her as a text.`
+    : `- Richa will be away from the salon ${awayRangeLabel}, back ${reopenLabel}. The salon is closed those dates — if a caller asks for one, say warmly that Richa is away from the salon then and offer the first days after she is back. Until she leaves, everything works normally (including transferring to Richa).`
 }`
     : '';
+  // The transfer line must agree with the away block: while Richa is away her
+  // phone is never dialed (handleTransferToOwner's vacation gate), so the
+  // precomputed status says so outright instead of "POSSIBLE" plus a
+  // contradicting paragraph the model had to reconcile on every call.
+  const richaLine = vacationActive
+    ? `NOT possible right now — Richa is away from the salon until ${reopenLabel}; offer to pass a message along instead`
+    : transferPossibleNow
+      ? 'POSSIBLE right now'
+      : 'NOT possible right now (outside her calling hours)';
 
   // Transfer failback: the caller is ALREADY mid-call — they heard the
   // recorded-line greeting in segment 1, then heard Richa's phone ring out.
@@ -433,7 +458,7 @@ OTHER TRANSFERS are last resort: several different people in one group booking, 
 
 LIVE TRANSFER: only when RICHA'S LINE says POSSIBLE and no active away notice applies. Give one short handoff sentence, then call transfer_to_owner; longer speech is cut off.
 
-MESSAGE MODE: outside Richa's calling hours or during an active vacation, never say you will get her. Offer a message, collect it, then call transfer_to_owner; it sends a text. Confirm only after success. If you handled a cancellation or reschedule affecting today or the next open day while the salon is closed, also text Richa a brief FYI.
+MESSAGE MODE: outside Richa's calling hours or while Richa is away from the salon, never say you will get her. Offer a message, collect it, then call transfer_to_owner; it sends a text. Confirm only after success. If you handled a cancellation or reschedule affecting today or the next open day while the salon is closed, also text Richa a brief FYI.
 
 ═══ SPAM & TELEMARKETING ═══
 - Signs: a sales pitch for business services, "your Google/business listing," loans/solar/insurance/warranties, a robocall or recorded pitch, or asking for "the owner" to sell something.
@@ -447,7 +472,7 @@ EXCEPTION — an urgent problem with the salon premises itself (alarm going off,
 ═══ CURRENT STATUS (precomputed server-side — trust it verbatim, never re-derive it) ═══
 CURRENT DATE & TIME: Right now it is ${now.toFormat("cccc, MMMM d, yyyy 'at' h:mm a")} at the salon (timezone ${env.TIMEZONE}). When a caller says "today" use the date ${todayISO}; "tomorrow" is ${tomorrowISO}. ALWAYS compute appointment dates from this — never guess today's date, month, or year. Pass every date to tools as YYYY-MM-DD.
 ${todayStatusLine}
-RICHA'S LINE (do NOT re-derive it from the clock or the salon hours): a live transfer to Richa is ${transferPossibleNow ? 'POSSIBLE right now' : 'NOT possible right now (outside her calling hours)'}. Transfers ring Richa's own phone, so this is INDEPENDENT of whether the salon is open — she takes calls beyond salon hours.${vacationBlock}
+RICHA'S LINE (do NOT re-derive it from the clock or the salon hours): a live transfer to Richa is ${richaLine}. Transfers ring Richa's own phone, so this is INDEPENDENT of whether the salon is open — she takes calls beyond salon hours.${vacationBlock}
 `;
 }
 
@@ -2431,13 +2456,20 @@ export class TwilioRealtimeCall {
       // State-specific coaching rides WITH the data (replaces the prompt's
       // old READING RESULTS prose): closed-day vs closed-now vs fully-booked
       // wording arrives exactly when that state is in front of the model.
-      const stateNote = !hours.salonOpenThatDay
-        ? `The salon does not open that day at all — say we are closed then and offer the next opening (${hours.nextOpen ?? 'another day'}). Never call a closed day fully booked.`
-        : hours.closedRightNow
-          ? `Already closed for today (hours were ${hours.hoursThatDay}) — say so and offer the next opening (${hours.nextOpen ?? 'tomorrow'}). Never call it fully booked.`
-          : slots.length === 0
-            ? 'Open that day but genuinely fully booked — say so and offer another day.'
-            : 'Offer only times from slots, nearest to what the caller asked for. If they want a time not in slots, it is not open — offer the nearest listed times instead, never invent one.';
+      // OWNER DECISION (2026-09-01): a date inside an away closure gets the
+      // "Richa is away from the salon" story at the decision moment — never
+      // the word vacation, never "fully booked", and the reopen day carries
+      // its full date so the caller hears the right week.
+      const awayClosure = getVacationForDate(payload.date);
+      const stateNote = awayClosure
+        ? `Richa is away from the salon that day; the salon is closed ${DateTime.fromISO(awayClosure.from, { zone: env.TIMEZONE }).toFormat('MMMM d')} through ${DateTime.fromISO(awayClosure.to, { zone: env.TIMEZONE }).toFormat('MMMM d')} and reopens ${DateTime.fromISO(awayClosure.reopenISO, { zone: env.TIMEZONE }).toFormat('cccc, MMMM d')}. Say warmly that Richa is away from the salon (never say vacation, holiday, or trip, and never guess why) and offer to check the first days after she is back. Never call a closed day fully booked.`
+        : !hours.salonOpenThatDay
+          ? `The salon does not open that day at all — say we are closed then and offer the next opening (${hours.nextOpen ?? 'another day'}). Never call a closed day fully booked.`
+          : hours.closedRightNow
+            ? `Already closed for today (hours were ${hours.hoursThatDay}) — say so and offer the next opening (${hours.nextOpen ?? 'tomorrow'}). Never call it fully booked.`
+            : slots.length === 0
+              ? 'Open that day but genuinely fully booked — say so and offer another day.'
+              : 'Offer only times from slots, nearest to what the caller asked for. If they want a time not in slots, it is not open — offer the nearest listed times instead, never invent one.';
 
       return {
         service: result.service.name,
@@ -2922,7 +2954,16 @@ export class TwilioRealtimeCall {
         sunday: businessHours.hours.sun.join(', ') || 'Closed',
         closedDates: businessHours.closedDates,
         address: `${businessHours.location.address}, ${businessHours.location.city}, ${businessHours.location.state} ${businessHours.location.zip}`,
-        vacations: businessHours.vacations ?? [],
+        // OWNER DECISION (2026-09-01): the key name and note are model-facing
+        // text — a "vacations" field invites the word "vacation" aloud.
+        awayClosures: (businessHours.vacations ?? []).map((v) => ({
+          from: v.from,
+          to: v.to,
+          reopens: DateTime.fromISO(v.to, { zone: env.TIMEZONE })
+            .plus({ days: 1 })
+            .toISODate(),
+        })),
+        note: 'awayClosures are dates Richa is away from the salon and it is closed. If one is relevant, say only that Richa is away from the salon and give the reopen day — never say vacation, holiday, or trip, and never guess why.',
       };
 
       logger.info(
@@ -3484,7 +3525,7 @@ export class TwilioRealtimeCall {
         });
         return {
           transferred: false,
-          note: "Richa still can't be reached — her phone already rang out on this call, so there is no point trying again. Their message has just landed on her phone as a text; confirm that to the caller in your own words and offer to help with anything else yourself.",
+          note: "Richa still can't be reached — her phone already rang out on this call, so there is no point trying again. Their message has just landed on her phone as a text. If the caller asked for Richa or left a message, confirm that in your own words and offer to help with anything else yourself; if this was only your own FYI after a change you already handled, say nothing about it and simply continue.",
         };
       }
 
@@ -3526,7 +3567,7 @@ export class TwilioRealtimeCall {
         }).toFormat('MMMM d');
         return {
           transferred: false,
-          note: `Richa is away until ${reopenLabel} — tell the caller you've passed their message along and she'll follow up when she's back.`,
+          note: `Richa is away from the salon until ${reopenLabel} (never say vacation, holiday, or trip). If the caller asked for Richa or left a message, tell them you've passed it along and she'll follow up when she's back. If this was only your own FYI after a change you already handled, say nothing about it and simply continue.`,
         };
       }
 
@@ -3561,7 +3602,7 @@ export class TwilioRealtimeCall {
         });
         return {
           transferred: false,
-          note: "It's outside calling hours, so the caller can't be connected to Richa right now — let them know (in your own words) that their message has just reached Richa's phone as a text and she'll follow up as soon as she can.",
+          note: "It's outside calling hours, so the caller can't be connected to Richa right now. If the caller asked for Richa or left a message, let them know (in your own words) that it has just reached Richa's phone as a text and she'll follow up as soon as she can. If this was only your own FYI after a change you already handled, say nothing about it and simply continue.",
         };
       }
 

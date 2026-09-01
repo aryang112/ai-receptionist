@@ -29,6 +29,21 @@ function isOnVacation(iso: string): boolean {
   return VACATIONS.some((v) => v.from <= iso && iso <= v.to);
 }
 
+/**
+ * The away-closure range covering a calendar date (any range, not just the
+ * active/upcoming one) — so a caller asking about a date inside a future
+ * closure gets the "Richa is away" story instead of a bare "closed". Null when
+ * the date is a normal day. `reopenISO` = the day after the range ends.
+ */
+export function getVacationForDate(
+  iso: string
+): { from: string; to: string; reopenISO: string } | null {
+  const v = VACATIONS.find((r) => r.from <= iso && iso <= r.to);
+  if (!v) return null;
+  const reopen = DateTime.fromISO(v.to, { zone: TZ }).plus({ days: 1 });
+  return { from: v.from, to: v.to, reopenISO: reopen.toISODate() ?? v.to };
+}
+
 function rangesForDate(date: DateTime): string[] {
   const iso = date.toISODate();
   if (iso && businessHours.closedDates.includes(iso)) return [];
@@ -115,8 +130,18 @@ export function getHoursStatus(
     if (!r.length) continue;
     const open = rangeStart(d, r[0]!);
     if (open > nowDt) {
+      // A bare weekday is only unambiguous within the coming week. During a
+      // 9-day away closure "next open Thursday" was rendered on a Tuesday
+      // while THIS Thursday was itself a closed day (2026-09-01 audit) — a
+      // caller hears the wrong week. Seven or more days out, name the date.
       const dayLabel =
-        i === 0 ? 'today' : i === 1 ? 'tomorrow' : d.toFormat('cccc');
+        i === 0
+          ? 'today'
+          : i === 1
+            ? 'tomorrow'
+            : i >= 7
+              ? d.toFormat('cccc, MMMM d')
+              : d.toFormat('cccc');
       nextOpen = `${dayLabel} at ${fmtTime(open)}`;
       break;
     }

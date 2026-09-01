@@ -32,25 +32,57 @@ describe('buildInstructions — LOCATION', () => {
 // pattern as getHoursStatus) so the vacation block is testable without
 // waiting for the real calendar date. business.json vacation: 2026-09-01 to
 // 2026-09-09.
-describe('buildInstructions — VACATION', () => {
-  it('injects an ACTIVE vacation block when "now" falls inside the range', () => {
+// 2026-09-01 owner decision: callers only ever hear that Richa is "away from
+// the salon" — the word "vacation" must not exist anywhere in the model-facing
+// prompt (a header or rule is text the model can echo), and the reopen day is
+// named with its date so a closure longer than a week can't be misheard as
+// "this Thursday".
+describe('buildInstructions — RICHA IS AWAY (away closure)', () => {
+  it('injects an ACTIVE away block when "now" falls inside the range', () => {
     const instructions = buildInstructions(at('2026-09-05T12:00'));
-    expect(instructions).toContain('VACATION');
+    expect(instructions).toContain('RICHA IS AWAY FROM THE SALON');
     expect(instructions).toMatch(/Richa is away right now/);
     expect(instructions).toMatch(/transfer_to_owner/);
+    // Reopen day carries its full date, never a bare weekday.
+    expect(instructions).toMatch(/Thursday, September 10/);
+    expect(instructions).toMatch(/Never say vacation, holiday, or trip/);
   });
 
-  it('injects an UPCOMING vacation block when "now" is within 14 days of the start', () => {
+  it('the word "vacation" appears ONLY inside the explicit ban clause, in every variant', () => {
+    const BAN = /never say vacation, holiday, or trip/gi;
+    for (const when of [
+      '2026-09-05T12:00',
+      '2026-08-22T09:00',
+      '2026-10-01T09:00',
+    ]) {
+      const rest = buildInstructions(at(when)).replace(BAN, '');
+      expect(rest.toLowerCase()).not.toContain('vacation');
+    }
+  });
+
+  it("RICHA'S LINE agrees with the away block: inside her calling hours but away → NOT possible, names the reopen day", () => {
+    const instructions = buildInstructions(at('2026-09-05T12:00')); // Sat noon, inside 09:00–21:00
+    expect(instructions).toMatch(
+      /live transfer to Richa is NOT possible right now — Richa is away from the salon until Thursday, September 10/
+    );
+    expect(instructions).not.toMatch(/live transfer to Richa is POSSIBLE/);
+  });
+
+  it('injects an UPCOMING away block when "now" is within 14 days of the start', () => {
     const instructions = buildInstructions(at('2026-08-22T09:00'));
-    expect(instructions).toContain('VACATION');
+    expect(instructions).toContain('RICHA IS AWAY FROM THE SALON');
     expect(instructions).toMatch(/Richa will be away/);
     // Must not claim she's already away before she actually is.
     expect(instructions).not.toMatch(/Richa is away right now/);
+    // Transfers still work until she leaves.
+    expect(instructions).toMatch(
+      /live transfer to Richa is POSSIBLE right now/
+    );
   });
 
-  it('omits the vacation block entirely when no vacation is active or upcoming', () => {
+  it('omits the away block entirely when no closure is active or upcoming', () => {
     const instructions = buildInstructions(at('2026-10-01T09:00'));
-    expect(instructions).not.toContain('VACATION');
+    expect(instructions).not.toContain('RICHA IS AWAY FROM THE SALON');
   });
 });
 
