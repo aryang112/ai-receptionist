@@ -32,7 +32,10 @@ Caller dials Twilio number
   `REALTIME_CONTEXT_NOTES` owns unscripted silence/duration/goodbye coaching.
   Section order, one-question identity, write boundaries, a <4.2k fallback
   budget, and a <5k stressed 63-service path are locked by
-  twilioStream.prompt.test.ts. See
+  twilioStream.prompt.test.ts. 2026-09-01: RICHA'S LINE folds an active away
+  closure in (NOT possible + reopen date); the away block is titled RICHA IS
+  AWAY FROM THE SALON and the word "vacation" is test-locked out of the
+  rendered prompt (owner wording). See docs/PROMPT_AUDIT_2026-09-01.md. See
   [`GPT-SOL/PROMPT_ARCHITECTURE.md`](GPT-SOL/PROMPT_ARCHITECTURE.md) and the fix
   ladder in tasks/lessons.md. State-specific coaching still lives in tool-result
   `note` fields. `matchStaffName()` +
@@ -127,6 +130,9 @@ Caller dials Twilio number
   V1: `vacations` ranges close those dates like closedDates;
   `getActiveOrUpcomingVacation(now?)` → `{from,to,reopenISO}|null` (active or
   starting ≤14 days) drives the prompt block + transfer gate.
+  `getVacationForDate(iso)` → the closure covering ANY date (feeds the
+  suggest_availability away-date note). `nextOpen` names the date when the
+  next opening is 7+ days out (2026-09-01: bare "Thursday" pointed at a closed day).
   `isWithinTransferWindow(now?)` — the HUMAN transfer window (2026-08-24, the
   Holly fix): live-transfer gate follows Richa's waking hours
   (`TRANSFER_WINDOW_START/END`, default 09:00–21:00 salon TZ, end-exclusive),
@@ -203,6 +209,13 @@ usage/duration/cost summed, transcript concatenated by ts).
 inspect-appointment.ts, list-services.ts, check-availability.ts, test-appt-filter.ts,
 test-call-local.sh (direct-call staging harness), Realtime/integration diagnostics,
 set-twilio-webhook.sh, tail-log.mjs (pretty live view of data/dev.log — `npm run logs`).
+2026-09-01 (prompt audit, all read-only, run with `node --env-file=.env --import tsx`):
+**render-prompt.ts** (today's CURRENT STATUS tail + constraint-word counts +
+quoted candidate-reply lines), **validate-session-fields.ts** /
+**validate-transcription-fields.ts** (live-validate a candidate session field
+against gpt-realtime-2.1 before shipping — the lessons.md rule as one command),
+**probe-client-history.ts** (raw client fields + 120 days of past appointments
+for the service-history feature).
 
 ## Tools the model can call
 `suggest_availability(serviceName, date, preferredTime?)`, `book_appointment`,

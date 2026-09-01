@@ -1,3 +1,48 @@
+# PLAN — Prompt audit follow-ups (2026-09-01) — from docs/PROMPT_AUDIT_2026-09-01.md
+
+Audit of the live prompt (ade8b16) + 34 test calls + OpenAI/ElevenLabs/Vapi
+guides. Full findings, evidence and rationale in the audit doc; this is the
+checklist. Fix ladder applies (note → schema → code → flow → prose).
+
+## ✅ Done in the audit pass (commit "say Richa is away from the salon")
+- [x] RICHA'S LINE folds an active closure in (was POSSIBLE beside "cannot connect")
+- [x] nextOpen names the date when 7+ days out ("Thursday, September 10")
+- [x] Owner wording everywhere: "away from the salon", never "vacation"
+      (header, get_business_hours `awayClosures`, MESSAGE MODE, closed-date note)
+- [x] Message-vs-FYI disambiguation in the three text-instead-of-transfer notes
+- [x] scripts: render-prompt / validate-session-fields / validate-transcription-fields / probe-client-history
+
+## P0 — before the next deploy
+- [ ] Deploy after the 4 direct-dial checks in audit §0 (Aryan's call; rollback 51d62be6…)
+- [ ] Transcription `language:'en'` + salon-vocabulary `prompt` behind env
+      (both accepted live 2026-09-01; `keywords` rejected) — snapshot test for
+      byte-identical payload when unset; one live call before flipping
+
+## P1 — this week, one commit + ear test each
+- [ ] C4 finish: FYI SMS from handleCancel/handleReschedule (today or next open
+      day while closed) in CODE; delete the MESSAGE MODE sentence; update prompt test
+- [ ] C5: unrecognized context says the calling number was already checked →
+      existing-appointment path asks for the booking number or name (4 wasted turns seen)
+- [ ] C7: end_call goodbye contract ("never announce the call is ending")
+- [ ] B5 un-park: appointmentId-in-clientId guard (note + param desc + short-circuit)
+- [ ] `reasoning.effort` env knob (default unset) + staged A/B on latency/ear
+- [ ] Log `phase` (commentary | final_answer) per output item
+- [ ] TOOLS: "no day → both suggest_availability calls in ONE turn"
+
+## P2 — next prompt release
+- [ ] Flow states (Goal / How to respond / Exit when) for BOOK, RESCHEDULE, CANCEL, LATE
+- [ ] C6 one failure rule · C8 staff-note "don't apologize for the preamble" ·
+      C9 "never invent a reason" · C10 identity wording · C12 variety line ·
+      C13 no repeated clarification · C11 constraint-word trim
+- [ ] Verbosity table + digit-by-digit phone read-back
+- [ ] Pronunciation HEARING hints for Richa (Richard, Rich, Raja, Recharge, "the judge")
+- [ ] Service history / "your usual" (audit §5) — prefetch-side, identity-gated, offer-not-assume; second turn, never the greeting
+- [ ] Pre-warm next-open-day availability for the usual service (measure Phorest latency on Railway first)
+- [ ] Semantic VAD listening test (eagerness: low), staging only
+- NOT recommended: parallel_tool_calls, audio.output.speed, injected disfluencies, catalog back behind a tool
+
+---
+
 # TODO — Non-client calls + privacy hardening (2026-08-25) — ✅ DONE (58dabd1)
 
 Approved by Aryan (call-review follow-up): general handling for non-client

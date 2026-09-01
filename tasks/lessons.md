@@ -289,3 +289,20 @@ compressed CONVERSATION FLOW lost the turn-taking beats the verbose
 numbered scripts enforced (she asked "Are you Aryan?" then steamrolled it
 without waiting; she pounced on a mid-sentence pause). If the rework is
 retried, encode explicit ask→WAIT→act beats in the flow states.
+
+## 2026-09-01 — A precomputed status line and a policy block must be computed from the SAME truth
+The away-period prompt rendered `RICHA'S LINE: … POSSIBLE right now` two lines
+above `Erica cannot connect a caller to Richa while she's away`. Each was
+individually correct (window vs. closure) and the prose said "if POSSIBLE and
+no away notice applies" — a contradiction the model had to re-solve on every
+turn for nine days. **Rule:** when the server precomputes a status for the
+model, fold every gate that affects it into that one line (the handler already
+knew: vacation gate → no dial). Never hand the model two facts and a rule for
+combining them when the code can hand it the combined fact.
+Same pass: `nextOpen` said "Thursday at 12 PM" on a Tuesday inside a 9-day
+closure — THIS Thursday was itself closed. A bare weekday is only unambiguous
+within the coming week; 7+ days out, name the date. And when the owner bans a
+word ("vacation"), grep the *rendered* prompt AND every tool-result key/note
+for it — the section header and a JSON key were both handing it to the model.
+Lock it with a test that strips the explicit ban clause and asserts the word
+appears nowhere else. `scripts/render-prompt.ts` prints today's tail for this.

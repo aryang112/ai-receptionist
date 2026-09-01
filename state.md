@@ -3,6 +3,40 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-09-01 — 🔍 PROMPT AUDIT + away-period fixes (committed, NOT deployed)
+
+- Aryan asked for a full prompt audit (conflicts, bugs/edge cases, naturalness,
+  parallel tool calling, service-history personalization, OpenAI/enterprise
+  guide alignment) and one live change: Richa is away Sep 1–9 — callers must
+  hear "away from the salon", **never "vacation"**.
+- Report: `docs/PROMPT_AUDIT_2026-09-01.md` (13 conflicts, 14 call findings,
+  ranked naturalness list, tool-calling and history designs, guide checklist,
+  P0/P1/P2 plan also in `tasks/todo.md`).
+- Rendering today's prompt exposed three LIVE defects for the away period,
+  all fixed + test-locked: RICHA'S LINE said "POSSIBLE" two lines above
+  "cannot connect her"; "next open Thursday" on Sep 1 pointed at Sep 3 (a
+  closed day) instead of Sep 10; the header/tool key/MESSAGE MODE all handed
+  the model the word "vacation". Also: closed-date availability note now tells
+  the away story at the decision moment; the three text-instead-of-transfer
+  notes distinguish a caller's message from Erica's own FYI (the 9:50 PM
+  Aug 27 "Richa's got the message as a text" goodbye).
+- Live probes (new `scripts/validate-session-fields.ts`,
+  `validate-transcription-fields.ts`, `probe-client-history.ts`,
+  `render-prompt.ts`): reasoning.effort, audio.output.speed, semantic_vad,
+  idle_timeout_ms, max_output_tokens, transcription.language/prompt all
+  ACCEPTED by gpt-realtime-2.1; transcription.keywords REJECTED;
+  parallel_tool_calls accepted but not echoed. Phorest client record has
+  firstVisit/lastVisit/preferredStaffId; past appointments queryable per
+  client in 31-day windows (history feature is feasible).
+- All 34 calls since the last review are from 5169 (Aryan's test phone) —
+  reviewed as regression evidence, not customer damage. `data/review-state.json`
+  NOT advanced (this was an audit, not a /call-review sweep).
+- Verification: 42 files / 402 tests, tsc, `git diff --check` all green.
+  Prompt est. 4.14k tokens (budget <4.2k).
+- **Next action (Aryan):** direct-dial the 4 away-period checks in audit §0,
+  then `railway up` if they pass. Rollback point stays
+  `51d62be6-07e1-4352-81dd-d463aa14b34a`. Vonage forwarding remains OFF.
+
 ## ✅ DEPLOYED 2026-08-29 ~11:49 ET: warmer greeting + ambiguous Richa transfer guard
 
 - The 11:23 ET production trace on deployment
