@@ -9,9 +9,10 @@
   parallel tool calling, service-history personalization, OpenAI/enterprise
   guide alignment) and one live change: Richa is away Sep 1–9 — callers must
   hear "away from the salon", **never "vacation"**.
-- Report: `docs/PROMPT_AUDIT_2026-09-01.md` (13 conflicts, 14 call findings,
-  ranked naturalness list, tool-calling and history designs, guide checklist,
-  P0/P1/P2 plan also in `tasks/todo.md`).
+- Report: `docs/PROMPT_AUDIT_2026-09-01.md`, also published as a page:
+  https://claude.ai/code/artifact/bcaa2ba1-296d-4205-ac4d-d81c69800b56
+  (13 conflicts, 14 call findings, ranked naturalness list, tool-calling and
+  history designs, guide checklist, P0/P1/P2 plan also in `tasks/todo.md`).
 - Rendering today's prompt exposed three LIVE defects for the away period,
   all fixed + test-locked: RICHA'S LINE said "POSSIBLE" two lines above
   "cannot connect her"; "next open Thursday" on Sep 1 pointed at Sep 3 (a
