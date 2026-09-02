@@ -6,6 +6,11 @@ and `tasks/lessons.md` for the gotchas.
 For a current architecture, Realtime 2.1, quirks, and operations handoff, start
 with [`GPT-SOL/README.md`](GPT-SOL/README.md).
 
+Forwarding is live as of 2026-09-02. The categorized reliability backlog,
+prompt-versus-code decisions, acceptance tests, and after-hours-only release
+gate are in
+[`FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md`](FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md).
+
 ## Data flow (a call)
 ```
 Caller dials Twilio number

@@ -1,7 +1,25 @@
 # STATE — AI Receptionist (Erica)
 
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
-> Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
+> Last major work: 2026-09-02 — vacation MVP live; functional red-team backlog documented.
+
+## 2026-09-02 — ⚠️ FORWARDING ON; production deploys after hours only
+
+- Aryan enabled forwarding. Production remains behavior commit `6f696a4`,
+  Railway deployment `d92ad566-82fb-4877-9199-b6fa381c3a4b` (`SUCCESS`).
+- **Standing release rule:** no production code, prompt, configuration, model,
+  voice, or Realtime session change during live/business hours. Implement and
+  test locally; deploy only in an owner-confirmed after-hours quiet window with
+  no active call and the rollback ready. This documentation pass did not deploy.
+- The complete functional red-team worklist, root-fix-versus-prompt
+  classification, priorities, acceptance tests, monitoring, and release gate
+  are in
+  [`docs/FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md`](docs/FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md).
+- First release target: deterministic closed-date gating, serialized/idempotent
+  writes, single-flight client creation, unknown-outcome reconciliation,
+  end-call mutation barrier, and vacation-safe transfer/message failure paths.
+- Deferred from that release: service-history personalization, voice/VAD/
+  reasoning experiments, advanced spam integration, and other enhancements.
 
 ## ✅ DEPLOYED 2026-09-01 ~10:58 PM ET: vacation reliability MVP
 
@@ -29,11 +47,13 @@
   phone index loaded (4,187 clients / 28 pages / `incomplete=false`); `/health`
   returned HTTP 200 at `2026-09-02T02:58:49Z`.
 - Immediate rollback deployment:
-  `51d62be6-07e1-4352-81dd-d463aa14b34a`. Vonage forwarding remains OFF.
-- **Next action (Aryan):** direct-dial the staging number before enabling
-  forwarding: tomorrow booking, ambiguous/explicit Richa requests, one real
-  message, one Sep 10 booking + immediate cancellation, natural goodbye, and
-  “actually, one more thing” during the farewell.
+  `51d62be6-07e1-4352-81dd-d463aa14b34a`. Forwarding was OFF at deployment;
+  Aryan enabled it on 2026-09-02. The current after-hours release rule and
+  pending reliability work are in the latest status block above.
+- The deployment-time next action was a direct-number acceptance pass before
+  enabling forwarding. Forwarding is now live; continue the monitoring listed
+  in `docs/FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md` and do not infer that
+  any undocumented acceptance call occurred.
 - Deferred on purpose: service-history personalization, reasoning/VAD tuning,
   parallel tool calls, spam-vendor integration, and other human-like extras.
 
