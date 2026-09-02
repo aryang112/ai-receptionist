@@ -260,11 +260,37 @@ function isOwnerMessageIntent(text: string): boolean {
   );
 }
 
+/**
+ * A request to start message-taking is not itself message content, even when
+ * the same turn includes useful identity/company context. Anchor at the end so
+ * substantive continuations ("let Richa know I called") remain eligible.
+ */
+function isOwnerMessageMetaRequest(text: string): boolean {
+  const normalized = normalizeOwnerMessageText(text);
+  return (
+    /\b(?:(?:can|could|may|would) (?:i|we)|(?:i|we) (?:want|need|would like|would love) to|id like to|wed like to|(?:im|i am|we are) (?:calling|trying|hoping) to) (?:leave|send|pass|give) (?:(?:richa|her) )?(?:a )?message(?: (?:for|to) (?:richa|her))?$/.test(
+      normalized
+    ) ||
+    /\b(?:can|could|may|would) you (?:please )?(?:take|leave|send|pass|give) (?:(?:richa|her) )?(?:a )?message(?: (?:for|to) (?:richa|her))?$/.test(
+      normalized
+    ) ||
+    /\b(?:can|could|may|would) (?:i|you) (?:ask|tell) (?:richa|her) (?:something|anything|a question)$/.test(
+      normalized
+    ) ||
+    /\b(?:can|could|would|will) you (?:please )?let (?:richa|her) know(?: something)?$/.test(
+      normalized
+    ) ||
+    /\b(?:i|we) (?:have|got) (?:a )?message (?:for|to) (?:richa|her)$/.test(
+      normalized
+    )
+  );
+}
+
 /** A clear decline or high-confidence pivot abandons the prior offer. */
 function abandonsOwnerMessageCapture(text: string): boolean {
   const normalized = normalizeOwnerMessageText(text);
   return (
-    /^(?:no|nope|nah|never mind|nevermind|forget it|not now|not right now)\b/.test(
+    /^(?:actually )?(?:no|nope|nah|never mind|nevermind|forget it|not now|not right now)\b/.test(
       normalized
     ) ||
     /^(?:actually )?(?:id rather|i would rather|instead|lets|let us|i need|i want|we need|we want)(?: to)? (?:book|schedule|reschedule|cancel|change|move|check|ask about)\b/.test(
@@ -1272,6 +1298,9 @@ export class TwilioRealtimeCall {
   private ownerMessageCaptureState: OwnerMessageCaptureState = {
     phase: 'inactive',
   };
+  // Never let a later capture reach back across an explicit abandonment or a
+  // completed delivery, even when its solicitation follows that turn directly.
+  private ownerMessageCaptureFloorSequence = 0;
   private callerTranscriptWaiters = new Map<
     string,
     Set<(text: string | undefined) => void>
@@ -2404,6 +2433,10 @@ export class TwilioRealtimeCall {
       const sequence = this.ensureCallerItemSequence(itemId);
       if (abandonsOwnerMessageCapture(text)) {
         this.ownerMessageCaptureState = { phase: 'inactive' };
+        this.ownerMessageCaptureFloorSequence = Math.max(
+          this.ownerMessageCaptureFloorSequence,
+          sequence
+        );
       } else if (
         isOwnerMessageIntent(text) &&
         this.ownerMessageCaptureState.phase !== 'collecting'
@@ -2412,8 +2445,13 @@ export class TwilioRealtimeCall {
         // context; a bare request is filtered before submission.
         this.ownerMessageCaptureState = {
           phase: 'collecting',
-          captureAfterSequence: Math.max(0, sequence - 1),
-          readyAfterSequence: Math.max(0, sequence - 1),
+          captureAfterSequence: Math.max(
+            this.ownerMessageCaptureFloorSequence,
+            sequence - 1
+          ),
+          readyAfterSequence: isOwnerMessageMetaRequest(text)
+            ? sequence
+            : Math.max(0, sequence - 1),
         };
       }
       this.finalCallerTranscripts.set(itemId, { text, sequence });
@@ -2429,23 +2467,38 @@ export class TwilioRealtimeCall {
   private handleAssistantTranscript(text: string): void {
     this.pushTranscriptEntry('erica', text);
     const promptKind = ownerMessagePromptKind(text);
-    if (!promptKind || this.ownerMessageCaptureState.phase === 'collecting') {
+    if (!promptKind) return;
+    const latestSequence = this.latestCallerItemId
+      ? (this.callerItemOrder.get(this.latestCallerItemId) ??
+        this.callerItemSequence)
+      : this.callerItemSequence;
+    if (this.ownerMessageCaptureState.phase === 'collecting') {
+      if (
+        promptKind === 'content' &&
+        latestSequence > this.ownerMessageCaptureState.readyAfterSequence
+      ) {
+        // Asking for more content makes every prior caller turn incomplete, but
+        // it must not discard identity or earlier message detail.
+        this.ownerMessageCaptureState = {
+          ...this.ownerMessageCaptureState,
+          readyAfterSequence: latestSequence,
+        };
+      }
       return;
     }
     if (promptKind === 'offer') {
       this.ownerMessageCaptureState = { phase: 'offered' };
     } else {
-      const latestSequence = this.latestCallerItemId
-        ? (this.callerItemOrder.get(this.latestCallerItemId) ??
-          this.callerItemSequence)
-        : this.callerItemSequence;
       // The turn that prompted Erica's offer can contain caller-authored context
       // ("I'm Erica from Bank of America — can I leave a message?"). Include
       // that immediately preceding turn; exact generic requests are filtered at
       // delivery, so a bare "can I leave a message?" contributes nothing.
       this.ownerMessageCaptureState = {
         phase: 'collecting',
-        captureAfterSequence: Math.max(0, latestSequence - 1),
+        captureAfterSequence: Math.max(
+          this.ownerMessageCaptureFloorSequence,
+          latestSequence - 1
+        ),
         readyAfterSequence: latestSequence,
       };
     }
@@ -4166,6 +4219,10 @@ export class TwilioRealtimeCall {
 
     // From this point on the captured window belongs to this one attempt. A
     // later message in the same call must establish a fresh solicitation.
+    this.ownerMessageCaptureFloorSequence = Math.max(
+      this.ownerMessageCaptureFloorSequence,
+      sourceSequence
+    );
     this.ownerMessageCaptureState = { phase: 'inactive' };
     const contentKey = normalizeOwnerMessageText(message);
     let delivery = this.ownerMessageDeliveries.get(contentKey);

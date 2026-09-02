@@ -146,6 +146,48 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
   });
 
   it.each([
+    'This is Erica Fleming from Bank of America, can I leave Richa a message?',
+    'This is Erica Fleming from Bank of America. Can I ask Richa something?',
+  ])(
+    'requires a later content turn after an identity plus bare message request: %s',
+    async (identityAndRequest) => {
+      const call = buildCall();
+      call.notifyOwnerSms = vi.fn().mockResolvedValue({
+        queued: true,
+        sid: 'SM_identity_meta',
+        status: 'queued',
+      });
+      finalCallerTurn(call, 'item_identity_meta', identityAndRequest);
+
+      await expect(call.handleLeaveMessageForOwner({})).resolves.toMatchObject({
+        messageAccepted: false,
+        contentRequired: true,
+      });
+      expect(call.notifyOwnerSms).not.toHaveBeenCalled();
+
+      call.handleAssistantTranscript(
+        'What message would you like me to give Richa?'
+      );
+      await expect(call.handleLeaveMessageForOwner({})).resolves.toMatchObject({
+        messageAccepted: false,
+        contentRequired: true,
+      });
+      expect(call.notifyOwnerSms).not.toHaveBeenCalled();
+
+      const details = 'Please ask her to return my call after eight.';
+      finalCallerTurn(call, 'item_identity_meta_details', details);
+      await expect(call.handleLeaveMessageForOwner({})).resolves.toMatchObject({
+        messageAccepted: true,
+      });
+
+      expect(call.notifyOwnerSms).toHaveBeenCalledTimes(1);
+      expect(call.notifyOwnerSms.mock.calls[0]?.[0]).toContain(
+        `${identityAndRequest}\n${details}`
+      );
+    }
+  );
+
+  it.each([
     'What would you like me to pass along?',
     'Go ahead and say your full message.',
     'Go ahead and say your complete message.',
@@ -333,6 +375,44 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
     expect(body).not.toMatch(/speak with Richa|brow appointment|can I leave/i);
   });
 
+  it('clears all stale message turns after an actually-never-mind hours pivot', async () => {
+    const call = buildCall();
+    call.notifyOwnerSms = vi.fn().mockResolvedValue({
+      queued: true,
+      sid: 'SM_never_mind',
+      status: 'queued',
+    });
+    call.handleAssistantTranscript(
+      'What message would you like me to give Richa?'
+    );
+    const staleIdentity = 'This is Morgan calling from the old supplier.';
+    const staleMessage = 'Please tell Richa the old shipment was delayed.';
+    finalCallerTurn(call, 'item_stale_identity', staleIdentity);
+    finalCallerTurn(call, 'item_stale_message', staleMessage);
+    const pivot = 'Actually never mind, what time do you close?';
+    finalCallerTurn(call, 'item_hours_pivot', pivot);
+    call.handleAssistantTranscript('We close at seven today.');
+
+    finalCallerTurn(
+      call,
+      'item_renewed_request',
+      'Actually, can I leave her a message?'
+    );
+    call.handleAssistantTranscript('What would you like me to pass along?');
+    const freshMessage = 'Please call me tomorrow after nine.';
+    finalCallerTurn(call, 'item_renewed_details', freshMessage);
+
+    await expect(call.handleLeaveMessageForOwner({})).resolves.toMatchObject({
+      messageAccepted: true,
+    });
+
+    const body = call.notifyOwnerSms.mock.calls[0]?.[0] as string;
+    expect(body).toContain(`Caller said: “${freshMessage}”`);
+    expect(body).not.toContain(staleIdentity);
+    expect(body).not.toContain(staleMessage);
+    expect(body).not.toContain(pivot);
+  });
+
   it('does not send an unsolicited booking turn as an owner message', async () => {
     const call = buildCall();
     call.notifyOwnerSms = vi.fn();
@@ -364,6 +444,12 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
     const identity = 'This is Erica Fleming calling from Bank of America.';
     finalCallerTurn(call, 'item_boundary_identity', identity);
     call.handleAssistantTranscript('Please continue with your message.');
+    await expect(call.handleLeaveMessageForOwner({})).resolves.toMatchObject({
+      messageAccepted: false,
+      contentRequired: true,
+    });
+    expect(call.notifyOwnerSms).not.toHaveBeenCalled();
+
     const details =
       'Please give Richa this message: call me tomorrow after eight.';
     finalCallerTurn(call, 'item_boundary_details', details);
