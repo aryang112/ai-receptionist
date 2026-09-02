@@ -8,6 +8,7 @@ import {
   vi,
 } from 'vitest';
 import WebSocket from 'ws';
+import { logger } from '../core/logger.js';
 
 // The OpenAI session constructor throws without a key; some import paths reach it.
 process.env.OPENAI_REALTIME_API_KEY ||= 'test-key';
@@ -295,14 +296,26 @@ describe('mid-greeting caller speech is ALWAYS ignored', () => {
 
   it('even a full request during the greeting gets no direct reply — it waits as context', async () => {
     const { call } = buildCall();
+    const infoSpy = vi.spyOn(logger, 'info').mockImplementation(() => {});
     startGreeting(call);
     call.handleCallerSpeechStarted();
     call.handleCallerSpeechStopped();
-    call.greetingUtterances.push('I need to cancel my appointment today');
+    const privateWords = 'Aryan 410-555-0100 needs to cancel today';
+    call.greetingUtterances.push(privateWords);
 
     await drainGreeting(call);
 
     expect(call.session.requestResponse).not.toHaveBeenCalled();
+    const ignoredLog = infoSpy.mock.calls.find((entry) =>
+      String(entry[1]).includes('mid-greeting speech ignored')
+    );
+    expect(ignoredLog?.[0]).toMatchObject({
+      ignoredUtteranceCount: 1,
+      ignoredCharacterCount: privateWords.length,
+    });
+    expect(ignoredLog?.[0]).not.toHaveProperty('said');
+    expect(JSON.stringify(ignoredLog)).not.toContain(privateWords);
+    infoSpy.mockRestore();
   });
 
   it('turn committed, transcript still in flight → still no reply', async () => {

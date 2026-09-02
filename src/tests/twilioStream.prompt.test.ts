@@ -241,15 +241,36 @@ describe('buildInstructions — TRANSFER self-service + closed-hours rules', () 
     const instructions = buildInstructions();
     expect(instructions).toMatch(/never say you will get her/i);
     expect(instructions).toMatch(/leave_message_for_owner silently/i);
-    expect(instructions).toMatch(
-      /Schedule-change FYIs happen automatically/i
-    );
+    expect(instructions).toMatch(/Schedule-change FYIs happen automatically/i);
     expect(instructions).toMatch(
       /never call a message or transfer tool for them/i
     );
     expect(instructions).not.toMatch(
       /cancellation or reschedule affecting today/i
     );
+    const messageMode = instructions.slice(
+      instructions.indexOf('MESSAGE MODE:'),
+      instructions.indexOf('═══ SPAM & TELEMARKETING')
+    );
+    expect(messageMode).toMatch(/ask.*what.*Richa.*know/i);
+    expect(messageMode).toMatch(/ask once.*anything else/i);
+    const solicitation = messageMode.slice(
+      0,
+      messageMode.indexOf('After the caller gives')
+    );
+    expect(solicitation).not.toMatch(
+      /\b(?:capture|exactly|submitted|text|delivery)\b/i
+    );
+  });
+
+  it('suggests a maps app only for directions, not a plain address request', () => {
+    const instructions = buildInstructions();
+    const location = instructions.slice(
+      instructions.indexOf('LOCATION:'),
+      instructions.indexOf('\n\nHOURS:')
+    );
+    expect(location).toMatch(/For directions.*maps app/i);
+    expect(location).not.toMatch(/If asked.*maps app/i);
   });
 });
 
@@ -732,12 +753,15 @@ describe('high-salience write tool descriptions', () => {
     expect(tool!.description).toMatch(
       /appointment availability versus a live connection/i
     );
-    expect(tool!.description).toMatch(
-      /speak or talk.*connected or transferred/i
-    );
     expect(tool!.description).toMatch(/Never use this tool.*internal FYI/i);
     expect(tool!.description).toMatch(/live call transfer/i);
     expect(tool!.description).toMatch(/leave_message_for_owner/i);
+    expect(tool!.description).toMatch(
+      /speak, talk, connect, or transfer.*explicit/i
+    );
+    expect(tool!.description).toMatch(
+      /only available\/free\/there.*ambiguous/i
+    );
   });
 
   it('keeps caller messages argument-free and separate from live transfer', () => {
@@ -748,7 +772,7 @@ describe('high-salience write tool descriptions', () => {
       (candidate) => candidate.name === 'transfer_to_owner'
     );
     expect(messageTool).toBeDefined();
-    expect(messageTool!.description).toMatch(/exact message/i);
+    expect(messageTool!.description).toMatch(/caller-authored message/i);
     expect(messageTool!.description).toMatch(/server supplies/i);
     expect(messageTool!.description).toMatch(/silently/i);
     expect((messageTool!.parameters as any).properties).toEqual({});

@@ -137,6 +137,16 @@ const GENERIC_OWNER_MESSAGE_TURNS = new Set([
   'done',
 ]);
 
+function normalizeOwnerMessageText(text: string): string {
+  return text
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[’']/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /**
  * Fail closed on turns that express consent, a category, or a connection
  * request but do not contain caller-authored message content. This is a guard,
@@ -144,38 +154,101 @@ const GENERIC_OWNER_MESSAGE_TURNS = new Set([
  * preserved exactly and allowed through.
  */
 function isGenericOwnerMessageTurn(text: string): boolean {
-  const normalized = text
-    .toLowerCase()
-    .replace(/[’']/g, '')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const normalized = normalizeOwnerMessageText(text);
   if (!normalized || GENERIC_OWNER_MESSAGE_TURNS.has(normalized)) return true;
   if (
-    /^(?:can|could|may|would) i (?:leave|send|pass) (?:her |richa )?(?:a )?message$/.test(
+    /^(?:(?:actually|okay|ok|yes|sure|well) )*(?:(?:can|could|may|would) (?:i|we)|(?:(?:i|we) (?:want|need|would like|would love)|id like|wed like) to) (?:leave|send|pass|give) (?:(?:richa|her) )?(?:a )?message(?: (?:for|to) (?:richa|her))?$/.test(
       normalized
     )
   ) {
     return true;
   }
   if (
-    /^(?:i |we )?(?:want|need|would like|am trying|are trying) to (?:speak|talk|connect|transfer)(?: me| us)? (?:to|with )?(?:richa|her)$/.test(
+    /^(?:(?:actually|okay|ok|yes|sure|well) )*(?:can|could|may|would) you (?:please )?(?:take|leave|send|pass|give) (?:(?:richa|her) )?(?:a )?message(?: (?:for|to) (?:richa|her))?$/.test(
       normalized
     )
   ) {
     return true;
   }
-  if (/^(?:please )?(?:connect|transfer) (?:me|us) (?:to|with) (?:richa|her)$/.test(normalized)) {
+  if (
+    /^(?:(?:actually|okay|ok|yes|sure|well) )*(?:can|could|may|would) (?:i|we) (?:speak|talk) (?:to|with) (?:richa|her)$/.test(
+      normalized
+    )
+  ) {
     return true;
   }
-  return /^(?:is )?(?:richa|risha|rishka|rich|richard) (?:available|free|there)(?: right now)?$/.test(
+  if (
+    /^(?:(?:actually|okay|ok|yes|sure|well) )*(?:can|could|may|would) (?:i|we) be (?:connected|transferred) (?:to|with) (?:richa|her)$/.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+  if (
+    /^(?:(?:actually|okay|ok|yes|sure|well) )*(?:can|could|would|will) you (?:please )?(?:connect|transfer) (?:me|us) (?:to|with) (?:richa|her)$/.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+  if (
+    /^(?:(?:actually|okay|ok|yes|sure|well) )*(?:(?:i|we) (?:want|need|would like|am trying|are trying|was hoping|were hoping)|id like|wed like) to (?:speak|talk) (?:to|with) (?:richa|her)$/.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+  if (
+    /^(?:(?:actually|okay|ok|yes|sure|well) )*(?:(?:i|we) (?:want|need|would like|am trying|are trying|was hoping|were hoping)|id like|wed like) to (?:(?:connect|transfer)(?: (?:me|us))?|be (?:connected|transferred)) (?:to|with) (?:richa|her)$/.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+  if (
+    /^(?:(?:actually|okay|ok|yes|sure|well) )*(?:i|we) (?:want|need|would like) you to (?:connect|transfer) (?:me|us) (?:to|with) (?:richa|her)$/.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+  if (
+    /^(?:(?:actually|okay|ok|yes|sure|well) )*(?:please )?(?:connect|transfer) (?:me|us) (?:to|with) (?:richa|her)$/.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+  return /^(?:(?:is )?(?:richa|risha|rishka|rich|richard) (?:available|free|there)|(?:do you know|can you tell me) (?:if|whether) (?:richa|risha|rishka|rich|richard) (?:is )?(?:available|free|there))(?: right now)?$/.test(
     normalized
+  );
+}
+
+/** A caller can establish message mode before Erica gets a chance to offer it. */
+function isOwnerMessageIntent(text: string): boolean {
+  const normalized = normalizeOwnerMessageText(text);
+  return (
+    /\b(?:leave|send|pass|give|take)\b.{0,32}\bmessage\b/.test(normalized) ||
+    /\b(?:have|got) (?:a )?message (?:for|to) (?:richa|her)\b/.test(normalized)
+  );
+}
+
+/** A clear decline or high-confidence pivot abandons the prior offer. */
+function abandonsOwnerMessageCapture(text: string): boolean {
+  const normalized = normalizeOwnerMessageText(text);
+  return (
+    /^(?:no|nope|nah|never mind|nevermind|forget it|not now|not right now)\b/.test(
+      normalized
+    ) ||
+    /^(?:actually )?(?:id rather|i would rather|instead|lets|let us|i need|i want|we need|we want) (?:book|schedule|reschedule|cancel|change|move|check|ask about)\b/.test(
+      normalized
+    )
   );
 }
 
 /** Assistant wording can vary; this marks only an actual message solicitation. */
 function isOwnerMessagePrompt(text: string): boolean {
-  const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim();
+  const normalized = normalizeOwnerMessageText(text);
   return (
     /(?:would you like|do you want|can i|may i).*(?:leave|take|pass).*(?:message)/.test(
       normalized
@@ -183,10 +256,13 @@ function isOwnerMessagePrompt(text: string): boolean {
     /(?:what message|what would you like).*(?:tell|give|pass|send|message).*(?:richa|her)/.test(
       normalized
     ) ||
-    /what would you like (?:richa|her) to know/.test(normalized) ||
+    /what (?:else )?would you like (?:richa|her) to know/.test(normalized) ||
     /what (?:exactly )?(?:should|would).*(?:tell|give|pass).*(?:richa|her)/.test(
       normalized
-    )
+    ) ||
+    /what would you like me to pass along/.test(normalized) ||
+    /go ahead and say your (?:full|complete) message/.test(normalized) ||
+    /please continue(?: with)? (?:your |the )?message/.test(normalized)
   );
 }
 
@@ -491,7 +567,7 @@ When rules compete: recording disclosure, privacy, safety, and confirmed writes 
 - Richa (the owner) is pronounced REE-cha. Callers may say "Risha" or "Rishka" — they mean her.
 
 ═══ CONTEXT ═══
-LOCATION: ${businessHours.location.address}, ${businessHours.location.city}, ${businessHours.location.state} ${businessHours.location.zip}. If asked, say it naturally and suggest a maps app; never invent directions or landmarks.
+LOCATION: ${businessHours.location.address}, ${businessHours.location.city}, ${businessHours.location.state} ${businessHours.location.zip}. For directions, give the address and suggest a maps app; never invent directions or landmarks. For a plain address request, give only the address.
 
 HOURS: ${buildHoursLine()}
 BUSINESS HOURS: never guess. Use the weekly table for other days and CURRENT STATUS for today, tomorrow, or right now; never re-derive. Use get_business_hours only if unclear.
@@ -513,7 +589,7 @@ ${servicesSection}
 - Call read-only tools once intent and required values are clear; otherwise ask for only the missing/conflicting value.
 - suggest_availability requires a SERVICE, never a person, and matches the live catalog. Named day → only that day. No day → today AND tomorrow, a couple from each. Named time/part of day → preferredTime as 24h HH:MM.
 - book_appointment / reschedule_appointment / cancel_appointment: only AFTER the caller explicitly confirmed the exact service, day, and time (or exact appointment to cancel). Write only what they clearly approved; claim only returned success.
-- leave_message_for_owner: after the caller chooses a message and finishes it. Pass no text or summary; the server captures exact words. Call silently and acknowledge only success.
+- leave_message_for_owner: after the caller chooses a message and finishes it. Pass no content or summary; the server supplies caller-authored wording. Call silently and acknowledge only success.
 - After a tool returns, state the result first, then only the next useful action or question.
 - end_call — SILENT/PROACTIVE: only when caller is CLEARLY done or per SAFETY & ESCALATION. NEVER mid-task or for silence alone; follow CLOSE.
 - Tool errors: follow the note, hide raw details, and retry once if appropriate. MORE THAN 2 tool failures → stop and offer Richa.
@@ -558,7 +634,7 @@ OTHER TRANSFERS are last resort: several different people in one group booking, 
 
 LIVE TRANSFER: only when RICHA'S LINE says POSSIBLE and no active away notice applies. Give one short handoff sentence, then call transfer_to_owner; longer speech is cut off.
 
-MESSAGE MODE: outside Richa's calling hours or while Richa is away from the salon, never say you will get her. Offer to take a message and WAIT. After the caller gives the complete message, call leave_message_for_owner silently with no acknowledgement, transition, or dispatch narration. After success, acknowledge once in ordinary receptionist language without discussing delivery mechanics or promising when Richa will respond, then wait. After failure, apologize briefly without internal details, then wait. Schedule-change FYIs happen automatically — never call a message or transfer tool for them or mention them to the caller.
+MESSAGE MODE: outside Richa's calling hours or while Richa is away from the salon, never say you will get her. Offer to take a message, ask naturally what they would like Richa to know with no process explanation, then WAIT. After the caller gives the complete message, call leave_message_for_owner silently with no acknowledgement, transition, or dispatch narration. After success, acknowledge once naturally, ask once if they need anything else, then wait; never discuss mechanics or promise when Richa will respond. After failure, apologize briefly without internal details, then wait. Schedule-change FYIs happen automatically — never call a message or transfer tool for them or mention them to the caller.
 
 ═══ SPAM & TELEMARKETING ═══
 - Signs: a sales pitch for business services, "your Google/business listing," loans/solar/insurance/warranties, a robocall or recorded pitch, or asking for "the owner" to sell something.
@@ -857,7 +933,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'transfer_to_owner',
     description:
-      'Start a live call transfer to Richa. Use only when the caller explicitly asks to speak or talk with Richa, be connected or transferred, or wants a real person. Available/free/there alone MUST NOT trigger it: clarify appointment availability versus a live connection and wait. Never use this tool for a message or an internal FYI; use leave_message_for_owner only for an actual caller message. Erica handles normal salon tasks herself.',
+      'Start a live call transfer to Richa. Saying speak, talk, connect, or transfer to Richa or a real person is explicit. Only available/free/there alone is ambiguous and MUST NOT trigger it: clarify appointment availability versus a live connection and wait. Never use this tool for a message or an internal FYI; use leave_message_for_owner only for an actual caller message. Erica handles normal salon tasks herself.',
     parameters: {
       type: 'object',
       properties: {},
@@ -868,7 +944,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'leave_message_for_owner',
     description:
-      "Leave the caller's exact message for Richa only after they choose to leave one and finish it. The server supplies their transcript; pass no content or summary. Call silently with no acknowledgement or transition. Never use it for a connection request, generic reason, or internal FYI.",
+      'Leave a caller-authored message for Richa only after they choose one and finish it. The server supplies their wording; pass no content or summary. Call silently with no acknowledgement or transition. Never use it for a connection request, generic reason, or internal FYI.',
     parameters: {
       type: 'object',
       properties: {},
@@ -1159,6 +1235,10 @@ export class TwilioRealtimeCall {
     string,
     Promise<Record<string, unknown>>
   >();
+  // Content-level single-flight covers Realtime retries that use a new item id
+  // for the same caller-authored message. The original text remains untouched
+  // in the one outbound notification; only its normalized key is compared.
+  private ownerMessageDeliveries = new Map<string, Promise<OwnerSmsResult>>();
   // M1: per-call token usage, summed across every turn that reported one
   // (openaiSession's onUsage, fired alongside the existing 📊 turn tokens
   // log). Feeds estimateCostUsd() and the dashboard's per-call cost column.
@@ -1875,8 +1955,13 @@ export class TwilioRealtimeCall {
     // committed turn stays in conversation history, so their next words get
     // answered with that context (create_response is live again from here).
     if (this.greetingTurnCommitted) {
+      const ignoredText = this.greetingUtterances.join(' ');
       logger.info(
-        { streamSid: this.streamSid, said: this.greetingUtterances.join(' ') },
+        {
+          streamSid: this.streamSid,
+          ignoredUtteranceCount: this.greetingUtterances.length,
+          ignoredCharacterCount: ignoredText.length,
+        },
         '🙊 mid-greeting speech ignored — greeting question stands, no reply'
       );
     }
@@ -2269,10 +2354,15 @@ export class TwilioRealtimeCall {
       // Production VAD supplies this id before transcription. The fallback only
       // covers tests/providers that omit the VAD id but include it here.
       if (!this.latestCallerItemId) this.latestCallerItemId = itemId;
-      this.finalCallerTranscripts.set(itemId, {
-        text,
-        sequence: this.ensureCallerItemSequence(itemId),
-      });
+      const sequence = this.ensureCallerItemSequence(itemId);
+      if (abandonsOwnerMessageCapture(text)) {
+        this.ownerMessageCaptureAfterSequence = null;
+      } else if (isOwnerMessageIntent(text)) {
+        // Include this intent turn when it also carries identity/company
+        // context; a bare request is filtered before submission.
+        this.ownerMessageCaptureAfterSequence = Math.max(0, sequence - 1);
+      }
+      this.finalCallerTranscripts.set(itemId, { text, sequence });
       const waiters = this.callerTranscriptWaiters.get(itemId);
       if (waiters) {
         for (const resolve of waiters) resolve(text);
@@ -2284,10 +2374,7 @@ export class TwilioRealtimeCall {
 
   private handleAssistantTranscript(text: string): void {
     this.pushTranscriptEntry('erica', text);
-    if (
-      this.ownerMessageCaptureAfterSequence === null &&
-      isOwnerMessagePrompt(text)
-    ) {
+    if (isOwnerMessagePrompt(text)) {
       const latestSequence = this.latestCallerItemId
         ? (this.callerItemOrder.get(this.latestCallerItemId) ??
           this.callerItemSequence)
@@ -3927,6 +4014,35 @@ export class TwilioRealtimeCall {
     };
   }
 
+  /** Submit and record one caller-authored message exactly once per call. */
+  private async submitOwnerMessage(
+    message: string,
+    sourceItemId: string
+  ): Promise<OwnerSmsResult> {
+    const result = await this.notifyOwnerSms(
+      `Hi Richa, it's Erica. ${this.callerDisplayName()} left this message:\n\nCaller said: “${message}”`
+    );
+    this.markInfoOutcome();
+    CallStore.recordToolCall(this.callSid, {
+      name: 'leave_message_for_owner',
+      ok: result.queued,
+      ...(result.queued
+        ? { detail: { sourceItemId, accepted: true } }
+        : { error: `Owner message ${result.reason}` }),
+    });
+    logger.info(
+      {
+        tool: 'leave_message_for_owner',
+        sourceItemId,
+        accepted: result.queued,
+      },
+      result.queued
+        ? 'Caller message accepted for owner notification'
+        : 'Caller message was not accepted for owner notification'
+    );
+    return result;
+  }
+
   /**
    * Deliver one exact, final caller transcript. The model supplies no content:
    * it decides only that message-taking is appropriate, while item correlation,
@@ -3949,7 +4065,8 @@ export class TwilioRealtimeCall {
 
     const sourceSequence = this.callerItemOrder.get(sourceItemId);
     const messageTurns =
-      this.ownerMessageCaptureAfterSequence !== null && sourceSequence !== undefined
+      this.ownerMessageCaptureAfterSequence !== null &&
+      sourceSequence !== undefined
         ? [...this.finalCallerTranscripts.values()]
             .filter(
               (entry) =>
@@ -3985,43 +4102,57 @@ export class TwilioRealtimeCall {
     // From this point on the captured window belongs to this one attempt. A
     // later message in the same call must establish a fresh solicitation.
     this.ownerMessageCaptureAfterSequence = null;
-    const messageResult = await this.notifyOwnerSms(
-      `Hi Richa, it's Erica. ${this.callerDisplayName()} left this message:\n\nCaller said: “${message}”`
-    );
-    this.markInfoOutcome();
-    CallStore.recordToolCall(this.callSid, {
-      name: 'leave_message_for_owner',
-      ok: messageResult.queued,
-      ...(messageResult.queued
-        ? { detail: { sourceItemId, accepted: true } }
-        : { error: `Owner message ${messageResult.reason}` }),
-    });
-    logger.info(
-      {
-        tool: 'leave_message_for_owner',
-        sourceItemId,
-        accepted: messageResult.queued,
-      },
-      messageResult.queued
-        ? 'Caller message accepted for owner notification'
-        : 'Caller message was not accepted for owner notification'
-    );
+    const contentKey = normalizeOwnerMessageText(message);
+    let delivery = this.ownerMessageDeliveries.get(contentKey);
+    const duplicateContent = delivery !== undefined;
+    if (!delivery) {
+      delivery = this.submitOwnerMessage(message, sourceItemId);
+      this.ownerMessageDeliveries.set(contentKey, delivery);
+    }
+    const messageResult = await delivery;
+
+    const latestTranscript = this.latestCallerItemId
+      ? this.finalCallerTranscripts.get(this.latestCallerItemId)?.text
+      : undefined;
+    const latestIsSameContent =
+      latestTranscript !== undefined &&
+      normalizeOwnerMessageText(latestTranscript) === contentKey;
+    // A materially different turn during submission may be a correction. Do
+    // not let that stale completion produce a success acknowledgement. A pure
+    // repetition of identical normalized content is safely coalesced instead.
+    if (
+      (this.callerSpeechEpoch !== sourceSpeechEpoch ||
+        this.latestCallerItemId !== sourceItemId) &&
+      !latestIsSameContent
+    ) {
+      return {
+        messageAccepted: false,
+        correctionRequired: true,
+        outcomeUncertain: true,
+        note: 'Ask only what final message the caller wants Richa to have, then stop and wait. Do not confirm the earlier message was passed along; call leave_message_for_owner only after they finish.',
+      };
+    }
 
     if (messageResult.queued) {
       return {
         messageAccepted: true,
-        note: 'Acknowledge once, briefly, in ordinary receptionist language that the message has been passed along for Richa. Do not discuss delivery mechanics or promise when she will respond. Then stop and wait.',
+        ...(duplicateContent ? { duplicate: true } : {}),
+        note: duplicateContent
+          ? 'This caller message was already handled. Do not acknowledge it again or call a message tool again; stop and wait.'
+          : 'Acknowledge once, briefly, in ordinary receptionist language that the message has been passed along for Richa. Ask once if they need anything else, then wait. Do not discuss mechanics or promise when she will respond.',
       };
     }
     if (messageResult.reason === 'uncertain') {
       return {
         messageAccepted: false,
         outcomeUncertain: true,
+        ...(duplicateContent ? { duplicate: true } : {}),
         note: "Apologize briefly that you couldn't confirm the message went through. Do not retry, claim success, discuss internal details, or promise a response. Then stop and wait.",
       };
     }
     return {
       messageAccepted: false,
+      ...(duplicateContent ? { duplicate: true } : {}),
       note: "Apologize briefly that you couldn't pass the message along just now. Do not retry, claim success, discuss internal details, or promise a response. Then stop and wait.",
     };
   }
@@ -4052,7 +4183,7 @@ export class TwilioRealtimeCall {
         note:
           prior.messageAccepted === true
             ? 'This exact caller message was already handled. Do not acknowledge it again, do not call a message tool again, and stop and wait.'
-            : 'This exact caller message was already attempted. Do not retry or claim success; follow the prior failure state once, then stop and wait.',
+            : prior.note,
       };
     }
 

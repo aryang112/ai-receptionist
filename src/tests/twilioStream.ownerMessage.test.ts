@@ -114,7 +114,10 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
     const pending = call.handleLeaveMessageForOwner({});
     expect(notifyOwnerSms).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(900);
-    call.handleCallerTranscript('Please ask Richa to call me tomorrow.', 'item_late');
+    call.handleCallerTranscript(
+      'Please ask Richa to call me tomorrow.',
+      'item_late'
+    );
     await expect(pending).resolves.toMatchObject({ messageAccepted: true });
     expect(notifyOwnerSms.mock.calls[0]?.[0]).toContain(
       'Please ask Richa to call me tomorrow.'
@@ -129,7 +132,7 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
     const context =
       "I'm Erica Fleming from Bank of America—can I leave Richa a message?";
     finalCallerTurn(call, 'item_context', context);
-    call.handleAssistantTranscript('What would you like Richa to know?');
+    call.handleAssistantTranscript('What would you like me to pass along?');
     const details = 'Please have her return my call after 8 a.m.';
     finalCallerTurn(call, 'item_details', details);
 
@@ -137,6 +140,29 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
 
     const body = call.notifyOwnerSms.mock.calls[0]?.[0] as string;
     expect(body).toContain(`${context}\n${details}`);
+  });
+
+  it.each([
+    'What would you like me to pass along?',
+    'Go ahead and say your full message.',
+    'Go ahead and say your complete message.',
+    'Please continue with your message.',
+  ])('recognizes a live-eval message solicitation: %s', async (prompt) => {
+    const call = buildCall();
+    call.notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_phrase', status: 'queued' });
+    const context = 'This is Erica Fleming from Bank of America.';
+    finalCallerTurn(call, 'item_phrase_context', context);
+    call.handleAssistantTranscript(prompt);
+    const details = 'Please ask Richa to call me after 8 a.m.';
+    finalCallerTurn(call, 'item_phrase_details', details);
+
+    await call.handleLeaveMessageForOwner({});
+
+    expect(call.notifyOwnerSms.mock.calls[0]?.[0]).toContain(
+      `${context}\n${details}`
+    );
   });
 
   it('fails closed after a bounded wait when the final transcript never arrives', async () => {
@@ -161,8 +187,19 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
     "It's personal.",
     'A business matter.',
     'Connect me with her.',
+    'I want to speak to Richa.',
+    'Can I speak with Richa?',
+    'Could you connect me to Richa?',
+    "I'd like to talk to Richa.",
+    'Would you connect me with Richa?',
+    'Could I be connected to Richa?',
+    'I want to connect with Richa.',
+    'I would like you to transfer me to Richa.',
     'Is Richa available?',
+    'Do you know if Richa is there?',
     'Can I leave her a message?',
+    'Actually, can I leave her a message?',
+    "I'd like to leave Richa a message.",
   ])('does not send generic/non-message content: %s', async (text) => {
     const call = buildCall();
     call.notifyOwnerSms = vi.fn();
@@ -175,6 +212,72 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
       contentRequired: true,
     });
     expect(call.notifyOwnerSms).not.toHaveBeenCalled();
+  });
+
+  it('does not turn a connection request plus consent into caller message content', async () => {
+    const call = buildCall();
+    call.notifyOwnerSms = vi.fn();
+    finalCallerTurn(call, 'item_connection', 'I want to speak to Richa.');
+    call.handleAssistantTranscript(
+      'Would you like me to take a message for Richa?'
+    );
+    finalCallerTurn(call, 'item_consent', 'Yes.');
+
+    const result = await call.handleLeaveMessageForOwner({});
+
+    expect(result).toMatchObject({
+      messageAccepted: false,
+      contentRequired: true,
+    });
+    expect(call.notifyOwnerSms).not.toHaveBeenCalled();
+  });
+
+  it('starts capture from explicit caller message intent before an assistant solicitation', async () => {
+    const call = buildCall();
+    call.notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_intent', status: 'queued' });
+    const context =
+      "I'm Erica Fleming from Bank of America—can I leave Richa a message?";
+    const details = 'Please ask her to return my call after 8 a.m.';
+    finalCallerTurn(call, 'item_intent', context);
+    finalCallerTurn(call, 'item_intent_details', details);
+
+    await call.handleLeaveMessageForOwner({});
+
+    expect(call.notifyOwnerSms.mock.calls[0]?.[0]).toContain(
+      `${context}\n${details}`
+    );
+  });
+
+  it('replaces a declined/pivoted capture window when a later message is solicited', async () => {
+    const call = buildCall();
+    call.notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_fresh', status: 'queued' });
+    finalCallerTurn(call, 'item_connection', 'Can I speak with Richa?');
+    call.handleAssistantTranscript(
+      'Would you like me to take a message for Richa?'
+    );
+    finalCallerTurn(
+      call,
+      'item_pivot',
+      'No, I need a brow appointment on September 10.'
+    );
+    finalCallerTurn(
+      call,
+      'item_later_request',
+      'Actually, can I leave her a message?'
+    );
+    call.handleAssistantTranscript('What would you like me to pass along?');
+    const finalMessage = 'Please call me tomorrow.';
+    finalCallerTurn(call, 'item_fresh_message', finalMessage);
+
+    await call.handleLeaveMessageForOwner({});
+
+    const body = call.notifyOwnerSms.mock.calls[0]?.[0] as string;
+    expect(body).toContain(`Caller said: “${finalMessage}”`);
+    expect(body).not.toMatch(/speak with Richa|brow appointment|can I leave/i);
   });
 
   it('allows a concise direct caller-authored message', async () => {
@@ -217,6 +320,49 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
     expect(call.notifyOwnerSms).toHaveBeenCalledTimes(1);
   });
 
+  it('coalesces identical normalized content across different caller item IDs', async () => {
+    const call = buildCall();
+    let release!: (value: unknown) => void;
+    call.notifyOwnerSms = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        })
+    );
+    finalCallerTurn(
+      call,
+      'item_duplicate_one',
+      'Please ask Richa to call me tomorrow.'
+    );
+    const first = call.handleLeaveMessageForOwner({});
+    await vi.waitFor(() =>
+      expect(call.notifyOwnerSms).toHaveBeenCalledTimes(1)
+    );
+
+    finalCallerTurn(
+      call,
+      'item_duplicate_two',
+      '  PLEASE ask Richa to call me tomorrow!  '
+    );
+    const second = call.handleLeaveMessageForOwner({});
+    await Promise.resolve();
+    expect(call.notifyOwnerSms).toHaveBeenCalledTimes(1);
+
+    release({ queued: true, sid: 'SM_content_once', status: 'queued' });
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult).toMatchObject({
+      messageAccepted: true,
+    });
+    expect(secondResult).toMatchObject({
+      messageAccepted: true,
+      duplicate: true,
+    });
+    expect(call.notifyOwnerSms).toHaveBeenCalledTimes(1);
+    expect(call.notifyOwnerSms.mock.calls[0]?.[0]).toContain(
+      'Please ask Richa to call me tomorrow.'
+    );
+  });
+
   it('aborts an in-flight old-item capture when the caller starts correcting it', async () => {
     vi.useFakeTimers();
     const call = buildCall();
@@ -231,6 +377,34 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
       contentRequired: true,
     });
     expect(call.notifyOwnerSms).not.toHaveBeenCalled();
+  });
+
+  it('does not confirm stale success when the caller corrects during provider submission', async () => {
+    const call = buildCall();
+    let release!: (value: unknown) => void;
+    call.notifyOwnerSms = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        })
+    );
+    finalCallerTurn(call, 'item_old_time', 'Please call me at five.');
+    const pending = call.handleLeaveMessageForOwner({});
+    await vi.waitFor(() =>
+      expect(call.notifyOwnerSms).toHaveBeenCalledTimes(1)
+    );
+
+    finalCallerTurn(call, 'item_correction', 'Sorry, make that six.');
+    release({ queued: true, sid: 'SM_stale', status: 'queued' });
+
+    await expect(pending).resolves.toMatchObject({
+      messageAccepted: false,
+      correctionRequired: true,
+      outcomeUncertain: true,
+    });
+    const result = await pending;
+    expect(result.note).toMatch(/do not confirm/i);
+    expect(result.note).not.toMatch(/\b(?:SMS|Twilio|queue|provider|tool)\b/i);
   });
 
   it('rejects unsafe control characters or overlong content instead of rewriting it', async () => {
@@ -289,14 +463,35 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
       provider: { queued: false, reason: 'uncertain' },
       expected: { messageAccepted: false, outcomeUncertain: true },
     },
-  ])('returns truthful nontechnical failure coaching', async ({ provider, expected }) => {
+  ])(
+    'returns truthful nontechnical failure coaching',
+    async ({ provider, expected }) => {
+      const call = buildCall();
+      call.notifyOwnerSms = vi.fn().mockResolvedValue(provider);
+      finalCallerTurn(call, 'item_failure', 'Please ask her to call me.');
+
+      const result = await call.handleLeaveMessageForOwner({});
+
+      expect(result).toMatchObject(expected);
+      expect(result.note).not.toMatch(
+        /\b(?:SMS|Twilio|queue|provider|tool)\b/i
+      );
+    }
+  );
+
+  it('successful coaching acknowledges once and asks whether anything else is needed', async () => {
     const call = buildCall();
-    call.notifyOwnerSms = vi.fn().mockResolvedValue(provider);
-    finalCallerTurn(call, 'item_failure', 'Please ask her to call me.');
+    call.notifyOwnerSms = vi.fn().mockResolvedValue({
+      queued: true,
+      sid: 'SM_next_step',
+      status: 'queued',
+    });
+    finalCallerTurn(call, 'item_next_step', 'Please ask her to call me.');
 
     const result = await call.handleLeaveMessageForOwner({});
 
-    expect(result).toMatchObject(expected);
+    expect(result).toMatchObject({ messageAccepted: true });
+    expect(result.note).toMatch(/ask once.*anything else/i);
     expect(result.note).not.toMatch(/\b(?:SMS|Twilio|queue|provider|tool)\b/i);
   });
 });
