@@ -308,6 +308,21 @@ let clientPhoneIndexReloading = false;
 let clientIndexIncomplete = false;
 let clientIndexIncompleteWarned = false;
 
+// A model response can issue the same booking call more than once before the
+// first client lookup/create finishes. Keep client identity resolution
+// single-flight per confirmed appointment subject, then retain the successful
+// result briefly so a near-sequential repeat cannot create a second profile.
+// Pending entries are never evicted; resolved entries are both TTL- and
+// LRU-bounded so this process-local guard cannot grow without limit.
+const CLIENT_RESOLUTION_TTL_MS = 10 * 60 * 1000;
+const CLIENT_RESOLUTION_MAX_SUCCESSFUL = 256;
+type ClientResolutionEntry = {
+  promise: Promise<string>;
+  state: 'pending' | 'resolved';
+  expiresAt: number;
+};
+const clientResolutionCache = new Map<string, ClientResolutionEntry>();
+
 // The client list changes slowly, but a long-running process must not serve a
 // stale phone index forever (a client added today would never resolve). After
 // this window we trigger a background reload — never blocking a live call.
@@ -656,7 +671,7 @@ async function createClient(customer: {
   return response.clientId;
 }
 
-async function getOrCreateClient(customer: {
+async function getOrCreateClientUncached(customer: {
   name: string;
   phone?: string;
   email?: string;
@@ -692,6 +707,109 @@ async function getOrCreateClient(customer: {
   }
 
   return createClient(customer);
+}
+
+function normalizedClientSubjectKey(customer: {
+  name: string;
+  phone?: string;
+  email?: string;
+}): string | undefined {
+  // Email is the strongest caller-supplied identity and deliberately takes
+  // precedence over phone/name when both are present.
+  const email = customer.email?.trim().normalize('NFKC').toLowerCase();
+  if (email) return `email:${email}`;
+
+  // Never bind on phone alone: family members commonly share a number. A raw,
+  // explicit full name (at least two components) is required rather than the
+  // Guest/Client fallback produced by splitName(). Likewise, a name without a
+  // complete normalized phone is not a stable subject key.
+  const phone = sanitisePhone(customer.phone);
+  const nameParts = customer.name
+    .trim()
+    .normalize('NFKC')
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!phone || phone.length !== 10 || nameParts.length < 2) return undefined;
+
+  const fullName = nameParts.join(' ').toLowerCase();
+  return `phone-name:${phone}:${fullName}`;
+}
+
+function pruneClientResolutionCache(now: number): void {
+  for (const [key, entry] of clientResolutionCache) {
+    if (entry.state === 'resolved' && entry.expiresAt <= now) {
+      clientResolutionCache.delete(key);
+    }
+  }
+
+  let successfulCount = 0;
+  for (const entry of clientResolutionCache.values()) {
+    if (entry.state === 'resolved') successfulCount += 1;
+  }
+  if (successfulCount <= CLIENT_RESOLUTION_MAX_SUCCESSFUL) return;
+
+  // Map iteration is insertion order. Cache hits and successful settlements
+  // are moved to the end, so deleting from the front gives us a small LRU.
+  for (const [key, entry] of clientResolutionCache) {
+    if (entry.state !== 'resolved') continue;
+    clientResolutionCache.delete(key);
+    successfulCount -= 1;
+    if (successfulCount <= CLIENT_RESOLUTION_MAX_SUCCESSFUL) break;
+  }
+}
+
+function getOrCreateClient(customer: {
+  name: string;
+  phone?: string;
+  email?: string;
+}): Promise<string> {
+  const subjectKey = normalizedClientSubjectKey(customer);
+  if (!subjectKey) return getOrCreateClientUncached(customer);
+
+  const now = Date.now();
+  pruneClientResolutionCache(now);
+  const cached = clientResolutionCache.get(subjectKey);
+  if (cached) {
+    // Touch both pending and resolved hits. Pending calls still share the exact
+    // same work; resolved calls retain the most recently used identities.
+    clientResolutionCache.delete(subjectKey);
+    clientResolutionCache.set(subjectKey, cached);
+    return cached.promise;
+  }
+
+  const promise = getOrCreateClientUncached(customer);
+  const entry: ClientResolutionEntry = {
+    promise,
+    state: 'pending',
+    expiresAt: 0,
+  };
+  clientResolutionCache.set(subjectKey, entry);
+
+  void promise.then(
+    (clientId) => {
+      // A missing/unknown outcome must never become a reusable binding.
+      if (clientResolutionCache.get(subjectKey) !== entry) return;
+      if (!clientId) {
+        clientResolutionCache.delete(subjectKey);
+        return;
+      }
+      entry.state = 'resolved';
+      entry.expiresAt = Date.now() + CLIENT_RESOLUTION_TTL_MS;
+      clientResolutionCache.delete(subjectKey);
+      clientResolutionCache.set(subjectKey, entry);
+      pruneClientResolutionCache(Date.now());
+    },
+    () => {
+      // Rejections include timeouts/unknown provider outcomes. Let a later
+      // attempt perform a fresh lookup/reconciliation instead of replaying the
+      // same failed promise forever.
+      if (clientResolutionCache.get(subjectKey) === entry) {
+        clientResolutionCache.delete(subjectKey);
+      }
+    }
+  );
+
+  return promise;
 }
 
 async function pickStaffId(
