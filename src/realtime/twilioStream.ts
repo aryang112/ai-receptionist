@@ -2350,6 +2350,32 @@ export class TwilioRealtimeCall {
         { tool: 'suggest_availability', args: payload },
         'Tool called: suggest_availability'
       );
+
+      // FR-01: business.json is authoritative for closures. Reject a known
+      // closed date before touching Phorest so an availability outage cannot
+      // turn a vacation/closed day into an error-driven fail-open path.
+      if (!getOpenClose(payload.date)) {
+        const hours = getHoursStatus(payload.date);
+        const awayClosure = getVacationForDate(payload.date);
+        const note = awayClosure
+          ? `Richa is away from the salon that day; the salon is closed ${DateTime.fromISO(awayClosure.from, { zone: env.TIMEZONE }).toFormat('MMMM d')} through ${DateTime.fromISO(awayClosure.to, { zone: env.TIMEZONE }).toFormat('MMMM d')} and reopens ${DateTime.fromISO(awayClosure.reopenISO, { zone: env.TIMEZONE }).toFormat('cccc, MMMM d')}. Say warmly that Richa is away from the salon (never say vacation, holiday, or trip, and never guess why) and offer to check the first days after she is back. Never call a closed day fully booked.`
+          : `The salon does not open that day at all — say we are closed then and offer the next opening (${hours.nextOpen ?? 'another day'}). Never call a closed day fully booked.`;
+        CallStore.recordToolCall(this.callSid, {
+          name: 'suggest_availability',
+          ok: true,
+          detail: { date: payload.date, offered: 0, closed: true },
+        });
+        return {
+          service: payload.serviceName,
+          date: payload.date,
+          slots: [],
+          salonOpenThatDay: false,
+          hoursThatDay: hours.hoursThatDay,
+          closedRightNow: hours.closedRightNow,
+          nextOpen: hours.nextOpen,
+          note,
+        };
+      }
       const result = await this.fetchOpenSlots(
         payload.serviceName,
         payload.date
@@ -2580,6 +2606,19 @@ export class TwilioRealtimeCall {
         'Tool called: book_appointment'
       );
 
+      // FR-01: reject a known local closure before service resolution or any
+      // Phorest availability/write call. Remote failure must never override
+      // the salon calendar.
+      if (!getOpenClose(payload.date)) {
+        logger.warn(
+          { tool: 'book_appointment', date: payload.date },
+          'Booking rejected — salon closed on requested date'
+        );
+        return {
+          error: 'The salon is closed on that date. No appointment was booked.',
+        };
+      }
+
       // Slot guard: if we offered slots for this exact service+date, the caller
       // may only book one we actually offered. No cache entry → legitimate flow
       // we didn't gate through suggest_availability, so allow it (just warn).
@@ -2800,6 +2839,20 @@ export class TwilioRealtimeCall {
         { tool: 'reschedule_appointment', args: payload },
         'Tool called: reschedule_appointment'
       );
+
+      // FR-01: the local calendar is authoritative. Check it before any
+      // availability lookup or write so a remote error cannot make a known
+      // closure reschedulable.
+      if (!getOpenClose(payload.date)) {
+        logger.warn(
+          { tool: 'reschedule_appointment', date: payload.date },
+          'Reschedule rejected — salon closed on requested date'
+        );
+        return {
+          error:
+            'The salon is closed on that date. The appointment was not rescheduled.',
+        };
+      }
       // Ownership guard: never reschedule an appointment this call hasn't
       // actually surfaced (prevents acting on a guessed/invented ID).
       if (!this.servedAppointmentIds.has(payload.appointmentId)) {
