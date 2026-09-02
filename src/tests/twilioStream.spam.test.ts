@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
 import WebSocket from 'ws';
 import { parseToolArgs } from '../realtime/toolSchemas.js';
 
@@ -9,6 +9,11 @@ let TwilioRealtimeCall: typeof import('../realtime/twilioStream.js').TwilioRealt
 
 beforeAll(async () => {
   ({ TwilioRealtimeCall } = await import('../realtime/twilioStream.js'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 /**
@@ -49,32 +54,48 @@ function buildCall() {
 // directly, the same way the CT-1 clientId regression was caught.
 describe('S1 — handleEndCall reason handling', () => {
   it('(a) handleEndCall({reason: "spam"}) tags the call outcome "spam" and still hangs up', async () => {
+    vi.useFakeTimers();
     const call = buildCall();
     const res = await call.handleEndCall({ reason: 'spam' });
-    expect(res).toEqual({ ended: true });
+    expect(res).toMatchObject({ ending: true });
+    call.sendAudioToTwilio('AA==', 'goodbye-response');
+    call.markQueue = [];
+    await vi.advanceTimersByTimeAsync(1);
     expect(call.closed).toBe(true);
     expect(call.outcome).toBe('spam');
   });
 
   it('(b) handleEndCall({}) leaves the default outcome path unchanged ("completed")', async () => {
+    vi.useFakeTimers();
     const call = buildCall();
     const res = await call.handleEndCall({});
-    expect(res).toEqual({ ended: true });
+    expect(res).toMatchObject({ ending: true });
+    call.sendAudioToTwilio('AA==', 'goodbye-response');
+    call.markQueue = [];
+    await vi.advanceTimersByTimeAsync(1);
     expect(call.closed).toBe(true);
     expect(call.outcome).toBe('completed');
   });
 
   it('handleEndCall(undefined) (no args at all) also falls through to the normal default path', async () => {
+    vi.useFakeTimers();
     const call = buildCall();
     const res = await call.handleEndCall(undefined);
-    expect(res).toEqual({ ended: true });
+    expect(res).toMatchObject({ ending: true });
+    call.sendAudioToTwilio('AA==', 'goodbye-response');
+    call.markQueue = [];
+    await vi.advanceTimersByTimeAsync(1);
     expect(call.outcome).toBe('completed');
   });
 
   it('an invalid/garbage reason never blocks the hangup — argless-by-design invariant preserved', async () => {
+    vi.useFakeTimers();
     const call = buildCall();
     const res = await call.handleEndCall({ reason: 'not-a-real-reason' });
-    expect(res).toEqual({ ended: true });
+    expect(res).toMatchObject({ ending: true });
+    call.sendAudioToTwilio('AA==', 'goodbye-response');
+    call.markQueue = [];
+    await vi.advanceTimersByTimeAsync(1);
     expect(call.closed).toBe(true);
     // Falls through as a normal hangup, exactly like handleEndCall({}).
     expect(call.outcome).toBe('completed');

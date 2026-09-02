@@ -36,7 +36,11 @@ export type RealtimeUsage = {
 
 export type RealtimeHandlers = {
   /** base64 G.711 mu-law audio from OpenAI, ready to send straight to Twilio. */
-  onAudioChunk?: (base64MuLaw: string, itemId?: string) => void;
+  onAudioChunk?: (
+    base64MuLaw: string,
+    itemId?: string,
+    responseId?: string
+  ) => void;
   onTextDelta?: (delta: string) => void;
   onResponseComplete?: () => void;
   /** Fired when OpenAI VAD detects the caller started talking (barge-in trigger). */
@@ -435,6 +439,12 @@ export class OpenAIRealtimeSession {
     return true;
   }
 
+  /** Response currently generating; used to distinguish post-tool farewell
+   * audio from trailing chunks of the response that invoked end_call. */
+  getCurrentResponseId(): string | null {
+    return this.currentResponseId;
+  }
+
   /**
    * Log how long it took Erica to start speaking after the last turn trigger
    * (caller stopped talking, greeting requested, or a tool result returned).
@@ -669,7 +679,10 @@ export class OpenAIRealtimeSession {
         if (this.handlers.onAudioChunk) {
           this.handlers.onAudioChunk(
             delta as string,
-            this.activeItemId ?? undefined
+            this.activeItemId ?? undefined,
+            (event.response_id as string | undefined) ??
+              this.currentResponseId ??
+              undefined
           );
         } else {
           this.log.error('No onAudioChunk handler registered!');
@@ -689,6 +702,7 @@ export class OpenAIRealtimeSession {
         this.activeItemId = null;
         // RT-2: this response is finished — the next response.create is now legal.
         this.activeResponse = false;
+        this.currentResponseId = null;
         // Surface token usage + cache hit rate so context/cost growth is visible.
         const usage = event.response?.usage;
         if (usage) {

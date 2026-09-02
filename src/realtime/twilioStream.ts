@@ -98,6 +98,11 @@ const TRANSCRIPT_GRACE_MS = 1500;
 // plausibly in flight at teardown (see TRANSCRIPT_GRACE_MS).
 const TRANSCRIPT_INFLIGHT_WINDOW_MS = 3000;
 
+// A model-requested end_call is two-phase: first return its tool result so the
+// post-tool response can speak a farewell, then wait for that audio to begin.
+// Never trade a silent hangup for an unbounded wait if Realtime fails to speak.
+const END_CALL_GOODBYE_START_MS = 5000;
+
 // M1: gpt-realtime-2.1 audio-token rate ESTIMATE (2026-08, OpenAI's realtime
 // pricing page) — dollars per 1,000,000 tokens. Cached input is priced far
 // below fresh input, which is exactly why the truncation.retention_ratio
@@ -238,11 +243,15 @@ export const REALTIME_CONTEXT_NOTES = {
   silenceGoodbye:
     'BACKGROUND (do not read aloud as-is): the caller has not responded. Give one short, warm goodbye inviting them to call back, and say nothing else.',
   durationWarning:
-    'BACKGROUND (do not read aloud as-is): we are near the call time limit. Wrap up naturally after finishing the current request. Do not mention a time limit.',
+    'BACKGROUND (do not read aloud as-is): we are near the call time limit. Finish the current request promptly, then follow the normal closing flow. Do not mention a time limit.',
   durationGoodbye:
     'BACKGROUND (do not read aloud as-is): we are at the call time limit. Give one short, warm goodbye inviting the caller to call back, and say nothing else. Do not mention a time limit.',
   interruptedEndCall:
-    'The caller started speaking again. Do not hang up; listen and help. Afterward, confirm whether they need anything else before trying end_call again.',
+    'The caller started speaking again. Continue the call: listen and help. Afterward, confirm whether they need anything else before trying end_call again.',
+  endCallGoodbye:
+    'The server will close after your next spoken line. Say exactly one short, warm, natural farewell addressed to the caller now. Say only the farewell; keep call-control actions silent and internal. Do not call end_call again.',
+  endCallSpamGoodbye:
+    'The server will close after your next spoken line. Say exactly one short, polite closing now: decline on behalf of the salon and end with an ordinary farewell. Say only that line, do not mention Richa, and keep call-control actions silent and internal. Do not call end_call again.',
 } as const;
 
 export function buildInstructions(
@@ -447,14 +456,14 @@ SERVE — hear what the caller actually NEEDS before acting. Callers almost neve
 - RUNNING LATE: identify → find today's appointment via list_appointments → log_running_late with clientId, appointmentId, AND detail — a short summary in the caller's own words, including HOW late if they said. squeezed false → reassure them warmly, no rush, Richa will know. squeezed true → let them know we'll do our best to squeeze them in.
 - The caller changes their mind mid-flow (e.g. asks to cancel instead of reschedule) → ABANDON the old flow immediately and follow the new request.
 
-CLOSE: after you finish helping with something, ask if there's anything else. Something more → keep helping the same way, and ask again after. They say they're done / goodbye → say ONE warm, natural goodbye addressed to the caller and then IMMEDIATELY call end_call in that SAME turn — don't keep chatting after the goodbye, and don't wait for them to hang up. Never announce that the call is ending, being wrapped up, or has ended; never narrate end_call or hangup mechanics.
+CLOSE: after helping, ask if there's anything else. If they need more, help, then ask again. When they are done, call end_call without a spoken preamble. Its result guides the single brief, warm, ordinary farewell addressed to them. The spoken line is only the farewell; keep all call-control actions silent and internal.
 
 ═══ SAFETY & ESCALATION ═══
 ASKED FOR RICHA: "Is Richa available, free, or there?" alone is AMBIGUOUS, not permission to transfer. Ask exactly: "Are you checking Richa's availability for an appointment, or would you like me to connect you with her?" Then STOP and WAIT. Appointment service, date, or time context follows the booking flow. An explicit connection request says speak, talk, connect, or transfer to Richa or a real person; honor that promptly without probing or persuasion. If RICHA'S LINE says POSSIBLE and no active away notice applies, transfer. Otherwise say briefly that a live transfer is unavailable and offer to text her a message. Never promise a transfer and retract it.
 
 SELF-SERVICE FIRST: if the caller describes a problem or asks to send a message without explicitly asking for Richa, first offer to handle any supported task. If they cannot make an appointment, offer a new time; if they do not want one, offer cancellation. After helping, offer a message only if something personal remains.
 
-OTHER TRANSFERS are last resort: several different people in one group booking, a request outside your tools, an upset caller who wants a human, or MORE THAN 2 tool failures. Persistent abuse → one polite wrap-up, then end_call or transfer.
+OTHER TRANSFERS are last resort: several different people in one group booking, a request outside your tools, an upset caller who wants a human, or MORE THAN 2 tool failures. Persistent abuse → use end_call without a spoken preamble so its result owns the polite closing, or transfer if safety requires it.
 
 LIVE TRANSFER: only when RICHA'S LINE says POSSIBLE and no active away notice applies. Give one short handoff sentence, then call transfer_to_owner; longer speech is cut off.
 
@@ -462,11 +471,11 @@ MESSAGE MODE: outside Richa's calling hours or while Richa is away from the salo
 
 ═══ SPAM & TELEMARKETING ═══
 - Signs: a sales pitch for business services, "your Google/business listing," loans/solar/insurance/warranties, a robocall or recorded pitch, or asking for "the owner" to sell something.
-- Response: say briefly and politely that the salon is not interested, in your own words, then call end_call with reason 'spam' in the SAME turn. Never transfer spam to Richa, reveal her name, number, or schedule, engage with the pitch, or answer its questions.
+- Response: call end_call with reason 'spam' without a spoken preamble. Its result owns the single polite decline and farewell. Never transfer spam to Richa, reveal her name, number, or schedule, engage with the pitch, or answer its questions.
 - When unsure (could be a genuine vendor or a real business question) → treat as a normal caller; err toward NOT flagging.
 
 ═══ NON-CLIENT CALLS ═══
-This line exists for salon clients. When a call clearly isn't about salon services or appointments (and isn't spam per above), follow ONE principle: be brief and warm, give the single most useful pointer, use NO tools beyond what the pointer needs, don't transfer, then wrap up politely and end_call once they have their answer. In practice: job seekers / "are you hiring?" → openings are posted on the salon's website when available (no resumes or interviews by phone, no promised callback). A genuine vendor, delivery, landlord, press, or business matter for Richa → the message path (a text via transfer_to_owner). Charity asks → one polite decline. Wrong number → say who we are in one friendly sentence, wish them well, end_call.
+This line exists for salon clients. When a call clearly isn't about salon services or appointments (and isn't spam per above), follow ONE principle: be brief and warm, give the single most useful pointer, use NO tools beyond what the pointer needs, don't transfer, then use end_call without a spoken preamble once they have their answer; its result owns the farewell. In practice: job seekers / "are you hiring?" → openings are posted on the salon's website when available (no resumes or interviews by phone, no promised callback). A genuine vendor, delivery, landlord, press, or business matter for Richa → the message path (a text via transfer_to_owner). Charity asks → one polite decline. Wrong number → say who we are in one friendly sentence, then use end_call silently.
 EXCEPTION — an urgent problem with the salon premises itself (alarm going off, water leak, break-in, storefront damage) is NOT off-topic: get it to Richa immediately — live transfer if RICHA'S LINE says POSSIBLE, otherwise send the details as a message right away.
 
 ═══ CURRENT STATUS (precomputed server-side — trust it verbatim, never re-derive it) ═══
@@ -773,7 +782,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'end_call',
     description:
-      'Hang up only after the caller clearly indicates they are done, or immediately after the one polite spam decline. Give one warm, natural goodbye addressed to the caller first, then call this in the same turn. Never announce that the call is ending, being wrapped up, or has ended, and never narrate this tool or hangup mechanics. Never call it mid-task, for silence alone, or while the caller may still need help.',
+      'Use only after the caller clearly indicates they are done, or for clear spam before any spoken decline. Call this without a spoken preamble; its result guides the single brief, warm, ordinary farewell addressed to the caller, or the single polite spam decline plus farewell. Keep call-control actions silent and internal. Never call it mid-task, for silence alone, or while the caller may still need help.',
     parameters: {
       type: 'object',
       properties: {
@@ -781,7 +790,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'string',
           enum: ['done', 'spam'],
           description:
-            "Why the call is ending. Omit (or 'done') for a normal caller-confirmed hangup; use 'spam' when declining a spam/telemarketing call.",
+            "Closure category. Omit (or 'done') after a normal caller confirmation; use 'spam' for a clear spam/telemarketing pitch.",
         },
       },
       required: [],
@@ -867,6 +876,22 @@ export class TwilioRealtimeCall {
   // Bumped on every barge-in; lets a pending end_call detect that the caller
   // spoke during the goodbye and abort the hangup.
   private bargeInEpoch = 0;
+  // Bumped on EVERY caller speech start, including the short window before a
+  // post-tool farewell starts. bargeInEpoch only changes when outbound audio
+  // is already playing, which used to miss "wait—one more thing" during that
+  // pre-audio window.
+  private callerSpeechEpoch = 0;
+  // Increments for every outbound audio chunk and records its Realtime response.
+  // A model-requested end_call requires a newer RESPONSE, not merely a later
+  // chunk, so trailing audio from the tool-calling response — including a bad
+  // call-mechanics line — can never be mistaken for the required farewell.
+  private outboundAudioEpoch = 0;
+  private lastOutboundAudioResponseId: string | null = null;
+  // A model-requested close returns its tool result before the actual hangup so
+  // Realtime can generate the post-tool farewell. This latch/timer makes that
+  // continuation one-shot even if the model emits end_call twice.
+  private modelEndCallPending = false;
+  private modelEndCallTimer: NodeJS.Timeout | undefined = undefined;
   // --- G2: silence watchdog ---------------------------------------------
   // ms timestamp of the last real activity (caller speech, or Erica actively
   // speaking — markQueue non-empty). Ticks refresh this while Erica is
@@ -1120,7 +1145,8 @@ export class TwilioRealtimeCall {
   private createSession(callTag: string) {
     this.session = new OpenAIRealtimeSession({
       callTag,
-      onAudioChunk: (chunk) => this.sendAudioToTwilio(chunk),
+      onAudioChunk: (chunk, _itemId, responseId) =>
+        this.sendAudioToTwilio(chunk, responseId),
       onTextDelta: (delta) => this.handleAssistantText(delta),
       onSpeechStarted: () => this.handleCallerSpeechStarted(),
       onSpeechStopped: () => this.handleCallerSpeechStopped(),
@@ -1647,8 +1673,11 @@ export class TwilioRealtimeCall {
     for (const payload of frames) this.session.appendTwilioAudio(payload);
   }
 
-  private sendAudioToTwilio(base64Mulaw: string) {
+  private sendAudioToTwilio(base64Mulaw: string, responseId?: string) {
     if (!this.streamSid || this.closed) return;
+
+    this.outboundAudioEpoch += 1;
+    this.lastOutboundAudioResponseId = responseId ?? null;
 
     // Mark the start of this response on the caller's media clock — barge-in
     // uses (latestMediaTimestamp - responseStartTimestamp) as the truncation point.
@@ -1732,6 +1761,7 @@ export class TwilioRealtimeCall {
 
   private handleCallerSpeechStarted() {
     this.lastActivityAt = Date.now();
+    this.callerSpeechEpoch += 1;
     // Marks the caller turn OPEN until speech_stopped — see callerSpeaking.
     this.callerSpeaking = true;
     // Greeting protection: speech must not chop the opening line — it plays
@@ -3873,7 +3903,11 @@ export class TwilioRealtimeCall {
    */
   private async endCallNow(
     reason: string,
-    opts?: { ignoreBargeIn?: boolean; expectGoodbye?: boolean }
+    opts?: {
+      ignoreBargeIn?: boolean;
+      speechEpochAtRequest?: number;
+      modelRequestedClose?: boolean;
+    }
   ): Promise<{ status: 'ended' | 'aborted' | 'error'; message?: string }> {
     // AUDIT FIX (2026-08-22, P2): one-shot entry guard. `transferring` is set
     // by every hangup/handoff owner (a real transfer, or a previous
@@ -3889,17 +3923,14 @@ export class TwilioRealtimeCall {
       };
     }
     const client = getTwilioClient();
-    if (!client || !this.callSid) {
-      // No REST client (misconfig): tear down our side; Twilio ends the call
-      // when the <Connect><Stream> socket closes.
+    // Preserve the watchdog/duration fallback's immediate teardown semantics.
+    // Only a model tool-call needs to hold the stream open for post-tool audio.
+    if ((!client || !this.callSid) && !opts?.modelRequestedClose) {
       logger.warn(
         { tool: 'end_call', reason },
         'Cannot hang up via REST — closing stream only'
       );
       if (this.outcome === 'none') this.outcome = 'completed';
-      // M1: set BEFORE cleanup() — reason is the trigger that actually ended
-      // this call (silence hangup / duration cap / spam decline / caller
-      // confirmed done).
       this.setEndReasonOnce(reason);
       CallStore.recordToolCall(this.callSid, {
         name: 'end_call',
@@ -3918,15 +3949,8 @@ export class TwilioRealtimeCall {
     this.transferring = true;
     // Goodbye lines run longer than the transfer handoff line — cap higher.
     const epochAtRequest = this.bargeInEpoch;
-    // Goodbye race fix (2026-08-27): the model may invoke end_call BEFORE
-    // generating its goodbye (tool-then-speech ordering) — at that instant the
-    // mark queue is empty, the drain below resolves immediately, and the
-    // goodbye is born into a dead call (seen live 7:03 PM: hangup :34.65,
-    // "Take care…" generated :35.9). When a goodbye is expected, give the
-    // post-tool response a short window to START playing before draining it.
-    if (opts?.expectGoodbye) {
-      await this.waitForGoodbyeToStart(3000);
-    }
+    const speechEpochAtRequest =
+      opts?.speechEpochAtRequest ?? this.callerSpeechEpoch;
     await this.waitForPlaybackToDrain(6000);
     // Caller interrupted the goodbye ("oh wait—") → the barge-in cleared the
     // mark queue, which is why the drain resolved. Don't hang up on them.
@@ -3935,7 +3959,8 @@ export class TwilioRealtimeCall {
     // or a nonstop talker (recorded robocall pitch) burns tokens unbounded.)
     if (
       !opts?.ignoreBargeIn &&
-      this.bargeInEpoch !== epochAtRequest &&
+      (this.bargeInEpoch !== epochAtRequest ||
+        this.callerSpeechEpoch !== speechEpochAtRequest) &&
       !this.closed
     ) {
       this.transferring = false;
@@ -3950,6 +3975,24 @@ export class TwilioRealtimeCall {
         detail: { reason },
       });
       return { status: 'aborted' };
+    }
+    if (!client || !this.callSid) {
+      // No REST client (misconfig): tear down our side; Twilio ends the call
+      // when the <Connect><Stream> socket closes. The farewell wait/drain above
+      // still runs first, so this fallback can never cut off the closing line.
+      logger.warn(
+        { tool: 'end_call', reason },
+        'Cannot hang up via REST — closing stream only'
+      );
+      if (this.outcome === 'none') this.outcome = 'completed';
+      this.setEndReasonOnce(reason);
+      CallStore.recordToolCall(this.callSid, {
+        name: 'end_call',
+        ok: true,
+        detail: { reason },
+      });
+      this.cleanup();
+      return { status: 'ended' };
     }
     try {
       await client.calls(this.callSid).update({ status: 'completed' });
@@ -3983,10 +4026,10 @@ export class TwilioRealtimeCall {
   }
 
   /**
-   * Gracefully hang up once the caller confirms they're done (or right after
-   * the one-line spam decline). Delegates the drain+REST work to endCallNow
-   * (G2) and maps its result back onto the exact tool-result shapes the
-   * model has always seen from this tool.
+   * Start a two-phase graceful close once the caller confirms they're done.
+   * This handler returns the instruction that owns the one spoken farewell;
+   * finishModelEndCall then requires fresh post-tool response audio before it
+   * delegates playback drain + REST teardown to endCallNow.
    *
    * S1: optional `reason` ('done' | 'spam') tags the outcome. This tool was
    * argless-by-design ("a hangup must never fail on argument validation" —
@@ -3999,41 +4042,136 @@ export class TwilioRealtimeCall {
     const reason = parsed.success
       ? (parsed.data as { reason?: 'done' | 'spam' }).reason
       : undefined;
+    const goodbyeNote =
+      reason === 'spam'
+        ? REALTIME_CONTEXT_NOTES.endCallSpamGoodbye
+        : REALTIME_CONTEXT_NOTES.endCallGoodbye;
+    if (this.callerSpeaking) {
+      return { aborted: true, note: REALTIME_CONTEXT_NOTES.interruptedEndCall };
+    }
+    if (this.toolCallsInFlight > 1) {
+      return {
+        aborted: true,
+        note: 'Another requested action is still finishing. Wait for its result, help the caller, then confirm whether they need anything else.',
+      };
+    }
+    if (this.modelEndCallPending) {
+      return { ending: true, note: goodbyeNote };
+    }
+
     // AUDIT FIX (2026-08-22, P1): remember the pre-spam outcome so an ABORTED
     // hangup (caller barged in on the decline — "wait, I'm calling about my
     // appointment!") can roll the tag back. Without this, a mis-tagged call
     // that recovers still ends 'spam' and a real (not-yet-a-client) caller
     // accrues blocklist points.
     const outcomeBeforeSpam = this.outcome;
-    if (reason === 'spam') {
-      // Set BEFORE endCallNow runs so its `outcome === 'none' -> 'completed'`
-      // default (see endCallNow, both the no-REST-client fallback and the
-      // successful-hangup branch) never overwrites the spam tag.
-      this.outcome = 'spam';
-    }
-    const result = await this.endCallNow(
-      reason === 'spam' ? 'spam decline' : 'caller confirmed done',
-      // Only the model's own end_call expects a goodbye line to follow the
-      // tool call — watchdog/cap hangups must stay immediate.
-      { expectGoodbye: true }
+    const endReason =
+      reason === 'spam' ? 'spam decline' : 'caller confirmed done';
+    const speechEpochAtRequest = this.callerSpeechEpoch;
+    const audioEpochAtRequest = this.outboundAudioEpoch;
+    const responseIdAtRequest = this.session.getCurrentResponseId?.() ?? null;
+    this.modelEndCallPending = true;
+    // Return to OpenAI before beginning the hangup. handleToolCompleted must be
+    // able to publish this tool result and its response.create; awaiting the
+    // hangup here creates a circular wait when the first response was tool-only.
+    this.modelEndCallTimer = setTimeout(() => {
+      this.modelEndCallTimer = undefined;
+      void this.finishModelEndCall({
+        endReason,
+        outcomeBeforeSpam,
+        spam: reason === 'spam',
+        speechEpochAtRequest,
+        audioEpochAtRequest,
+        responseIdAtRequest,
+      }).catch((error: unknown) => {
+        if (reason === 'spam' && this.outcome === 'spam') {
+          this.outcome = outcomeBeforeSpam;
+        }
+        this.modelEndCallPending = false;
+        this.transferring = false;
+        logger.error(
+          { tool: 'end_call', error: this.formatError(error) },
+          'Scheduled graceful close failed — call remains live'
+        );
+      });
+    }, 0);
+    return { ending: true, note: goodbyeNote };
+  }
+
+  private async finishModelEndCall({
+    endReason,
+    outcomeBeforeSpam,
+    spam,
+    speechEpochAtRequest,
+    audioEpochAtRequest,
+    responseIdAtRequest,
+  }: {
+    endReason: string;
+    outcomeBeforeSpam: string;
+    spam: boolean;
+    speechEpochAtRequest: number;
+    audioEpochAtRequest: number;
+    responseIdAtRequest: string | null;
+  }): Promise<void> {
+    const goodbyeStarted = await this.waitForGoodbyeToStart(
+      END_CALL_GOODBYE_START_MS,
+      audioEpochAtRequest,
+      responseIdAtRequest,
+      speechEpochAtRequest
     );
-    if (result.status === 'aborted') {
-      if (reason === 'spam' && this.outcome === 'spam') {
+    if (!goodbyeStarted || this.callerSpeechEpoch !== speechEpochAtRequest) {
+      if (spam && this.outcome === 'spam') {
         this.outcome = outcomeBeforeSpam;
       }
-      return {
-        aborted: true,
-        note: REALTIME_CONTEXT_NOTES.interruptedEndCall,
-      };
+      this.modelEndCallPending = false;
+      const callerInterrupted = this.callerSpeechEpoch !== speechEpochAtRequest;
+      if (callerInterrupted) {
+        this.session.injectContext(REALTIME_CONTEXT_NOTES.interruptedEndCall);
+      } else {
+        logger.warn(
+          { tool: 'end_call', callSid: this.callSid, reason: endReason },
+          'Hangup aborted — fresh post-tool farewell audio never started'
+        );
+        CallStore.recordToolCall(this.callSid, {
+          name: 'end_call',
+          ok: false,
+          error: 'aborted — fresh post-tool farewell audio never started',
+          detail: { reason: endReason },
+        });
+      }
+      return;
+    }
+    if (spam) {
+      // Set only once a fresh spoken decline/farewell actually exists. This
+      // avoids a watchdog/transfer racing the pre-audio wait and persisting a
+      // spam outcome for a close this tool never performed.
+      this.outcome = 'spam';
+    }
+    const result = await this.endCallNow(endReason, {
+      modelRequestedClose: true,
+      speechEpochAtRequest,
+    });
+    if (result.status === 'aborted') {
+      if (spam && this.outcome === 'spam') {
+        this.outcome = outcomeBeforeSpam;
+      }
+      this.modelEndCallPending = false;
+      // If the caller changed their mind, put that state beside the next
+      // automatic VAD response. A no-audio failure simply leaves the line open;
+      // the retry note is already in conversation history.
+      if (this.callerSpeechEpoch !== speechEpochAtRequest) {
+        this.session.injectContext(REALTIME_CONTEXT_NOTES.interruptedEndCall);
+      }
+      return;
     }
     if (result.status === 'error') {
       // Same rollback on error — the call is still live, the verdict may not be.
-      if (reason === 'spam' && this.outcome === 'spam') {
+      if (spam && this.outcome === 'spam') {
         this.outcome = outcomeBeforeSpam;
       }
-      return { error: result.message };
+      this.modelEndCallPending = false;
+      return;
     }
-    return { ended: true };
   }
 
   private formatError(error: unknown) {
@@ -4148,27 +4286,43 @@ export class TwilioRealtimeCall {
   }
 
   /**
-   * Inverse of waitForPlaybackToDrain: wait for outbound audio to APPEAR
-   * (mark queue becoming non-empty), up to capMs. Used by the end_call grace
-   * so a goodbye generated after the tool call still gets spoken; resolves
-   * immediately if audio is already playing or the call closed. A model that
-   * never speaks just costs the cap, then the hangup proceeds.
+   * Inverse of waitForPlaybackToDrain: wait for audio from a newer Realtime
+   * response than the one that called end_call. A later chunk from the old
+   * response is not enough. Returns false on timeout/interruption so the caller
+   * stays on a recoverable live line instead of receiving a silent hangup.
    */
-  private waitForGoodbyeToStart(capMs: number): Promise<void> {
+  private waitForGoodbyeToStart(
+    capMs: number,
+    audioEpochAtRequest: number = this.outboundAudioEpoch,
+    responseIdAtRequest: string | null = null,
+    speechEpochAtRequest?: number
+  ): Promise<boolean> {
+    const freshResponseAudioStarted = () =>
+      this.outboundAudioEpoch > audioEpochAtRequest &&
+      (responseIdAtRequest === null ||
+        this.lastOutboundAudioResponseId !== responseIdAtRequest);
     return new Promise((resolve) => {
-      if (this.markQueue.length > 0 || this.closed) {
-        resolve();
+      if (freshResponseAudioStarted()) {
+        resolve(true);
+        return;
+      }
+      if (this.closed) {
+        resolve(false);
         return;
       }
       const started = Date.now();
       const timer = setInterval(() => {
-        if (
-          this.markQueue.length > 0 ||
+        if (freshResponseAudioStarted()) {
+          clearInterval(timer);
+          resolve(true);
+        } else if (
           this.closed ||
+          (speechEpochAtRequest !== undefined &&
+            this.callerSpeechEpoch !== speechEpochAtRequest) ||
           Date.now() - started >= capMs
         ) {
           clearInterval(timer);
-          resolve();
+          resolve(false);
         }
       }, 50);
     });
@@ -4317,6 +4471,10 @@ export class TwilioRealtimeCall {
     if (this.preAuthTimer) {
       clearTimeout(this.preAuthTimer);
       this.preAuthTimer = undefined;
+    }
+    if (this.modelEndCallTimer) {
+      clearTimeout(this.modelEndCallTimer);
+      this.modelEndCallTimer = undefined;
     }
     // G2: stop the silence watchdog — nothing left to check in / hang up on.
     if (this.silenceWatchdogTimer) {

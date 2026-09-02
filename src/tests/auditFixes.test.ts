@@ -29,7 +29,10 @@ beforeAll(async () => {
   ({ TwilioRealtimeCall } = await import('../realtime/twilioStream.js'));
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 function buildCall() {
   const socket: any = {
@@ -117,16 +120,21 @@ describe('P0 — closed/vacation days must yield ZERO open slots (fetchOpenSlots
 
 describe('P1 — aborted spam hangup rolls the outcome back', () => {
   it('outcome returns to its pre-spam value when the caller barges in on the decline', async () => {
+    vi.useFakeTimers();
     const call = buildCall();
     call.callSid = 'CA_spamabort';
     call.outcome = 'none';
     call.endCallNow = vi.fn().mockResolvedValue({ status: 'aborted' });
     const res = await call.handleEndCall({ reason: 'spam' });
-    expect(res.aborted).toBe(true);
+    expect(res.ending).toBe(true);
+    call.sendAudioToTwilio('AA==', 'goodbye-response');
+    call.markQueue = [];
+    await vi.advanceTimersByTimeAsync(1);
     expect(call.outcome).toBe('none');
   });
 
   it('outcome also rolls back on a hangup ERROR (call still live)', async () => {
+    vi.useFakeTimers();
     const call = buildCall();
     call.callSid = 'CA_spamerr';
     call.outcome = 'info';
@@ -134,11 +142,15 @@ describe('P1 — aborted spam hangup rolls the outcome back', () => {
       .fn()
       .mockResolvedValue({ status: 'error', message: 'boom' });
     const res = await call.handleEndCall({ reason: 'spam' });
-    expect(res.error).toBe('boom');
+    expect(res.ending).toBe(true);
+    call.sendAudioToTwilio('AA==', 'goodbye-response');
+    call.markQueue = [];
+    await vi.advanceTimersByTimeAsync(1);
     expect(call.outcome).toBe('info');
   });
 
   it('a SUCCESSFUL spam hangup keeps the spam tag', async () => {
+    vi.useFakeTimers();
     const call = buildCall();
     call.callSid = 'CA_spamok';
     call.outcome = 'none';
@@ -146,6 +158,9 @@ describe('P1 — aborted spam hangup rolls the outcome back', () => {
       return { status: 'ended' };
     });
     await call.handleEndCall({ reason: 'spam' });
+    call.sendAudioToTwilio('AA==', 'goodbye-response');
+    call.markQueue = [];
+    await vi.advanceTimersByTimeAsync(1);
     expect(call.outcome).toBe('spam');
   });
 });

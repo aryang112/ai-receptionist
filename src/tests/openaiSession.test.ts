@@ -88,6 +88,43 @@ describe('RT-2 response.create collision avoidance', () => {
   });
 });
 
+describe('C7b response identity for post-tool farewell gating', () => {
+  it('forwards the audio response id and advances/resets the current response id', async () => {
+    const onAudioChunk = vi.fn();
+    const { session } = buildSession({ onAudioChunk });
+
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_tool' },
+    });
+    expect(session.getCurrentResponseId()).toBe('resp_tool');
+
+    await fire(session, {
+      type: 'response.output_audio.delta',
+      response_id: 'resp_tool',
+      item_id: 'item_audio',
+      delta: 'AA==',
+    });
+    expect(onAudioChunk).toHaveBeenCalledExactlyOnceWith(
+      'AA==',
+      'item_audio',
+      'resp_tool'
+    );
+
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_tool', status: 'completed' },
+    });
+    expect(session.getCurrentResponseId()).toBeNull();
+
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_goodbye' },
+    });
+    expect(session.getCurrentResponseId()).toBe('resp_goodbye');
+  });
+});
+
 describe('RT-3 error classification', () => {
   it('softens a lone application error (no onError, session stays alive)', async () => {
     const onError = vi.fn();
