@@ -26,6 +26,7 @@ checklist. Fix ladder applies (note → schema → code → flow → prose).
 - [x] C7: end_call goodbye contract ("never announce the call is ending")
 - [x] C7b: two-phase end_call waits for a fresh post-tool farewell response,
       drains playback, and fails open on silence or caller interruption
+- [x] C7c: end_call source response is tool-only; its result owns all speech
 - [x] B5 un-park: appointmentId-in-clientId guard (note + param desc + short-circuit)
 - [ ] `reasoning.effort` env knob (default unset) + staged A/B on latency/ear
 - [ ] Log `phase` (commentary | final_answer) per output item

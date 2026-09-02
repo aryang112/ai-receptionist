@@ -94,9 +94,9 @@ describe('buildInstructions — SPAM & TELEMARKETING (S1)', () => {
     const instructions = buildInstructions();
     expect(instructions).toContain('SPAM & TELEMARKETING');
     expect(instructions).toMatch(/reason 'spam'/);
-    expect(instructions).toMatch(/without a spoken preamble/i);
+    expect(instructions).toMatch(/end_call SILENT\/PROACTIVE/i);
     expect(instructions).toMatch(
-      /result owns the single polite decline and farewell/i
+      /result response owns the single polite decline and farewell/i
     );
     expect(instructions).toMatch(/never (transfer|engage)/i);
   });
@@ -546,8 +546,9 @@ describe('buildInstructions — production prompt architecture (2026-08-28)', ()
     // mid-flow pivot
     expect(p).toMatch(/ABANDON the old flow/);
     // end_call discipline
-    expect(p).toMatch(/call end_call without a spoken preamble/i);
-    expect(p).toMatch(/never just because the line went quiet/i);
+    expect(p).toMatch(/end_call — SILENT\/PROACTIVE/i);
+    expect(p).toMatch(/function item is the ENTIRE response/i);
+    expect(p).toMatch(/NEVER mid-task or for silence alone/i);
   });
 
   it('defines natural turn behavior without forced performance tics', () => {
@@ -570,7 +571,8 @@ describe('buildInstructions — production prompt architecture (2026-08-28)', ()
     expect(preambles).toMatch(/never thinking or a tool name/);
     expect(preambles).toMatch(/direct answers, confirmations, corrections/);
     expect(preambles).toMatch(/unclear\/background audio/);
-    expect(preambles).toMatch(/routine fast lookups, and end_call/);
+    expect(preambles).toMatch(/routine fast lookups/);
+    expect(preambles).not.toMatch(/end_call/);
   });
 });
 
@@ -657,7 +659,7 @@ describe('high-salience write tool descriptions', () => {
     }
   });
 
-  it('keeps end_call positive, descriptive, and unscripted', () => {
+  it('makes the end_call source response tool-only and leaves speech to its result', () => {
     const tool = TOOL_DEFINITIONS.find(
       (candidate) => candidate.name === 'end_call'
     );
@@ -665,33 +667,43 @@ describe('high-salience write tool descriptions', () => {
     expect(tool!.description).toMatch(
       /caller clearly indicates they are done/i
     );
-    expect(tool!.description).toMatch(/without a spoken preamble/i);
-    expect(tool!.description).toMatch(/single brief, warm, ordinary farewell/i);
+    expect(tool!.description).toMatch(/SILENT\/PROACTIVE/i);
     expect(tool!.description).toMatch(
-      /single polite spam decline plus farewell/i
+      /end_call function item is the ENTIRE response/i
     );
     expect(tool!.description).toMatch(
-      /call-control actions silent and internal/i
+      /zero assistant audio, text, or message items/i
     );
+    expect(tool!.description).toMatch(
+      /no acknowledgement, transition, farewell, or procedural line/i
+    );
+    expect(tool!.description).toMatch(/first and alone/i);
+    expect(tool!.description).toMatch(
+      /result starts a separate response and owns ALL speech/i
+    );
+    expect(tool!.description).toMatch(/one brief, warm, ordinary farewell/i);
+    expect(tool!.description).toMatch(/one polite spam decline plus farewell/i);
     expect(tool!.description).not.toMatch(
-      /wrapped up|call is ending|has ended|hangup mechanics/i
+      /wrap things up|close things out|call is ending|has ended|hangup mechanics/i
     );
     expect(tool!.description).not.toMatch(/"/);
   });
 
-  it('keeps the same positive silent-call-control rule in the closing flow', () => {
+  it('repeats the tool-only boundary in the closing flow without bad lead-ins', () => {
     const instructions = buildInstructions();
     const close = instructions.slice(
       instructions.indexOf('CLOSE:'),
       instructions.indexOf('═══ SAFETY & ESCALATION ═══')
     );
+    expect(close).toMatch(/end_call is SILENT\/PROACTIVE/i);
+    expect(close).toMatch(/function item is the entire response/i);
+    expect(close).toMatch(/separate result response owns/i);
     expect(close).toMatch(/ordinary farewell addressed to them/i);
-    expect(close).toMatch(/spoken line is only the farewell/i);
-    expect(close).toMatch(/call-control actions silent and internal/i);
     expect(close).not.toMatch(
-      /wrapped up|call is ending|has ended|hangup mechanics/i
+      /wrap things up|close things out|call is ending|has ended|hangup mechanics/i
     );
     expect(instructions).not.toMatch(/\bwrap/i);
+    expect(instructions).not.toMatch(/close things out/i);
   });
 
   it('keeps ambiguous Richa availability out of the transfer tool', () => {
