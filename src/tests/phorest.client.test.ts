@@ -753,12 +753,10 @@ describe('realPhorest client-resolution single-flight', () => {
     await Promise.all([
       phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
         name: 'Jane Doe',
-        phone: '4105551000',
         email: ' JANE@Example.COM ',
       }),
       phorest.createAppointment('svc1', '2030-07-10T13:15:00', {
         name: ' jane   doe ',
-        phone: '4105559999',
         email: 'jane@example.com',
       }),
     ]);
@@ -766,6 +764,87 @@ describe('realPhorest client-resolution single-flight', () => {
     expect(stats.emailLookups).toBe(1);
     expect(stats.clientCreates).toBe(1);
     expect(stats.bookingClientIds).toEqual(['NEW-CLIENT-1', 'NEW-CLIENT-1']);
+  });
+
+  it('coalesces the same phone + full-name subject when only one payload includes email', async () => {
+    const { mock, stats } = clientResolutionFetch();
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await Promise.all([
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+        name: 'Jane Doe',
+        phone: '4105551212',
+      }),
+      phorest.createAppointment('svc1', '2030-07-10T13:15:00', {
+        name: ' jane   doe ',
+        phone: '+1 (410) 555-1212',
+        email: 'jane@example.com',
+      }),
+    ]);
+
+    expect(stats.clientCreates).toBe(1);
+    expect(stats.bookingClientIds).toEqual(['NEW-CLIENT-1', 'NEW-CLIENT-1']);
+  });
+
+  it('prefers the unique exact-name record matching every supplied contact', async () => {
+    const { mock, stats } = clientResolutionFetch({
+      emailLookupClients: [
+        {
+          clientId: 'STALE-WRONG',
+          firstName: 'Jane',
+          lastName: 'Doe',
+          email: 'jane@example.com',
+          mobile: '4105559999',
+        },
+        {
+          clientId: 'CURRENT-RIGHT',
+          firstName: 'Jane',
+          lastName: 'Doe',
+          email: 'jane@example.com',
+          mobile: '4105551212',
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+      name: 'Jane Doe',
+      phone: '4105551212',
+      email: 'jane@example.com',
+    });
+
+    expect(stats.clientCreates).toBe(0);
+    expect(stats.bookingClientIds).toEqual(['CURRENT-RIGHT']);
+  });
+
+  it('fails closed when the best confirmed-contact match is still tied', async () => {
+    const duplicate = {
+      firstName: 'Jane',
+      lastName: 'Doe',
+      email: 'jane@example.com',
+      mobile: '4105551212',
+    };
+    const { mock, stats } = clientResolutionFetch({
+      emailLookupClients: [
+        { ...duplicate, clientId: 'DUPLICATE-ONE' },
+        { ...duplicate, clientId: 'DUPLICATE-TWO' },
+      ],
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+        name: 'Jane Doe',
+        phone: '4105551212',
+        email: 'jane@example.com',
+      })
+    ).rejects.toThrow('Multiple Phorest clients match');
+
+    expect(stats.clientCreates).toBe(0);
+    expect(stats.bookingClientIds).toEqual([]);
   });
 
   it('keeps different people sharing one normalized email as distinct subjects', async () => {
@@ -950,6 +1029,94 @@ describe('realPhorest client-resolution single-flight', () => {
 
     expect(stats.clientCreates).toBe(1);
     expect(stats.nameLookups).toBe(4);
+    expect(stats.bookingClientIds).toEqual([]);
+  });
+
+  it('keeps a 31-second retry reconcile-only when the create is still uncertain', async () => {
+    let now = Date.parse('2030-07-10T12:00:00Z');
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const { mock, stats } = clientResolutionFetch({
+      onClientCreate: async () => {
+        throw new Error('AbortError: client create outcome unknown');
+      },
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+    const customer = { name: 'Jane Doe', phone: '4105551212' };
+
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', customer)
+    ).rejects.toThrow('client-create outcome is uncertain');
+    now += 31_000;
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:15:00', customer)
+    ).rejects.toThrow('client-create outcome is uncertain');
+
+    expect(stats.clientCreates).toBe(1);
+    expect(stats.nameLookups).toBe(7);
+    expect(stats.bookingClientIds).toEqual([]);
+  });
+
+  it('recovers a later-visible client on a 31-second reconcile-only retry', async () => {
+    let now = Date.parse('2030-07-10T12:00:00Z');
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const { mock, stats } = clientResolutionFetch({
+      nameLookupClients: (lookupNumber) =>
+        lookupNumber >= 5
+          ? [
+              {
+                clientId: 'LATE-COMMITTED-CLIENT',
+                firstName: 'Jane',
+                lastName: 'Doe',
+                mobile: '4105551212',
+              },
+            ]
+          : [],
+      onClientCreate: async () => {
+        throw new Error('AbortError: client create outcome unknown');
+      },
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+    const customer = { name: 'Jane Doe', phone: '4105551212' };
+
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', customer)
+    ).rejects.toThrow('client-create outcome is uncertain');
+    now += 31_000;
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:15:00', customer)
+    ).resolves.toMatchObject({ appointmentId: 'appointment-1' });
+
+    expect(stats.clientCreates).toBe(1);
+    expect(stats.nameLookups).toBe(5);
+    expect(stats.bookingClientIds).toEqual(['LATE-COMMITTED-CLIENT']);
+  });
+
+  it('stops reconciliation attempts at one overall deadline', async () => {
+    let now = Date.parse('2030-07-10T12:00:00Z');
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const { mock, stats } = clientResolutionFetch({
+      nameLookupClients: (lookupNumber) => {
+        if (lookupNumber === 2) now += 3_000;
+        return [];
+      },
+      onClientCreate: async () => {
+        throw new Error('AbortError: client create outcome unknown');
+      },
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+        name: 'Jane Doe',
+        phone: '4105551212',
+      })
+    ).rejects.toThrow('client-create outcome is uncertain');
+
+    expect(stats.clientCreates).toBe(1);
+    expect(stats.nameLookups).toBe(2);
     expect(stats.bookingClientIds).toEqual([]);
   });
 
