@@ -305,13 +305,16 @@ describe("buildInstructions — transfer window (RICHA'S LINE)", () => {
     );
     expect(askedForRicha).toMatch(/ASKED FOR RICHA/);
     expect(askedForRicha).toMatch(
-      /SPEAK, TALK, CONNECT, or TRANSFER.*always an explicit live-connection request/i
+      /SPEAK, TALK, CONNECT, or TRANSFER.*always an explicit live connection/i
     );
     expect(askedForRicha).toMatch(
-      /Those words are NEVER ambiguous.*do not ask whether they mean appointment availability/i
+      /Never clarify those words as appointment availability/i
     );
     expect(askedForRicha).toMatch(
-      /NOT possible because Richa is away.*away from the salon.*full date in CURRENT STATUS.*offer to take a message/i
+      /follow-up choosing to speak\/connect "with her\."/i
+    );
+    expect(askedForRicha).toMatch(
+      /While Richa is away, every reply MUST include all three.*away from the salon.*full date in CURRENT STATUS.*offer to take a message/i
     );
     expect(askedForRicha).toMatch(
       /ONLY "Is Richa available, free, or there\?".*AMBIGUOUS/i
