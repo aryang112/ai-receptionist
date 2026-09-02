@@ -19,11 +19,14 @@ const twilioFactoryMock = vi.fn(() => twilioClientMock);
 vi.mock('twilio', () => ({ default: twilioFactoryMock }));
 
 let sendOwnerSms: typeof import('../services/ownerSms.js').sendOwnerSms;
+let OWNER_SMS_TIMEOUT_MS: typeof import('../services/ownerSms.js').OWNER_SMS_TIMEOUT_MS;
 let env: typeof import('../config/env.js').env;
 let logger: typeof import('../core/logger.js').logger;
 
 beforeAll(async () => {
-  ({ sendOwnerSms } = await import('../services/ownerSms.js'));
+  ({ sendOwnerSms, OWNER_SMS_TIMEOUT_MS } = await import(
+    '../services/ownerSms.js'
+  ));
   ({ env } = await import('../config/env.js'));
   ({ logger } = await import('../core/logger.js'));
 });
@@ -76,6 +79,73 @@ describe('sendOwnerSms (M4 extraction from twilioStream.notifyOwnerSms)', () => 
       sid: 'SMxxx',
       status: 'queued',
     });
+    expect(twilioFactoryMock).toHaveBeenCalledWith(
+      'AC_test_sid',
+      'test_auth_token',
+      { timeout: OWNER_SMS_TIMEOUT_MS }
+    );
+  });
+
+  it.each([
+    'accepted',
+    'queued',
+    'sending',
+    'sent',
+    'scheduled',
+    'delivered',
+    'partially_delivered',
+  ])('accepts Twilio status %s for delivery', async (status) => {
+    messagesCreateMock.mockResolvedValueOnce({ sid: 'SMok', status });
+
+    await expect(sendOwnerSms('hi')).resolves.toEqual({
+      queued: true,
+      sid: 'SMok',
+      status,
+    });
+  });
+
+  it.each(['failed', 'undelivered', 'canceled'])(
+    'rejects terminal Twilio status %s',
+    async (status) => {
+      messagesCreateMock.mockResolvedValueOnce({ sid: 'SMbad', status });
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      await expect(sendOwnerSms('hi')).resolves.toEqual({
+        queued: false,
+        reason: 'terminal_failure',
+        status,
+      });
+      warnSpy.mockRestore();
+    }
+  );
+
+  it('treats a missing SID as uncertain', async () => {
+    messagesCreateMock.mockResolvedValueOnce({ status: 'queued' });
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+    await expect(sendOwnerSms('hi')).resolves.toEqual({
+      queued: false,
+      reason: 'uncertain',
+      status: 'queued',
+    });
+    warnSpy.mockRestore();
+  });
+
+  it('returns uncertain within the short cap when Twilio never settles', async () => {
+    vi.useFakeTimers();
+    messagesCreateMock.mockImplementationOnce(() => new Promise(() => {}));
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const pending = sendOwnerSms('hi');
+      await vi.advanceTimersByTimeAsync(OWNER_SMS_TIMEOUT_MS);
+      await expect(pending).resolves.toEqual({
+        queued: false,
+        reason: 'uncertain',
+      });
+    } finally {
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('an explicit `to` overrides OWNER_PHONE (DIGEST_TO multi-recipient case)', async () => {
