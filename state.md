@@ -1,11 +1,58 @@
 # STATE — AI Receptionist (Erica)
 
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
-> Last major work: 2026-09-02 — vacation MVP live; functional red-team backlog documented.
+> Last major work: 2026-09-02 — after-hours vacation reliability release deployed.
 
-## 2026-09-02 — ⚠️ FORWARDING ON; production deploys after hours only
+## ✅ DEPLOYED 2026-09-02 ~7:46 PM ET: exact messages + vacation safeguards
 
-- Aryan enabled forwarding. Production remains behavior commit `6f696a4`,
+- Production behavior commit `2d24cfe`; Railway deployment
+  `19df1b8b-ead0-4a6d-82da-c60e15d5eb4a` is `SUCCESS`, image digest
+  `sha256:cb20fab47ba461fe06249124f110dd60f9040e68abfe986311fc0c706cafa622`.
+  Immediate rollback is the prior deployment
+  `d92ad566-82fb-4877-9199-b6fa381c3a4b` (behavior `6f696a4`). Forwarding
+  remained ON; there were zero active calls immediately before and after the
+  deployment.
+- Caller messages are separate from live transfer. `leave_message_for_owner`
+  accepts no model-written content: a per-call state machine collects exact,
+  item-correlated caller transcripts, distinguishes an offer from actual
+  message collection, waits for complete content, rejects stale/premature
+  calls, clears abandoned paths, deduplicates delivery, and never logs the
+  message body in tool telemetry. Erica calls it silently, acknowledges once
+  only after accepted delivery, and does not describe texting/tool mechanics
+  or promise a callback.
+- Owner SMS creation is capped at five seconds and maps Twilio status/SID into
+  accepted, failed, or uncertain outcomes; Erica cannot claim success on a
+  failed, missing, unknown, or timed-out result.
+- Known salon-closure dates fail closed before Phorest availability or write
+  calls. A cancelled appointment cannot be rescheduled in the same call.
+- New-client resolution is single-flight by normalized phone plus confirmed
+  full name (email fallback when phone is absent). Mixed optional-email
+  payloads converge, best exact-contact matches win, tied matches fail closed,
+  and a possibly committed client create can only use bounded read-only
+  reconciliation in that process—never another POST.
+- Explicit requests to speak/talk/connect/transfer to Richa now outrank the
+  ambiguous “Is Richa available?” rule. While she is away, Erica says she is
+  away from the salon, includes Thursday, September 10, and offers a message;
+  the ambiguous version still asks one clarification first.
+- Verification on exact HEAD: 44 files / 510 tests in local and `TZ=UTC`,
+  TypeScript build, Prettier, `git diff --check`, fallback prompt estimate
+  4,180/4,200, six intercepted live `gpt-realtime-2.1` call scenarios, and
+  independent red-team replays. Production `/health` returned 200; PID 1
+  warmed 63 real services and a complete 4,187-client / 28-page phone index.
+  Runtime remains `gpt-realtime-2.1`, `marin`, real Phorest, and
+  `gpt-4o-mini-transcribe`.
+- Still open before September 10: tighten the server ambiguity matcher so a
+  phrase such as “talk about Richa's appointment availability” cannot be
+  mistaken for a connection request after the away gate expires. Also still
+  deferred: appointment-write serialization/semantic idempotency and timeout
+  reconciliation, end-call source-response settlement, fatal-Realtime
+  away-policy fallback, appointment-subject ownership, and the P1/P2 backlog.
+  Client-create uncertainty is process-local, so restart-durable protection is
+  not yet claimed.
+
+## 2026-09-02 — historical pre-release status: forwarding ON
+
+- Aryan enabled forwarding. At that point production remained behavior commit `6f696a4`,
   Railway deployment `d92ad566-82fb-4877-9199-b6fa381c3a4b` (`SUCCESS`).
 - **Standing release rule:** no production code, prompt, configuration, model,
   voice, or Realtime session change during live/business hours. Implement and

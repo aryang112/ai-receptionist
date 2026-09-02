@@ -57,7 +57,7 @@ Caller dials Twilio number
   original bare `<Dial>`. A `transferFailed=1` segment sets `transferFailback`,
   which swaps ONLY the GREETING paragraph, skips the duplicate
   `CallStore.startCall` + `startCallRecording` (segment 1 already wrote both),
-  and makes transfer_to_owner message-only — never a second dial),
+  and makes transfer_to_owner return message-taking coaching — never a second dial),
   barge-in (mark/clear/truncate),
   outbound audio to Twilio, and the caller-ID prefetch: **`prepareCallerContext`**
   (700ms-capped lookup racing the greeting; a TIMEOUT is not a no-match — the
@@ -71,8 +71,8 @@ Caller dials Twilio number
   grace), shared **`endCallNow(reason)`** hangup core (drain + REST + bargeInEpoch
   abort; `handleEndCall` is a thin wrapper), `registerTrackedTool` (counts
   `toolCallsInFlight`), prompt sections CONVERSATION POLICY (G1) + reschedule
-  consent gate (B2b). Also (2026-08-21 late): **`notifyOwnerSms`** (best-effort
-  FYI text from TWILIO_NUMBER → OWNER_PHONE; fire-and-forget), `clientNames`
+  consent gate (B2b). Also (2026-08-21 late): **`notifyOwnerSms`** (bounded
+  result-bearing delegation to ownerSms), `clientNames`
   map (clientId→name at every server-side resolution point — feeds the SMS,
   never trusts model-supplied identity); log_running_late takes optional
   `detail` (caller's words → dynamic note + SMS), transfer drain cap 12s.
@@ -81,8 +81,8 @@ Caller dials Twilio number
   used by suggest_availability AND re-run fresh immediately before every
   booking/reschedule WRITE (A1 — rejects a stale time with the current list,
   fail-open on Phorest errors). **Vacation gate** in `handleTransferToOwner`
-  (active vacation → no dial; SMS message to Richa via notifyOwnerSms,
-  returns `{transferred:false}`); VACATION prompt block auto-injected when a
+  (active away closure → no dial and no synthesized message; returns
+  `{transferred:false,messageRequired:true}`); the away prompt block auto-injected when a
   business.json vacation is active/≤14 days out. **Spam**: SPAM &
   TELEMARKETING prompt section; `end_call` takes optional `reason`
   ('done'|'spam') → outcome 'spam' → `recordSpamOutcomeIfNotClient` on
@@ -90,6 +90,16 @@ Caller dials Twilio number
   line + `address` in get_business_hours (from business.json). Greeting
   order (A2): `flushPendingMedia()` runs AFTER `requestGreeting()` so
   buffered early speech barges-in the greeting instead of suppressing it.
+  2026-09-02 after-hours reliability: live transfer and caller messages are
+  separate. **`handleLeaveMessageForOwner`** takes no model-authored content
+  and delivers only exact final caller transcripts correlated by OpenAI item
+  ID. A per-call `inactive → offered → collecting` state separates an offer
+  from actual content, preserves a fixed multi-turn capture boundary, advances
+  readiness after follow-up solicitations, rejects stale/premature attempts,
+  clears abandonment pivots, and deduplicates same-item and normalized-content
+  retries. Message bodies never enter tool telemetry. Explicit
+  speak/talk/connect/transfer prompt rules outrank availability-only ambiguity
+  and require the September 10 return date while Richa is away.
 - **openaiSession.ts** — `OpenAIRealtimeSession`: WS connect (GA, no beta header),
   `configureSession` (GA nested schema: g711_ulaw, server_vad, noise_reduction,
   truncation.retention_ratio), event loop (`handleEvent`), tool-call buffering,
@@ -106,6 +116,12 @@ Caller dials Twilio number
   31-day cap, client phone index (bounded-parallel, TTL service cache), `bookingStatus:
   ACTIVE`, availability UTC→local. `phorestFetch` has timeout+retry. Big tz convention
   comment at `SALON_TIMEZONE`.
+  2026-09-02: new-client resolution is single-flight by normalized phone plus
+  confirmed full name (email+name fallback when phone is absent); exact-name
+  candidates are ranked by matching supplied contacts and tied best matches
+  fail closed. A possibly committed create is latched in-process and can only
+  run bounded read-only reconciliation—never another create POST. The latch is
+  not restart-durable.
 - **blocklist.ts** — repeat-spam blocklist (S2). `recordSpamOutcome(phone)` /
   `isBlocked(phone)` (count ≥ `SPAM_BLOCK_THRESHOLD`, default 2). In-memory
   cache + write-through `data/blocklist.json` (human-editable = the unblock
@@ -116,9 +132,11 @@ Caller dials Twilio number
   end (outcome, endReason, usage, estCostUsd, assistantTranscript) · transcript
   (interleaved both-side entries, M1) · recording (recordingSid, M2) · blocked
   (S2). `readCalls()` is the one sanctioned reader (dashboard + digest).
-- **ownerSms.ts** — `sendOwnerSms(body, to?)` — the extracted owner-SMS core
-  (fire-and-forget, never throws); used by running-late FYI, vacation
-  message-taking, and the digest.
+- **ownerSms.ts** — `sendOwnerSms(body, to?)` — the extracted owner-SMS core,
+  used by running-late FYI, exact caller message-taking, and the digest. It
+  never throws; the SDK and outer promise are capped at five seconds, a SID
+  plus an accepted status is required for `queued:true`, terminal failures are
+  rejected, and missing/unknown/timed-out outcomes are explicitly uncertain.
 - **digest.ts** — `buildDailyDigest`/`buildWeeklyDigest` (calls, bookings +
   $revenue, spam, after-hours captured, est cost — salon-TZ day buckets; null
   on quiet days) + `maybeSendDigest(now?)` (once-daily send at `DIGEST_TIME`,
@@ -190,7 +208,7 @@ Caller dials Twilio number
   to SMS message-taking, injects the prompt block; edit this for future
   vacations) + `location` (address for the prompt/hours tool). **Do not change casually.**
 
-## src/tests/  (vitest, 42 files / 394 tests as of 2026-08-28)
+## src/tests/  (vitest, 44 files / 510 tests as of 2026-09-02)
 phorest.client.test.ts (URL/range/client_id/timezone/retry regressions),
 hours.test.ts, booking.alias/match.test.ts, slots.test.ts (clean-grid snapping),
 wsAuth, middleware, twilioStream.bargein/contracts, phorest.mock/selector,
@@ -209,6 +227,14 @@ start/recording rows), plus new cases in twilio.route (`/dial-status`, the
 `host` param), twilioStream.prompt (greeting swap is the ONLY diff) and
 admin.route/digest (two end rows + two transcript rows → last outcome wins,
 usage/duration/cost summed, transcript concatenated by ts).
+2026-09-02 reliability release: `twilioStream.ownerMessage.test.ts` covers
+exact multi-turn Bank messages, offer-versus-content consent, item/content
+dedupe, premature/stale calls, abandonment, and correction races;
+`ownerSms.test.ts` covers accepted/terminal/unknown statuses and timeouts;
+`phorest.client.test.ts` covers mixed-payload client single-flight, ranked/tied
+contact matches, committed-timeout reconciliation, delayed visibility, and
+reconcile-only retries; prompt/vacation suites lock explicit versus ambiguous
+Richa requests and the September 10 return date.
 
 ## scripts/  (read-only diagnostics + ops)
 inspect-appointment.ts, list-services.ts, check-availability.ts, test-appt-filter.ts,
@@ -226,16 +252,18 @@ for the service-history feature).
 `suggest_availability(serviceName, date, preferredTime?)`, `book_appointment`,
 `reschedule_appointment`, `cancel_appointment`, `get_business_hours`, `get_prices(serviceName?)`,
 `lookup_customer(phone?/name?)`, `list_appointments(clientId)`, `log_running_late`,
-`transfer_to_owner(reason)` (during an active vacation: no dial — SMS message
-to Richa instead), `end_call(reason?: 'done'|'spam')` (graceful hangup after
+`transfer_to_owner()` (live transfer only; during the active away closure: no
+dial, returns coaching to collect a message), `leave_message_for_owner()`
+(argument-free exact caller-transcript delivery),
+`end_call(reason?: 'done'|'spam')` (graceful hangup after
 caller confirms done, or right after the one-line spam decline — 'spam' tags
 the outcome for the blocklist; drains goodbye audio, aborts if the caller
 barges in mid-goodbye).
 
 ## Log markers to grep
 `⏱` per-turn latency + tool durations · `📊` token usage + cache-hit% · `⚖️` TPM remaining
-/ retry budget exhausted · `🗣️ ERICA SAID` / `USER SAID` transcripts · `🗓️ Booking state
+/ retry budget exhausted · `🗣️ ERICA SAID` / caller transcript completion metadata · `🗓️ Booking state
 after create` · `📞`/`☎️` call start/end · `🤫` silence check-in/hangup · `⏳` duration
-warning/cap hangup · `📨` owner FYI SMS sent (warn lines: skipped/failed) ·
-`🚫` blocked spam caller (webhook reject) · "Transfer suppressed — Richa is on
-vacation" · "rejected — time no longer available on fresh re-check" (A1).
+warning/cap hangup · `📨` owner SMS accepted (warn lines: skipped/failed/uncertain) ·
+`🚫` blocked spam caller (webhook reject) · "Transfer suppressed — Richa is away
+from the salon" · "rejected — time no longer available on fresh re-check" (A1).

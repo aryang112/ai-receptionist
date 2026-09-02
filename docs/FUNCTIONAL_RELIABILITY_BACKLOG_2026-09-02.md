@@ -2,9 +2,11 @@
 
 **Created:** 2026-09-02
 
-**Production behavior commit:** `6f696a4`
+**Production behavior commit:** `2d24cfe`
 
-**Railway deployment:** `d92ad566-82fb-4877-9199-b6fa381c3a4b` (`SUCCESS`)
+**Railway deployment:** `19df1b8b-ead0-4a6d-82da-c60e15d5eb4a` (`SUCCESS`)
+
+**Immediate rollback:** `d92ad566-82fb-4877-9199-b6fa381c3a4b`
 
 **Operational state:** forwarding is ON
 
@@ -31,7 +33,34 @@ the first after-hours reliability release are the findings that can create or
 change salon records incorrectly, mishandle an away-period message, or dial
 Richa while she is away.
 
-No production change is authorized by this document.
+The owner authorized the first scoped after-hours release later that evening;
+its exact status is recorded below. This document does not authorize any
+additional production change.
+
+## After-hours release status — 2026-09-02
+
+The deployed release intentionally fixes the vacation-period basics without
+claiming the entire P0 architecture is complete.
+
+| Item | Status after deployment | Evidence / remaining boundary |
+| --- | --- | --- |
+| FR-01 known closed dates | **Fixed for known closures** | Suggest, book, and reschedule reject the local closed date before any Phorest read/write. Open-date provider failures remain fail-closed. |
+| FR-03 duplicate new client | **Fixed in-process** | One normalized phone + confirmed-name subject shares client resolution; optional email cannot split it. Exact contact matches are ranked and ties fail closed. |
+| Client-create unknown outcome (part of FR-05) | **Fixed in-process** | A possibly committed create is latched and later attempts are bounded read-only reconciliation only. The latch is not restart-durable; appointment write timeouts remain open. |
+| FR-08 caller message provenance | **Fixed** | Live transfer and message delivery are separate tools. Only exact caller transcripts inside an active collection state can be sent; offers, consent-only turns, stale pivots, and premature calls fail closed. |
+| FR-09 SMS acceptance | **Fixed** | Five-second cap, SID requirement, explicit positive/terminal/unknown status mapping, and truthful result-specific speech. |
+| FR-10 cancelled reschedule | **Fixed** | Cancelled appointment IDs are rejected by reschedule in the same call. |
+| FR-19 unnecessary narration | **Fixed for reproduced flows** | Message-taking is silent before the tool, then one ordinary acknowledgement; direct hours/prices stay one-line. Broader conversation-quality work remains P2. |
+| Richa away/return flow | **Fixed for the active closure** | Explicit connection requests immediately say away from the salon, back Thursday, September 10, and offer a message. Availability-only wording clarifies first. |
+| FR-02 / FR-04 / appointment portion of FR-05 / FR-06 / FR-07 / FR-11 | **Still open** | Per-call appointment mutation queue, semantic idempotency, appointment-write reconciliation, source-response settlement, fatal-Realtime away fallback, and appointment-subject binding were not mixed into this vacation release. |
+
+Release evidence: 44 files / 510 tests passed locally and under `TZ=UTC`;
+TypeScript build, formatting, and diff checks passed; six intercepted live
+`gpt-realtime-2.1` scenarios passed on the exact candidate. Deployment health
+was HTTP 200, with 63 real services and 4,187 clients loaded completely. No
+direct phone ear call was made during this automated pass, so continue to
+listen closely to the first real calls and use the rollback above on any
+material regression.
 
 ## Is this a prompt fix?
 
