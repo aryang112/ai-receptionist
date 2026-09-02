@@ -299,18 +299,35 @@ describe("buildInstructions — transfer window (RICHA'S LINE)", () => {
 
   it('asked-for-Richa gate: clarify availability, honor explicit connection requests', () => {
     const instructions = buildInstructions();
-    expect(instructions).toMatch(/ASKED FOR RICHA/);
-    expect(instructions).toMatch(/available, free, or there.*AMBIGUOUS/i);
-    expect(instructions).toContain(
+    const askedForRicha = instructions.slice(
+      instructions.indexOf('ASKED FOR RICHA:'),
+      instructions.indexOf('SELF-SERVICE FIRST:')
+    );
+    expect(askedForRicha).toMatch(/ASKED FOR RICHA/);
+    expect(askedForRicha).toMatch(
+      /SPEAK, TALK, CONNECT, or TRANSFER.*always an explicit live-connection request/i
+    );
+    expect(askedForRicha).toMatch(
+      /Those words are NEVER ambiguous.*do not ask whether they mean appointment availability/i
+    );
+    expect(askedForRicha).toMatch(
+      /NOT possible because Richa is away.*away from the salon.*full date in CURRENT STATUS.*offer to take a message/i
+    );
+    expect(askedForRicha).toMatch(
+      /ONLY "Is Richa available, free, or there\?".*AMBIGUOUS/i
+    );
+    expect(askedForRicha).toContain(
       "Are you checking Richa's availability for an appointment, or would you like me to connect you with her?"
     );
-    expect(instructions).toMatch(
+    expect(askedForRicha).toMatch(
       /Appointment service, date, or time context follows the booking flow/i
     );
-    expect(instructions).toMatch(
-      /explicit connection request says speak, talk, connect, or transfer/i
+    expect(
+      askedForRicha.indexOf('SPEAK, TALK, CONNECT, or TRANSFER')
+    ).toBeLessThan(
+      askedForRicha.indexOf('ONLY "Is Richa available, free, or there?"')
     );
-    expect(instructions).toMatch(/Never promise a transfer and retract it/);
+    expect(askedForRicha).toMatch(/Never promise a transfer and retract it/);
   });
 });
 
