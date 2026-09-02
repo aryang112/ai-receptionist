@@ -19,7 +19,10 @@ import type { Service } from '../services/phorest.types.js';
 import { phorest } from '../services/phorest.js';
 import { CallStore } from '../services/callStore.js';
 import { recordSpamOutcome } from '../services/blocklist.js';
-import { sendOwnerSms } from '../services/ownerSms.js';
+import {
+  sendOwnerSms,
+  type OwnerSmsResult,
+} from '../services/ownerSms.js';
 import type {
   CustomerResult,
   AppointmentSummary,
@@ -458,7 +461,7 @@ OTHER TRANSFERS are last resort: several different people in one group booking, 
 
 LIVE TRANSFER: only when RICHA'S LINE says POSSIBLE and no active away notice applies. Give one short handoff sentence, then call transfer_to_owner; longer speech is cut off.
 
-MESSAGE MODE: outside Richa's calling hours or while Richa is away from the salon, never say you will get her. Offer a message, collect it, then call transfer_to_owner; it sends a text. Confirm only after success. If you handled a cancellation or reschedule affecting today or the next open day while the salon is closed, also text Richa a brief FYI.
+MESSAGE MODE: outside Richa's calling hours or while Richa is away from the salon, never say you will get her. Offer a message, collect it, then call transfer_to_owner; it sends the caller's message as a text. Confirm only after success. Schedule-change FYIs are handled automatically in the background — never call transfer_to_owner for them and never mention them to the caller.
 
 ═══ SPAM & TELEMARKETING ═══
 - Signs: a sales pitch for business services, "your Google/business listing," loans/solar/insurance/warranties, a robocall or recorded pitch, or asking for "the owner" to sell something.
@@ -753,7 +756,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'transfer_to_owner',
     description:
-      'Transfer the call to Richa (the salon owner) — or, outside her calling hours, deliver a message to her phone as a text. Use PROMPTLY only when the caller explicitly asks to speak or talk with Richa, be connected or transferred to her, or asks for a real person. Is Richa available/free/there alone is ambiguous and MUST NOT trigger this tool: clarify appointment availability versus a live connection, then wait. Appointment service/date/time context follows the booking flow, not transfer. Otherwise LAST RESORT — you handle booking (including multiple services), rescheduling, cancelling, hours, and running-late yourself; use only for: a group booking for several DIFFERENT people; a tool that keeps failing AFTER you retried it; or a caller who is clearly upset and wants a human.',
+      'Transfer the call to Richa (the salon owner) — or, outside her calling hours, deliver a caller-requested message to her phone as a text. Never use this tool for an internal FYI after a cancellation or reschedule; those notifications happen automatically. Use PROMPTLY only when the caller explicitly asks to speak or talk with Richa, be connected or transferred to her, or asks for a real person. Is Richa available/free/there alone is ambiguous and MUST NOT trigger this tool: clarify appointment availability versus a live connection, then wait. Appointment service/date/time context follows the booking flow, not transfer. Otherwise LAST RESORT — you handle booking (including multiple services), rescheduling, cancelling, hours, and running-late yourself; use only for: a group booking for several DIFFERENT people; a tool that keeps failing AFTER you retried it; or a caller who is clearly upset and wants a human.',
     parameters: {
       type: 'object',
       properties: {
@@ -964,6 +967,11 @@ export class TwilioRealtimeCall {
   // serviceName of its own, so this is how its fresh-availability re-check
   // (fetchOpenSlots) knows WHICH service to re-check before writing.
   private servedAppointmentServices = new Map<string, string>();
+  // The original salon-local date for each appointment surfaced on this call.
+  // A closed-salon cancel/reschedule affecting today or the next open day must
+  // notify Richa in code; the model must never call transfer_to_owner for this
+  // internal FYI because its result coaching is necessarily caller-facing.
+  private servedAppointmentDates = new Map<string, string>();
   // WRITE-PATH SECURITY: the exact 24h "value" times we offered for a given
   // service+date via suggest_availability, keyed `${service}|${date}`. Booking is
   // constrained to these when an entry exists, so the model can't book a time we
@@ -1299,6 +1307,7 @@ export class TwilioRealtimeCall {
         for (const a of appts) {
           this.servedAppointmentIds.add(a.appointmentId);
           this.servedAppointmentServices.set(a.appointmentId, a.serviceName);
+          this.servedAppointmentDates.set(a.appointmentId, a.date);
         }
       })
       .catch(() => {});
@@ -2682,6 +2691,10 @@ export class TwilioRealtimeCall {
         result.appointment.appointmentId,
         result.service.name
       );
+      this.servedAppointmentDates.set(
+        result.appointment.appointmentId,
+        payload.date
+      );
       if (this.prefetch) this.prefetch.appointments = null; // warmed list is now stale
       this.outcome = 'booked';
       CallStore.recordToolCall(this.callSid, {
@@ -2735,6 +2748,9 @@ export class TwilioRealtimeCall {
         date: string;
         time: string;
       };
+      const originalDate = this.servedAppointmentDates.get(
+        payload.appointmentId
+      );
       logger.info(
         { tool: 'reschedule_appointment', args: payload },
         'Tool called: reschedule_appointment'
@@ -2858,6 +2874,21 @@ export class TwilioRealtimeCall {
         'Appointment rescheduled successfully'
       );
       if (this.prefetch) this.prefetch.appointments = null; // warmed list is now stale
+      if (
+        this.scheduleChangeNeedsOwnerFyi([originalDate, payload.date])
+      ) {
+        const service =
+          this.servedAppointmentServices.get(payload.appointmentId) ??
+          'appointment';
+        const from = originalDate
+          ? this.formatScheduleDate(originalDate)
+          : 'its previous date';
+        const to = `${this.formatScheduleDate(payload.date)} at ${this.formatScheduleTime(payload.time)}`;
+        void this.notifyOwnerSms(
+          `Hi Richa, it's Erica. FYI — ${this.callerDisplayName()} rescheduled their ${service} from ${from} to ${to}.`
+        );
+      }
+      this.servedAppointmentDates.set(payload.appointmentId, payload.date);
       this.outcome = 'rescheduled';
       CallStore.recordToolCall(this.callSid, {
         name: 'reschedule_appointment',
@@ -2916,6 +2947,20 @@ export class TwilioRealtimeCall {
         'Appointment cancelled successfully'
       );
       if (this.prefetch) this.prefetch.appointments = null; // warmed list is now stale
+      const appointmentDate = this.servedAppointmentDates.get(
+        payload.appointmentId
+      );
+      if (this.scheduleChangeNeedsOwnerFyi([appointmentDate])) {
+        const service =
+          this.servedAppointmentServices.get(payload.appointmentId) ??
+          'appointment';
+        const date = appointmentDate
+          ? this.formatScheduleDate(appointmentDate)
+          : 'the upcoming date';
+        void this.notifyOwnerSms(
+          `Hi Richa, it's Erica. FYI — ${this.callerDisplayName()} cancelled their ${service} on ${date}.`
+        );
+      }
       this.outcome = 'cancelled';
       CallStore.recordToolCall(this.callSid, {
         name: 'cancel_appointment',
@@ -3224,6 +3269,10 @@ export class TwilioRealtimeCall {
                 c.nextAppointment.appointmentId,
                 c.nextAppointment.serviceName
               );
+              this.servedAppointmentDates.set(
+                c.nextAppointment.appointmentId,
+                c.nextAppointment.date
+              );
             }
             this.clientNames.set(
               c.clientId,
@@ -3309,6 +3358,7 @@ export class TwilioRealtimeCall {
       for (const a of appointments) {
         this.servedAppointmentIds.add(a.appointmentId);
         this.servedAppointmentServices.set(a.appointmentId, a.serviceName);
+        this.servedAppointmentDates.set(a.appointmentId, a.date);
       }
       // Hand the model ONLY clean, unambiguous fields — never the raw HH:mm:ss
       // (which it could mis-read as the spoken time). It must quote `date`/`time`
@@ -3514,18 +3564,29 @@ export class TwilioRealtimeCall {
           },
           'Transfer suppressed — Richa already did not answer on this call; sending SMS instead'
         );
-        void this.notifyOwnerSms(
+        const messageResult = await this.notifyOwnerSms(
           `Hi Richa, it's Erica. I couldn't reach you just now: ${this.callerDisplayName()} called — ${payload.reason}. I let them know you'd follow up.`
         );
         this.markInfoOutcome();
         CallStore.recordToolCall(this.callSid, {
           name: 'transfer_to_owner',
-          ok: true,
-          detail: { failbackMessage: true, reason: payload.reason },
+          ok: messageResult.queued,
+          detail: {
+            failbackMessage: messageResult.queued,
+            reason: payload.reason,
+          },
         });
+        if (!messageResult.queued) {
+          return {
+            transferred: false,
+            messageSent: false,
+            note: "Richa's phone already rang out, and the follow-up text did not go through. Apologize briefly and say you could not deliver the message; do not claim that she received it. Offer to keep helping with anything you can handle.",
+          };
+        }
         return {
           transferred: false,
-          note: "Richa still can't be reached — her phone already rang out on this call, so there is no point trying again. Their message has just landed on her phone as a text. If the caller asked for Richa or left a message, confirm that in your own words and offer to help with anything else yourself; if this was only your own FYI after a change you already handled, say nothing about it and simply continue.",
+          messageSent: true,
+          note: "Richa still can't be reached — her phone already rang out on this call, so there is no point trying again. The caller's message was accepted by Twilio for delivery to her phone. Confirm that in your own words and offer to help with anything else yourself.",
         };
       }
 
@@ -3553,22 +3614,32 @@ export class TwilioRealtimeCall {
           },
           'Transfer suppressed — Richa is on vacation; sending SMS instead'
         );
-        void this.notifyOwnerSms(
+        const messageResult = await this.notifyOwnerSms(
           `Hi Richa, it's Erica. While you're away: ${this.callerDisplayName()} called — ${payload.reason}. I let them know you're away.`
         );
         this.markInfoOutcome();
         CallStore.recordToolCall(this.callSid, {
           name: 'transfer_to_owner',
-          ok: true,
-          detail: { vacationMessage: true, reason: payload.reason },
+          ok: messageResult.queued,
+          detail: {
+            vacationMessage: messageResult.queued,
+            reason: payload.reason,
+          },
         });
         const reopenLabel = DateTime.fromISO(vacation.reopenISO, {
           zone: env.TIMEZONE,
         }).toFormat('MMMM d');
-        return {
-          transferred: false,
-          note: `Richa is away from the salon until ${reopenLabel} (never say vacation, holiday, or trip). If the caller asked for Richa or left a message, tell them you've passed it along and she'll follow up when she's back. If this was only your own FYI after a change you already handled, say nothing about it and simply continue.`,
-        };
+        return messageResult.queued
+          ? {
+              transferred: false,
+              messageSent: true,
+              note: `Richa is away from the salon until ${reopenLabel} (never say vacation, holiday, or trip). The caller's message was accepted by Twilio for delivery to her phone; tell them you've passed it along and she'll follow up when she's back.`,
+            }
+          : {
+              transferred: false,
+              messageSent: false,
+              note: `Richa is away from the salon until ${reopenLabel} (never say vacation, holiday, or trip), and the text did not go through. Apologize briefly and say you could not deliver the message; do not claim that she received it. Offer to keep helping with anything you can handle.`,
+            };
       }
 
       // TRANSFER-WINDOW gate (2026-08-24, Aryan-decided after the Holly
@@ -3591,19 +3662,29 @@ export class TwilioRealtimeCall {
           },
           'Transfer suppressed — outside transfer window; sending SMS instead'
         );
-        void this.notifyOwnerSms(
+        const messageResult = await this.notifyOwnerSms(
           `Hi Richa, it's Erica. After-hours message: ${this.callerDisplayName()} called — ${payload.reason}. I let them know you'll follow up as soon as you can.`
         );
         this.markInfoOutcome();
         CallStore.recordToolCall(this.callSid, {
           name: 'transfer_to_owner',
-          ok: true,
-          detail: { afterHoursMessage: true, reason: payload.reason },
+          ok: messageResult.queued,
+          detail: {
+            afterHoursMessage: messageResult.queued,
+            reason: payload.reason,
+          },
         });
-        return {
-          transferred: false,
-          note: "It's outside calling hours, so the caller can't be connected to Richa right now. If the caller asked for Richa or left a message, let them know (in your own words) that it has just reached Richa's phone as a text and she'll follow up as soon as she can. If this was only your own FYI after a change you already handled, say nothing about it and simply continue.",
-        };
+        return messageResult.queued
+          ? {
+              transferred: false,
+              messageSent: true,
+              note: "It's outside calling hours, so the caller can't be connected to Richa right now. The caller's message was accepted by Twilio for delivery to her phone; let them know in your own words and say she'll follow up as soon as she can.",
+            }
+          : {
+              transferred: false,
+              messageSent: false,
+              note: "It's outside calling hours, so the caller can't be connected to Richa right now, and the text did not go through. Apologize briefly and say you could not deliver the message; do not claim that she received it. Offer to keep helping with anything you can handle.",
+            };
       }
 
       logger.info(
@@ -3938,15 +4019,51 @@ export class TwilioRealtimeCall {
         );
       });
   }
+
   /**
-   * Best-effort FYI text to the owner (Richa), sent from the salon's own
-   * Twilio number. Never throws and is meant to be fire-and-forget — a failed
-   * SMS must not affect the call or delay a tool response.
+   * A schedule change needs an owner FYI only while the salon is closed and
+   * it touches today or the next date on which the salon actually opens.
+   * This uses the same business.json calendar as availability, including the
+   * active away closure, and stays entirely server-side so Erica never has to
+   * mention the background text to the caller.
+   */
+  private scheduleChangeNeedsOwnerFyi(
+    appointmentDates: Array<string | undefined>,
+    now: DateTime = DateTime.now().setZone(env.TIMEZONE)
+  ): boolean {
+    if (isOpenNow(now)) return false;
+
+    const dates = new Set(appointmentDates.filter(Boolean));
+    const todayISO = now.toISODate();
+    if (!todayISO || dates.has(todayISO)) return Boolean(todayISO);
+
+    for (let daysAhead = 1; daysAhead <= 31; daysAhead++) {
+      const candidate = now.plus({ days: daysAhead }).toISODate();
+      if (!candidate || !getOpenClose(candidate)) continue;
+      return dates.has(candidate);
+    }
+    return false;
+  }
+
+  private formatScheduleDate(iso: string): string {
+    const date = DateTime.fromISO(iso, { zone: env.TIMEZONE });
+    return date.isValid ? date.toFormat('cccc, MMMM d') : iso;
+  }
+
+  private formatScheduleTime(hhmm: string): string {
+    const time = DateTime.fromFormat(hhmm, 'HH:mm', { zone: env.TIMEZONE });
+    return time.isValid ? time.toFormat('h:mm a') : hhmm;
+  }
+
+  /**
+   * Best-effort text to the owner (Richa), sent from the salon's own Twilio
+   * number. Never throws. Background FYIs fire-and-forget the result; caller
+   * message paths await it so Erica never claims an unqueued text succeeded.
    * M4: thin delegate — the actual body now lives in services/ownerSms.ts
    * (sendOwnerSms) so the daily/weekly digest can reuse it too. Behavior is
-   * byte-identical to before the extraction.
+   * The shared sender returns an explicit accepted/failure result.
    */
-  private async notifyOwnerSms(body: string): Promise<void> {
+  private async notifyOwnerSms(body: string): Promise<OwnerSmsResult> {
     return sendOwnerSms(body);
   }
 

@@ -60,7 +60,9 @@ describe('V1 — transfer_to_owner during vacation', () => {
     vi.setSystemTime(new Date('2026-09-05T16:00:00-04:00')); // inside 09-01..09-09
 
     const call = buildCall();
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_away' });
     call.notifyOwnerSms = notifyOwnerSms;
     const waitForPlaybackToDrain = vi.fn().mockResolvedValue(undefined);
     call.waitForPlaybackToDrain = waitForPlaybackToDrain;
@@ -71,6 +73,7 @@ describe('V1 — transfer_to_owner during vacation', () => {
 
     expect(result).toEqual({
       transferred: false,
+      messageSent: true,
       note: expect.stringContaining('September 10'),
     });
     expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
@@ -98,7 +101,9 @@ describe('V1 — transfer_to_owner during vacation', () => {
       lastName: 'Sharma',
       appointments: null,
     };
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_known' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     await call.handleTransferToOwner({ reason: 'question about a service' });
@@ -106,12 +111,32 @@ describe('V1 — transfer_to_owner during vacation', () => {
     expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/Priya/);
   });
 
+  it('does not claim delivery when Twilio rejects the caller message', async () => {
+    vi.setSystemTime(new Date('2026-09-05T16:00:00-04:00'));
+    const call = buildCall();
+    call.notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: false, reason: 'failed' });
+
+    const result = await call.handleTransferToOwner({
+      reason: 'please ask Richa to call me',
+    });
+
+    expect(result.transferred).toBe(false);
+    expect(result.messageSent).toBe(false);
+    expect(result.note).toMatch(/text did not go through/i);
+    expect(result.note).toMatch(/do not claim that she received it/i);
+    expect(result.note).not.toMatch(/passed it along/i);
+  });
+
   it('vacation UPCOMING (starts in 10 days, not active yet): falls through to the normal transfer path', async () => {
     // 2026-08-22 is 10 days before the 09-01 vacation start.
     vi.setSystemTime(new Date('2026-08-22T13:00:00-04:00'));
 
     const call = buildCall();
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_upcoming' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     // callSid is unset, so the NORMAL path's own guard fires — proving we
@@ -125,7 +150,9 @@ describe('V1 — transfer_to_owner during vacation', () => {
     vi.setSystemTime(new Date('2026-10-01T13:00:00-04:00')); // well after the vacation
 
     const call = buildCall();
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_later' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({ reason: 'wants Richa' });

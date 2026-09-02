@@ -235,10 +235,16 @@ describe('buildInstructions — TRANSFER self-service + closed-hours rules', () 
     expect(failback).toMatch(/never repeat it/);
   });
 
-  it('closed-hours: never promise a live transfer, FYI Richa after self-handled changes', () => {
+  it('closed-hours: caller messages use transfer; schedule-change FYIs stay automatic and silent', () => {
     const instructions = buildInstructions();
     expect(instructions).toMatch(/never say you will get her/i);
-    expect(instructions).toMatch(/cancellation or reschedule affecting today/);
+    expect(instructions).toMatch(
+      /Schedule-change FYIs are handled automatically in the background/i
+    );
+    expect(instructions).toMatch(/never call transfer_to_owner for them/i);
+    expect(instructions).not.toMatch(
+      /cancellation or reschedule affecting today/i
+    );
   });
 });
 
@@ -672,6 +678,9 @@ describe('high-salience write tool descriptions', () => {
     );
     expect(tool!.description).toMatch(
       /speak or talk.*connected or transferred/i
+    );
+    expect(tool!.description).toMatch(
+      /Never use this tool for an internal FYI/i
     );
   });
 });

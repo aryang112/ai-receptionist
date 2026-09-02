@@ -54,7 +54,9 @@ describe('transfer_to_owner — transfer-window gate', () => {
   it('OUTSIDE WINDOW (Tue 9pm): no dial — SMS message + {transferred:false}', async () => {
     vi.setSystemTime(new Date('2026-08-25T21:00:00-04:00'));
     const call = buildCall();
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_after_hours' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({
@@ -63,7 +65,8 @@ describe('transfer_to_owner — transfer-window gate', () => {
 
     expect(result).toEqual({
       transferred: false,
-      note: expect.stringContaining('as a text'),
+      messageSent: true,
+      note: expect.stringContaining('accepted by Twilio for delivery'),
     });
     expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
     expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/After-hours message/);
@@ -73,19 +76,24 @@ describe('transfer_to_owner — transfer-window gate', () => {
   it('OUTSIDE WINDOW (Tue 7am, before 9): message path, no dial', async () => {
     vi.setSystemTime(new Date('2026-08-25T07:00:00-04:00'));
     const call = buildCall();
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_morning' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({ reason: 'question' });
 
     expect(result.transferred).toBe(false);
+    expect(result.messageSent).toBe(true);
     expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
   });
 
   it('OPEN HOURS (Tue 2pm): proceeds to the dial branch (no message SMS)', async () => {
     vi.setSystemTime(new Date('2026-08-25T14:00:00-04:00'));
     const call = buildCall();
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_open' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({
@@ -108,7 +116,9 @@ describe('transfer_to_owner — transfer-window gate', () => {
         ts: Date.now(),
       },
     ];
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_ambiguous' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({
@@ -133,7 +143,9 @@ describe('transfer_to_owner — transfer-window gate', () => {
         ts: Date.now(),
       },
     ];
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_explicit' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({
@@ -151,7 +163,9 @@ describe('transfer_to_owner — transfer-window gate', () => {
     // awake (she was receiving the SMS messages).
     vi.setSystemTime(new Date('2026-08-24T11:46:00-04:00'));
     const call = buildCall();
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_holly' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({
@@ -170,7 +184,9 @@ describe('transfer_to_owner — transfer-window gate', () => {
     ]) {
       vi.setSystemTime(new Date(time));
       const call = buildCall();
-      const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+      const notifyOwnerSms = vi
+        .fn()
+        .mockResolvedValue({ queued: true, sid: 'SM_closed' });
       call.notifyOwnerSms = notifyOwnerSms;
 
       const result = await call.handleTransferToOwner({ reason: 'question' });

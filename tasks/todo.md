@@ -19,7 +19,7 @@ checklist. Fix ladder applies (note → schema → code → flow → prose).
       byte-identical payload when unset; one live call before flipping
 
 ## P1 — this week, one commit + ear test each
-- [ ] C4 finish: FYI SMS from handleCancel/handleReschedule (today or next open
+- [x] C4 finish: FYI SMS from handleCancel/handleReschedule (today or next open
       day while closed) in CODE; delete the MESSAGE MODE sentence; update prompt test
 - [ ] C5: unrecognized context says the calling number was already checked →
       existing-appointment path asks for the booking number or name (4 wasted turns seen)

@@ -135,7 +135,9 @@ describe('handleTransferToOwner — timed dial with a dial-status action', () =>
   it('a successful handoff also texts Richa an FYI (voicemail pickups look "completed" — this is the salon-side trail)', async () => {
     const call = buildCall('CA_dial_fyi');
     call.publicHost = 'erica.up.railway.app';
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_failback' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({
@@ -188,7 +190,9 @@ describe('handleTransferToOwner — a failback segment never dials again', () =>
     const call = buildCall('CA_failback_msg');
     call.transferFailback = true;
     call.publicHost = 'erica.up.railway.app';
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_transfer_fyi' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({
@@ -197,7 +201,8 @@ describe('handleTransferToOwner — a failback segment never dials again', () =>
 
     expect(result).toEqual({
       transferred: false,
-      note: expect.stringContaining('as a text'),
+      messageSent: true,
+      note: expect.stringContaining('accepted by Twilio for delivery'),
     });
     // The whole point: no second dial, at any hour.
     expect(updateMock).not.toHaveBeenCalled();

@@ -1,10 +1,10 @@
 // src/services/ownerSms.ts
 //
 // M4: extracted from twilioStream.ts's private `notifyOwnerSms` method — the
-// same fire-and-forget, never-throw FYI-SMS-to-Richa plumbing, now callable
-// from anywhere (the daily/weekly owner digest, in addition to
-// twilioStream's two existing call sites: running-late FYI, vacation
-// message). Behavior is byte-identical to the method it replaces.
+// shared never-throw SMS-to-Richa plumbing, now callable from anywhere (the
+// daily/weekly owner digest, background FYIs, and caller messages). Callers
+// that need to speak about delivery inspect the explicit result; background
+// senders remain free to fire-and-forget it.
 //
 // getTwilioClient() is intentionally its OWN small memoized instance here
 // (mirrors twilioStream.ts's module-scope one exactly) rather than importing
@@ -26,13 +26,21 @@ function getTwilioClient() {
 }
 
 /**
- * Best-effort FYI text sent from the salon's own Twilio number. Never throws
- * — a failed SMS must not affect a live call or block a caller, and must not
- * take down the digest scheduler either. Defaults to `env.OWNER_PHONE`; the
- * digest scheduler passes an explicit recipient when `DIGEST_TO` lists more
- * than one number.
+ * Best-effort text sent from the salon's own Twilio number. Never throws — a
+ * failed SMS must not affect a live call or take down the digest scheduler.
+ * The explicit result lets caller-message flows confirm delivery only after
+ * Twilio accepted the message; background FYIs and digests may ignore it.
+ * Defaults to `env.OWNER_PHONE`; the digest scheduler passes an explicit
+ * recipient when `DIGEST_TO` lists more than one number.
  */
-export async function sendOwnerSms(body: string, to?: string): Promise<void> {
+export type OwnerSmsResult =
+  | { queued: true; sid: string; status?: string }
+  | { queued: false; reason: 'not_configured' | 'failed' };
+
+export async function sendOwnerSms(
+  body: string,
+  to?: string
+): Promise<OwnerSmsResult> {
   try {
     const client = getTwilioClient();
     const recipient = to ?? env.OWNER_PHONE;
@@ -41,7 +49,7 @@ export async function sendOwnerSms(body: string, to?: string): Promise<void> {
         { tool: 'owner_sms' },
         'Owner SMS skipped — Twilio not configured'
       );
-      return;
+      return { queued: false, reason: 'not_configured' };
     }
     const result = await client.messages.create({
       body,
@@ -52,10 +60,12 @@ export async function sendOwnerSms(body: string, to?: string): Promise<void> {
       { tool: 'owner_sms', sid: result.sid, status: result.status },
       '📨 Owner SMS sent'
     );
+    return { queued: true, sid: result.sid, status: result.status };
   } catch (error) {
     logger.warn(
       { tool: 'owner_sms', error: String(error) },
       'Owner SMS failed — continuing'
     );
+    return { queued: false, reason: 'failed' };
   }
 }

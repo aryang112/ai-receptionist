@@ -63,13 +63,18 @@ describe('sendOwnerSms (M4 extraction from twilioStream.notifyOwnerSms)', () => 
       status: 'queued',
     });
 
-    await sendOwnerSms('hello Richa');
+    const result = await sendOwnerSms('hello Richa');
 
     expect(messagesCreateMock).toHaveBeenCalledTimes(1);
     expect(messagesCreateMock).toHaveBeenCalledWith({
       body: 'hello Richa',
       from: '+14105551111',
       to: '+14433706471',
+    });
+    expect(result).toEqual({
+      queued: true,
+      sid: 'SMxxx',
+      status: 'queued',
     });
   });
 
@@ -111,7 +116,10 @@ describe('sendOwnerSms (M4 extraction from twilioStream.notifyOwnerSms)', () => 
         .spyOn(freshLogger, 'warn')
         .mockImplementation(() => {});
 
-      await expect(freshSend('hi')).resolves.toBeUndefined();
+      await expect(freshSend('hi')).resolves.toEqual({
+        queued: false,
+        reason: 'not_configured',
+      });
       expect(twilioFactoryMock).not.toHaveBeenCalled();
       expect(warnSpy).toHaveBeenCalledWith(
         expect.objectContaining({ tool: 'owner_sms' }),
@@ -129,7 +137,10 @@ describe('sendOwnerSms (M4 extraction from twilioStream.notifyOwnerSms)', () => 
     messagesCreateMock.mockRejectedValueOnce(new Error('Twilio 500'));
     const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
 
-    await expect(sendOwnerSms('hi')).resolves.toBeUndefined();
+    await expect(sendOwnerSms('hi')).resolves.toEqual({
+      queued: false,
+      reason: 'failed',
+    });
     expect(warnSpy).toHaveBeenCalledWith(
       expect.objectContaining({ tool: 'owner_sms' }),
       'Owner SMS failed — continuing'
@@ -141,7 +152,10 @@ describe('sendOwnerSms (M4 extraction from twilioStream.notifyOwnerSms)', () => 
     env.OWNER_PHONE = '';
     const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
 
-    await expect(sendOwnerSms('hi')).resolves.toBeUndefined();
+    await expect(sendOwnerSms('hi')).resolves.toEqual({
+      queued: false,
+      reason: 'not_configured',
+    });
     expect(messagesCreateMock).not.toHaveBeenCalled();
     warnSpy.mockRestore();
   });
