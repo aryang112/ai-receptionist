@@ -105,6 +105,15 @@ const TRANSCRIPT_INFLIGHT_WINDOW_MS = 3000;
 const OWNER_MESSAGE_TRANSCRIPT_WAIT_MS = 2000;
 const OWNER_MESSAGE_MAX_CHARS = 1200;
 
+type OwnerMessageCaptureState =
+  | { phase: 'inactive' }
+  | { phase: 'offered' }
+  | {
+      phase: 'collecting';
+      captureAfterSequence: number;
+      readyAfterSequence: number;
+    };
+
 const GENERIC_OWNER_MESSAGE_TURNS = new Set([
   'yes',
   'yeah',
@@ -150,12 +159,25 @@ function normalizeOwnerMessageText(text: string): string {
 /**
  * Fail closed on turns that express consent, a category, or a connection
  * request but do not contain caller-authored message content. This is a guard,
- * not a language model: anything substantive (including "Call me back") is
- * preserved exactly and allowed through.
+ * not a language model: substantive content inside an active capture window is
+ * preserved exactly.
  */
 function isGenericOwnerMessageTurn(text: string): boolean {
   const normalized = normalizeOwnerMessageText(text);
   if (!normalized || GENERIC_OWNER_MESSAGE_TURNS.has(normalized)) return true;
+  if (/^(?:yes|yeah|yep|sure|okay|ok)(?: please| sure)?$/.test(normalized)) {
+    return true;
+  }
+  if (
+    /^(?:(?:can|could|may|would) (?:i|you)|i (?:want|need|would like) to) (?:ask|tell) (?:richa|her) (?:something|anything|a question)$/.test(
+      normalized
+    ) ||
+    /^(?:(?:can|could|would|will) you|i (?:want|need|would like) you to) (?:please )?let (?:richa|her) know(?: something)?$/.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
   if (
     /^(?:(?:actually|okay|ok|yes|sure|well) )*(?:(?:can|could|may|would) (?:i|we)|(?:(?:i|we) (?:want|need|would like|would love)|id like|wed like) to) (?:leave|send|pass|give) (?:(?:richa|her) )?(?:a )?message(?: (?:for|to) (?:richa|her))?$/.test(
       normalized
@@ -229,7 +251,12 @@ function isOwnerMessageIntent(text: string): boolean {
   const normalized = normalizeOwnerMessageText(text);
   return (
     /\b(?:leave|send|pass|give|take)\b.{0,32}\bmessage\b/.test(normalized) ||
-    /\b(?:have|got) (?:a )?message (?:for|to) (?:richa|her)\b/.test(normalized)
+    /\b(?:have|got) (?:a )?message (?:for|to) (?:richa|her)\b/.test(
+      normalized
+    ) ||
+    /\b(?:tell|ask) (?:richa|her)\b/.test(normalized) ||
+    /\blet (?:richa|her) know\b/.test(normalized) ||
+    /\bhave (?:richa|her) (?:call|contact)\b/.test(normalized)
   );
 }
 
@@ -240,19 +267,16 @@ function abandonsOwnerMessageCapture(text: string): boolean {
     /^(?:no|nope|nah|never mind|nevermind|forget it|not now|not right now)\b/.test(
       normalized
     ) ||
-    /^(?:actually )?(?:id rather|i would rather|instead|lets|let us|i need|i want|we need|we want) (?:book|schedule|reschedule|cancel|change|move|check|ask about)\b/.test(
+    /^(?:actually )?(?:id rather|i would rather|instead|lets|let us|i need|i want|we need|we want)(?: to)? (?:book|schedule|reschedule|cancel|change|move|check|ask about)\b/.test(
       normalized
     )
   );
 }
 
-/** Assistant wording can vary; this marks only an actual message solicitation. */
-function isOwnerMessagePrompt(text: string): boolean {
+/** Offers and actual content solicitations have different submission authority. */
+function ownerMessagePromptKind(text: string): 'offer' | 'content' | null {
   const normalized = normalizeOwnerMessageText(text);
-  return (
-    /(?:would you like|do you want|can i|may i).*(?:leave|take|pass).*(?:message)/.test(
-      normalized
-    ) ||
+  if (
     /(?:what message|what would you like).*(?:tell|give|pass|send|message).*(?:richa|her)/.test(
       normalized
     ) ||
@@ -263,6 +287,24 @@ function isOwnerMessagePrompt(text: string): boolean {
     /what would you like me to pass along/.test(normalized) ||
     /go ahead and say your (?:full|complete) message/.test(normalized) ||
     /please continue(?: with)? (?:your |the )?message/.test(normalized)
+  ) {
+    return 'content';
+  }
+  if (
+    /(?:would you like|do you want|can i|may i).*(?:leave|take|pass).*(?:message)/.test(
+      normalized
+    )
+  ) {
+    return 'offer';
+  }
+  return null;
+}
+
+/** Benign closure/backchannel while an already-submitted notification is pending. */
+function isNonCorrectiveOwnerMessageTurn(text: string): boolean {
+  const normalized = normalizeOwnerMessageText(text);
+  return /^(?:thats it|that is it|thats all|that is all|done|thanks|thank you|okay|ok)$/.test(
+    normalized
   );
 }
 
@@ -1222,9 +1264,12 @@ export class TwilioRealtimeCall {
     string,
     { text: string; sequence: number }
   >();
-  // Sequence immediately before Erica asked what Richa should know. Multiple
-  // caller answers/clarifications after this point form one exact message.
-  private ownerMessageCaptureAfterSequence: number | null = null;
+  // Offers do not authorize submission. Only direct caller intent or an actual
+  // content solicitation opens a fixed capture boundary. The state object is
+  // also an attempt token: a pivot replaces it and invalidates delayed tools.
+  private ownerMessageCaptureState: OwnerMessageCaptureState = {
+    phase: 'inactive',
+  };
   private callerTranscriptWaiters = new Map<
     string,
     Set<(text: string | undefined) => void>
@@ -2356,11 +2401,18 @@ export class TwilioRealtimeCall {
       if (!this.latestCallerItemId) this.latestCallerItemId = itemId;
       const sequence = this.ensureCallerItemSequence(itemId);
       if (abandonsOwnerMessageCapture(text)) {
-        this.ownerMessageCaptureAfterSequence = null;
-      } else if (isOwnerMessageIntent(text)) {
+        this.ownerMessageCaptureState = { phase: 'inactive' };
+      } else if (
+        isOwnerMessageIntent(text) &&
+        this.ownerMessageCaptureState.phase !== 'collecting'
+      ) {
         // Include this intent turn when it also carries identity/company
         // context; a bare request is filtered before submission.
-        this.ownerMessageCaptureAfterSequence = Math.max(0, sequence - 1);
+        this.ownerMessageCaptureState = {
+          phase: 'collecting',
+          captureAfterSequence: Math.max(0, sequence - 1),
+          readyAfterSequence: Math.max(0, sequence - 1),
+        };
       }
       this.finalCallerTranscripts.set(itemId, { text, sequence });
       const waiters = this.callerTranscriptWaiters.get(itemId);
@@ -2374,7 +2426,13 @@ export class TwilioRealtimeCall {
 
   private handleAssistantTranscript(text: string): void {
     this.pushTranscriptEntry('erica', text);
-    if (isOwnerMessagePrompt(text)) {
+    const promptKind = ownerMessagePromptKind(text);
+    if (!promptKind || this.ownerMessageCaptureState.phase === 'collecting') {
+      return;
+    }
+    if (promptKind === 'offer') {
+      this.ownerMessageCaptureState = { phase: 'offered' };
+    } else {
       const latestSequence = this.latestCallerItemId
         ? (this.callerItemOrder.get(this.latestCallerItemId) ??
           this.callerItemSequence)
@@ -2383,7 +2441,11 @@ export class TwilioRealtimeCall {
       // ("I'm Erica from Bank of America — can I leave a message?"). Include
       // that immediately preceding turn; exact generic requests are filtered at
       // delivery, so a bare "can I leave a message?" contributes nothing.
-      this.ownerMessageCaptureAfterSequence = Math.max(0, latestSequence - 1);
+      this.ownerMessageCaptureState = {
+        phase: 'collecting',
+        captureAfterSequence: Math.max(0, latestSequence - 1),
+        readyAfterSequence: latestSequence,
+      };
     }
   }
 
@@ -4050,35 +4112,33 @@ export class TwilioRealtimeCall {
    */
   private async deliverOwnerMessage(
     sourceItemId: string,
-    sourceSpeechEpoch: number
+    sourceSpeechEpoch: number,
+    captureState: Extract<OwnerMessageCaptureState, { phase: 'collecting' }>
   ): Promise<Record<string, unknown>> {
     const transcript = await this.waitForCallerTranscript(sourceItemId);
+    const sourceSequence = this.callerItemOrder.get(sourceItemId);
     if (
       transcript === undefined ||
       this.callerSpeechEpoch !== sourceSpeechEpoch ||
-      this.latestCallerItemId !== sourceItemId
+      this.latestCallerItemId !== sourceItemId ||
+      this.ownerMessageCaptureState !== captureState ||
+      sourceSequence === undefined ||
+      sourceSequence <= captureState.readyAfterSequence
     ) {
       return this.ownerMessageContentRequired(
         'No complete current message was available. Ask only what the caller would like Richa to know, then stop and wait. Do not claim anything was passed along.'
       );
     }
 
-    const sourceSequence = this.callerItemOrder.get(sourceItemId);
-    const messageTurns =
-      this.ownerMessageCaptureAfterSequence !== null &&
-      sourceSequence !== undefined
-        ? [...this.finalCallerTranscripts.values()]
-            .filter(
-              (entry) =>
-                entry.sequence > this.ownerMessageCaptureAfterSequence! &&
-                entry.sequence <= sourceSequence
-            )
-            .sort((a, b) => a.sequence - b.sequence)
-            .map((entry) => entry.text.trim())
-            .filter((text) => text && !isGenericOwnerMessageTurn(text))
-        : [transcript.trim()].filter(
-            (text) => text && !isGenericOwnerMessageTurn(text)
-          );
+    const messageTurns = [...this.finalCallerTranscripts.values()]
+      .filter(
+        (entry) =>
+          entry.sequence > captureState.captureAfterSequence &&
+          entry.sequence <= sourceSequence
+      )
+      .sort((a, b) => a.sequence - b.sequence)
+      .map((entry) => entry.text.trim())
+      .filter((text) => text && !isGenericOwnerMessageTurn(text));
     const message = messageTurns.join('\n');
     if (!message) {
       return this.ownerMessageContentRequired(
@@ -4092,8 +4152,11 @@ export class TwilioRealtimeCall {
       // The retry must start after the rejected content. Otherwise a capture
       // window containing one overlong/unsafe turn would include it forever and
       // make every corrected retry fail for the rest of the call.
-      this.ownerMessageCaptureAfterSequence =
-        sourceSequence ?? this.callerItemSequence;
+      this.ownerMessageCaptureState = {
+        phase: 'collecting',
+        captureAfterSequence: sourceSequence,
+        readyAfterSequence: sourceSequence,
+      };
       return this.ownerMessageContentRequired(
         'The message could not be recorded safely. Ask the caller to state it again briefly, then stop and wait. Do not claim anything was passed along.'
       );
@@ -4101,7 +4164,7 @@ export class TwilioRealtimeCall {
 
     // From this point on the captured window belongs to this one attempt. A
     // later message in the same call must establish a fresh solicitation.
-    this.ownerMessageCaptureAfterSequence = null;
+    this.ownerMessageCaptureState = { phase: 'inactive' };
     const contentKey = normalizeOwnerMessageText(message);
     let delivery = this.ownerMessageDeliveries.get(contentKey);
     const duplicateContent = delivery !== undefined;
@@ -4114,16 +4177,25 @@ export class TwilioRealtimeCall {
     const latestTranscript = this.latestCallerItemId
       ? this.finalCallerTranscripts.get(this.latestCallerItemId)?.text
       : undefined;
-    const latestIsSameContent =
-      latestTranscript !== undefined &&
-      normalizeOwnerMessageText(latestTranscript) === contentKey;
+    const laterCallerTurnsAreSafe =
+      this.latestCallerItemId === sourceItemId ||
+      (latestTranscript !== undefined &&
+        [...this.finalCallerTranscripts.values()]
+          .filter((entry) => entry.sequence > sourceSequence)
+          .every((entry) => {
+            const normalized = normalizeOwnerMessageText(entry.text);
+            return (
+              normalized === contentKey ||
+              isNonCorrectiveOwnerMessageTurn(entry.text)
+            );
+          }));
     // A materially different turn during submission may be a correction. Do
     // not let that stale completion produce a success acknowledgement. A pure
     // repetition of identical normalized content is safely coalesced instead.
     if (
       (this.callerSpeechEpoch !== sourceSpeechEpoch ||
         this.latestCallerItemId !== sourceItemId) &&
-      !latestIsSameContent
+      !laterCallerTurnsAreSafe
     ) {
       return {
         messageAccepted: false,
@@ -4187,9 +4259,17 @@ export class TwilioRealtimeCall {
       };
     }
 
+    const captureState = this.ownerMessageCaptureState;
+    if (captureState.phase !== 'collecting') {
+      return this.ownerMessageContentRequired(
+        'The caller has not supplied an actual message yet. Ask only what they would like Richa to know, then stop and wait. Do not claim anything was passed along.'
+      );
+    }
+
     const attempt = this.deliverOwnerMessage(
       sourceItemId,
-      this.callerSpeechEpoch
+      this.callerSpeechEpoch,
+      captureState
     );
     this.ownerMessageAttempts.set(sourceItemId, attempt);
     return attempt;
