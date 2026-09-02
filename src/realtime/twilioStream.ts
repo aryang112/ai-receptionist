@@ -19,10 +19,7 @@ import type { Service } from '../services/phorest.types.js';
 import { phorest } from '../services/phorest.js';
 import { CallStore } from '../services/callStore.js';
 import { recordSpamOutcome } from '../services/blocklist.js';
-import {
-  sendOwnerSms,
-  type OwnerSmsResult,
-} from '../services/ownerSms.js';
+import { sendOwnerSms, type OwnerSmsResult } from '../services/ownerSms.js';
 import type {
   CustomerResult,
   AppointmentSummary,
@@ -725,7 +722,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        clientId: { type: 'string' },
+        clientId: {
+          type: 'string',
+          description:
+            'The customer clientId returned by lookup_customer. Never pass an appointmentId here; a newly booked or already surfaced appointment can be cancelled/rescheduled directly with its appointmentId after explicit confirmation.',
+        },
       },
       required: ['clientId'],
     },
@@ -972,6 +973,14 @@ export class TwilioRealtimeCall {
   // notify Richa in code; the model must never call transfer_to_owner for this
   // internal FYI because its result coaching is necessarily caller-facing.
   private servedAppointmentDates = new Map<string, string>();
+  // Human-display time for the same served appointments. This lets the
+  // appointmentId-in-clientId guard return the already-known appointment as a
+  // normal successful read without another Phorest call or an invented time.
+  private servedAppointmentTimes = new Map<string, string>();
+  // Preserve successful cancellations for the rest of the call. This makes a
+  // repeated request idempotent and keeps the B5 list guard from presenting a
+  // just-cancelled appointment as though it were still upcoming.
+  private cancelledAppointmentIds = new Set<string>();
   // WRITE-PATH SECURITY: the exact 24h "value" times we offered for a given
   // service+date via suggest_availability, keyed `${service}|${date}`. Booking is
   // constrained to these when an entry exists, so the model can't book a time we
@@ -1308,6 +1317,7 @@ export class TwilioRealtimeCall {
           this.servedAppointmentIds.add(a.appointmentId);
           this.servedAppointmentServices.set(a.appointmentId, a.serviceName);
           this.servedAppointmentDates.set(a.appointmentId, a.date);
+          this.servedAppointmentTimes.set(a.appointmentId, a.timeDisplay);
         }
       })
       .catch(() => {});
@@ -2695,6 +2705,10 @@ export class TwilioRealtimeCall {
         result.appointment.appointmentId,
         payload.date
       );
+      this.servedAppointmentTimes.set(
+        result.appointment.appointmentId,
+        this.formatScheduleTime(payload.time)
+      );
       if (this.prefetch) this.prefetch.appointments = null; // warmed list is now stale
       this.outcome = 'booked';
       CallStore.recordToolCall(this.callSid, {
@@ -2718,6 +2732,7 @@ export class TwilioRealtimeCall {
         price: result.service.price,
         date: payload.date,
         time: payload.time,
+        note: 'This newly booked appointment is already selected for the rest of this call. If the caller immediately wants to cancel or reschedule it, do not call list_appointments and never pass this appointmentId as a clientId. First get their explicit confirmation of the exact change, then call cancel_appointment or reschedule_appointment directly with this appointmentId.',
       };
     } catch (error) {
       logger.error(
@@ -2874,9 +2889,7 @@ export class TwilioRealtimeCall {
         'Appointment rescheduled successfully'
       );
       if (this.prefetch) this.prefetch.appointments = null; // warmed list is now stale
-      if (
-        this.scheduleChangeNeedsOwnerFyi([originalDate, payload.date])
-      ) {
+      if (this.scheduleChangeNeedsOwnerFyi([originalDate, payload.date])) {
         const service =
           this.servedAppointmentServices.get(payload.appointmentId) ??
           'appointment';
@@ -2889,6 +2902,10 @@ export class TwilioRealtimeCall {
         );
       }
       this.servedAppointmentDates.set(payload.appointmentId, payload.date);
+      this.servedAppointmentTimes.set(
+        payload.appointmentId,
+        this.formatScheduleTime(payload.time)
+      );
       this.outcome = 'rescheduled';
       CallStore.recordToolCall(this.callSid, {
         name: 'reschedule_appointment',
@@ -2941,6 +2958,14 @@ export class TwilioRealtimeCall {
             'I need to pull up your appointments first — please call list_appointments.',
         };
       }
+      if (this.cancelledAppointmentIds.has(payload.appointmentId)) {
+        return {
+          appointmentId: payload.appointmentId,
+          cancelled: true,
+          alreadyCancelled: true,
+          note: 'This appointment was already cancelled successfully on this call. Do not call cancel_appointment or list_appointments again for it; tell the caller it is already cancelled and continue naturally.',
+        };
+      }
       await phorest.cancelAppointment(payload.appointmentId);
       logger.info(
         { tool: 'cancel_appointment', appointmentId: payload.appointmentId },
@@ -2961,6 +2986,7 @@ export class TwilioRealtimeCall {
           `Hi Richa, it's Erica. FYI — ${this.callerDisplayName()} cancelled their ${service} on ${date}.`
         );
       }
+      this.cancelledAppointmentIds.add(payload.appointmentId);
       this.outcome = 'cancelled';
       CallStore.recordToolCall(this.callSid, {
         name: 'cancel_appointment',
@@ -3273,6 +3299,10 @@ export class TwilioRealtimeCall {
                 c.nextAppointment.appointmentId,
                 c.nextAppointment.date
               );
+              this.servedAppointmentTimes.set(
+                c.nextAppointment.appointmentId,
+                c.nextAppointment.time
+              );
             }
             this.clientNames.set(
               c.clientId,
@@ -3345,6 +3375,55 @@ export class TwilioRealtimeCall {
         { tool: 'list_appointments', clientId: payload.clientId },
         'Tool called: list_appointments'
       );
+      // B5: Realtime once copied the appointmentId returned by a booking into
+      // this clientId field, retried the resulting Phorest error twice, then
+      // escalated instead of cancelling the appointment it had just created.
+      // A served appointment needs no lookup. Return it as a successful,
+      // selected appointment and preserve the explicit-confirmation boundary.
+      if (this.servedAppointmentIds.has(payload.clientId)) {
+        const appointmentId = payload.clientId;
+        if (this.cancelledAppointmentIds.has(appointmentId)) {
+          CallStore.recordToolCall(this.callSid, {
+            name: 'list_appointments',
+            ok: true,
+            detail: { appointmentIdGuard: true, alreadyCancelled: true },
+          });
+          return {
+            appointments: [],
+            lookupSkipped: true,
+            alreadyCancelled: true,
+            note: 'The supplied value was an appointmentId, not a clientId, and that appointment was already cancelled successfully on this call. Do not present it as upcoming, do not call list_appointments or cancel_appointment again, and tell the caller it is already cancelled.',
+          };
+        }
+        const knownAppointment = {
+          appointmentId,
+          ...(this.servedAppointmentServices.has(appointmentId)
+            ? {
+                service: this.servedAppointmentServices.get(appointmentId),
+              }
+            : {}),
+          ...(this.servedAppointmentDates.has(appointmentId)
+            ? { date: this.servedAppointmentDates.get(appointmentId) }
+            : {}),
+          ...(this.servedAppointmentTimes.has(appointmentId)
+            ? { time: this.servedAppointmentTimes.get(appointmentId) }
+            : {}),
+        };
+        logger.info(
+          { tool: 'list_appointments', appointmentId },
+          'AppointmentId supplied as clientId — using the appointment already served on this call'
+        );
+        CallStore.recordToolCall(this.callSid, {
+          name: 'list_appointments',
+          ok: true,
+          detail: { appointmentIdGuard: true },
+        });
+        return {
+          appointments: [knownAppointment],
+          lookupSkipped: true,
+          note: 'The supplied value was an appointmentId, not a clientId, and this call already knows that appointment. Treat it as selected and do not call list_appointments again. If the caller has not yet explicitly confirmed the exact cancellation or new slot, ask once and wait. After their explicit yes, call cancel_appointment or reschedule_appointment directly with this appointmentId.',
+        };
+      }
       // Serve from the caller-ID prefetch if it's the same client and already
       // warmed (zero Phorest round-trip on the critical path).
       const appointments =
@@ -3359,6 +3438,7 @@ export class TwilioRealtimeCall {
         this.servedAppointmentIds.add(a.appointmentId);
         this.servedAppointmentServices.set(a.appointmentId, a.serviceName);
         this.servedAppointmentDates.set(a.appointmentId, a.date);
+        this.servedAppointmentTimes.set(a.appointmentId, a.timeDisplay);
       }
       // Hand the model ONLY clean, unambiguous fields — never the raw HH:mm:ss
       // (which it could mis-read as the spoken time). It must quote `date`/`time`

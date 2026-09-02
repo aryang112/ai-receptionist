@@ -662,8 +662,12 @@ describe('high-salience write tool descriptions', () => {
       /caller clearly indicates they are done/i
     );
     expect(tool!.description).toMatch(/same turn/i);
-    expect(tool!.description).toMatch(/natural goodbye addressed to the caller/i);
-    expect(tool!.description).toMatch(/never announce that the call is ending/i);
+    expect(tool!.description).toMatch(
+      /natural goodbye addressed to the caller/i
+    );
+    expect(tool!.description).toMatch(
+      /never announce that the call is ending/i
+    );
     expect(tool!.description).toMatch(/being wrapped up, or has ended/i);
     expect(tool!.description).toMatch(/never narrate.*hangup mechanics/i);
     expect(tool!.description).not.toMatch(/"/);
@@ -698,5 +702,17 @@ describe('high-salience write tool descriptions', () => {
     expect(tool!.description).toMatch(
       /Never use this tool for an internal FYI/i
     );
+  });
+
+  it('distinguishes list_appointments clientId from an appointmentId', () => {
+    const tool = TOOL_DEFINITIONS.find(
+      (candidate) => candidate.name === 'list_appointments'
+    );
+    const clientId = (tool?.parameters as any)?.properties?.clientId;
+    expect(clientId?.description).toMatch(
+      /clientId returned by lookup_customer/i
+    );
+    expect(clientId?.description).toMatch(/Never pass an appointmentId/i);
+    expect(clientId?.description).toMatch(/directly.*explicit confirmation/i);
   });
 });

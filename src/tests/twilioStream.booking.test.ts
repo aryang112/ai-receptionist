@@ -175,3 +175,98 @@ describe('F6 — reschedule validates the new time against offered slots', () =>
     expect(spy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('B5 — a served appointmentId can never become list_appointments.clientId', () => {
+  it('books multiple appointments, keeps each selected, and short-circuits a mistaken list lookup', async () => {
+    vi.spyOn(phorest, 'getAvailability').mockImplementation(
+      async (_serviceId, date) => [`${date}T13:15:00`]
+    );
+    vi.spyOn(phorest, 'createAppointment')
+      .mockResolvedValueOnce({ appointmentId: 'booked-1' })
+      .mockResolvedValueOnce({ appointmentId: 'booked-2' });
+    const listSpy = vi.spyOn(phorest, 'listAppointments');
+    const cancelSpy = vi.spyOn(phorest, 'cancelAppointment');
+    const call = buildCall();
+    call.notifyOwnerSms = vi.fn().mockResolvedValue({
+      queued: true,
+      sid: 'SM_should_not_send',
+    });
+
+    const first = await call.handleBookAppointment({
+      serviceName: 'Lash Lift',
+      date: '2026-10-01',
+      time: '13:15',
+      customer: { name: 'Jane Smith' },
+    });
+    const second = await call.handleBookAppointment({
+      serviceName: 'Lash Lift',
+      date: '2026-10-02',
+      time: '13:15',
+      customer: { name: 'Jane Smith' },
+    });
+
+    for (const [id, date, booked] of [
+      ['booked-1', '2026-10-01', first],
+      ['booked-2', '2026-10-02', second],
+    ] as const) {
+      expect(booked.note).toMatch(/do not call list_appointments/i);
+      expect(booked.note).toMatch(/explicit confirmation/i);
+      expect(booked.note).toMatch(/directly with this appointmentId/i);
+
+      const guarded = await call.handleListAppointments({ clientId: id });
+      expect(guarded.error).toBeUndefined();
+      expect(guarded.lookupSkipped).toBe(true);
+      expect(guarded.appointments).toEqual([
+        {
+          appointmentId: id,
+          service: 'Lash Lift',
+          date,
+          time: '1:15 PM',
+        },
+      ]);
+      expect(guarded.note).toMatch(/not a clientId/i);
+      expect(guarded.note).toMatch(/explicitly confirmed/i);
+      expect(guarded.note).toMatch(/directly with this appointmentId/i);
+    }
+
+    expect(listSpy).not.toHaveBeenCalled();
+
+    // The exact live failure sequence: book -> mistaken list(clientId=<new
+    // appointmentId>) -> explicit confirmation -> cancel that same ID.
+    const repeatedGuard = await call.handleListAppointments({
+      clientId: 'booked-1',
+    });
+    expect(repeatedGuard.lookupSkipped).toBe(true);
+    expect(repeatedGuard.note).toMatch(/explicitly confirmed/i);
+
+    const cancelled = await call.handleCancel({ appointmentId: 'booked-1' });
+    expect(cancelled).toEqual({
+      appointmentId: 'booked-1',
+      cancelled: true,
+    });
+    expect(cancelSpy).toHaveBeenCalledTimes(1);
+    expect(cancelSpy).toHaveBeenCalledWith('booked-1');
+    expect(listSpy).not.toHaveBeenCalled();
+    expect(call.notifyOwnerSms).not.toHaveBeenCalled();
+
+    // Repeats after success remain harmless and never resurrect the cancelled
+    // item as an upcoming appointment or send another Phorest write.
+    const afterCancel = await call.handleListAppointments({
+      clientId: 'booked-1',
+    });
+    expect(afterCancel).toMatchObject({
+      appointments: [],
+      lookupSkipped: true,
+      alreadyCancelled: true,
+    });
+    const repeatedCancel = await call.handleCancel({
+      appointmentId: 'booked-1',
+    });
+    expect(repeatedCancel).toMatchObject({
+      cancelled: true,
+      alreadyCancelled: true,
+    });
+    expect(cancelSpy).toHaveBeenCalledTimes(1);
+    expect(listSpy).not.toHaveBeenCalled();
+  });
+});
