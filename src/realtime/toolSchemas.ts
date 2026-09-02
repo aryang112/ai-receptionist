@@ -54,9 +54,8 @@ export const TOOL_SCHEMAS = {
     appointmentId: z.string(),
     detail: z.string().optional(),
   }),
-  transfer_to_owner: z.object({
-    reason: z.string(),
-  }),
+  transfer_to_owner: z.object({}),
+  leave_message_for_owner: z.object({}),
   // S1: optional `reason` tags WHY the call ended ('spam' decline vs the
   // default 'done' caller-confirmed hangup) — MUST mirror TOOL_DEFINITIONS
   // (lessons.md F1: a one-sided add gets silently stripped by zod

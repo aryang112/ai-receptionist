@@ -491,10 +491,12 @@ describe('M1 — onUserTranscript / onAssistantTranscript / onUsage handler wiri
     const { session } = buildSession({ onUserTranscript });
     await fire(session, {
       type: 'conversation.item.input_audio_transcription.completed',
+      item_id: 'item_caller_1',
       transcript: 'I need a lash lift Tuesday',
     });
     expect(onUserTranscript).toHaveBeenCalledExactlyOnceWith(
-      'I need a lash lift Tuesday'
+      'I need a lash lift Tuesday',
+      'item_caller_1'
     );
   });
 

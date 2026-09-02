@@ -44,7 +44,7 @@ export type RealtimeHandlers = {
   onTextDelta?: (delta: string) => void;
   onResponseComplete?: () => void;
   /** Fired when OpenAI VAD detects the caller started talking (barge-in trigger). */
-  onSpeechStarted?: () => void;
+  onSpeechStarted?: (itemId?: string) => void;
   /**
    * Fired when OpenAI VAD detects the caller's turn ENDED (they paused long
    * enough for server_vad to close the turn). Pairs with onSpeechStarted so a
@@ -53,7 +53,7 @@ export type RealtimeHandlers = {
    * unbroken monologue never emits speech_stopped, and was being counted as
    * 21s of silence).
    */
-  onSpeechStopped?: () => void;
+  onSpeechStopped?: (itemId?: string) => void;
   onError?: (error: Error) => void;
   /**
    * Fired when the OpenAI WebSocket closes for a reason OTHER than our own
@@ -67,7 +67,7 @@ export type RealtimeHandlers = {
    * enabled (env.OPENAI_INPUT_TRANSCRIPTION !== 'off', default OFF) — with it
    * off this event never arrives, so this handler simply never fires.
    */
-  onUserTranscript?: (text: string) => void;
+  onUserTranscript?: (text: string, itemId?: string) => void;
   /** M1: Erica's final transcribed turn (response.(output_)audio_transcript.done). */
   onAssistantTranscript?: (text: string) => void;
   /** M1: per-turn token usage, fired alongside the existing 📊 turn tokens log. */
@@ -604,24 +604,37 @@ export class OpenAIRealtimeSession {
         // starvation responses may keep failing, so success alone might never
         // fire, permanently disarming retries for the rest of the call.
         this.consecutiveResponseFailures = 0;
-        this.handlers.onSpeechStarted?.();
+        this.handlers.onSpeechStarted?.(
+          typeof event.item_id === 'string' ? event.item_id : undefined
+        );
         break;
       }
       case 'input_audio_buffer.speech_stopped': {
         this.tSpeechStopped = Date.now();
         this.log.info({ eventType: event.type }, 'Speech stopped (VAD)');
-        this.handlers.onSpeechStopped?.();
+        this.handlers.onSpeechStopped?.(
+          typeof event.item_id === 'string' ? event.item_id : undefined
+        );
         break;
       }
       case 'conversation.item.input_audio_transcription.completed': {
         this.log.info(
-          { transcript: event.transcript },
-          'USER SAID: ' + event.transcript
+          {
+            itemId: event.item_id,
+            transcriptChars:
+              typeof event.transcript === 'string'
+                ? event.transcript.length
+                : undefined,
+          },
+          'Caller transcript completed'
         );
         // M1: only ever fires when input transcription is enabled — see
         // configureSession's env-gated `transcription` field, default OFF.
         if (typeof event.transcript === 'string') {
-          this.handlers.onUserTranscript?.(event.transcript);
+          this.handlers.onUserTranscript?.(
+            event.transcript,
+            typeof event.item_id === 'string' ? event.item_id : undefined
+          );
         }
         break;
       }

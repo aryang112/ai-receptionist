@@ -14,8 +14,8 @@ import WebSocket from 'ws';
 // is her waking hours (the transfer window, default 09:00–21:00 salon TZ),
 // NOT the salon's opening hours. Inside the window the dial happens even when
 // the salon is closed (Sunday mid-day, weekday mornings/evenings). Outside
-// it, transfer_to_owner takes a message and texts it to her instead — same
-// machinery as vacation mode. The fatal failover is deliberately NOT gated
+// it, transfer_to_owner offers the separate exact-transcript message path.
+// The fatal failover is deliberately NOT gated
 // (tested implicitly by not touching it).
 
 process.env.OPENAI_REALTIME_API_KEY ||= 'test-key';
@@ -51,7 +51,7 @@ describe('transfer_to_owner — transfer-window gate', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('OUTSIDE WINDOW (Tue 9pm): no dial — SMS message + {transferred:false}', async () => {
+  it('OUTSIDE WINDOW (Tue 9pm): no dial or synthesized SMS; requests a real message', async () => {
     vi.setSystemTime(new Date('2026-08-25T21:00:00-04:00'));
     const call = buildCall();
     const notifyOwnerSms = vi
@@ -65,12 +65,10 @@ describe('transfer_to_owner — transfer-window gate', () => {
 
     expect(result).toEqual({
       transferred: false,
-      messageSent: true,
-      note: expect.stringContaining('accepted by Twilio for delivery'),
+      messageRequired: true,
+      note: expect.stringContaining('leave_message_for_owner'),
     });
-    expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
-    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/After-hours message/);
-    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/bridal package/);
+    expect(notifyOwnerSms).not.toHaveBeenCalled();
   });
 
   it('OUTSIDE WINDOW (Tue 7am, before 9): message path, no dial', async () => {
@@ -84,8 +82,8 @@ describe('transfer_to_owner — transfer-window gate', () => {
     const result = await call.handleTransferToOwner({ reason: 'question' });
 
     expect(result.transferred).toBe(false);
-    expect(result.messageSent).toBe(true);
-    expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
+    expect(result.messageRequired).toBe(true);
+    expect(notifyOwnerSms).not.toHaveBeenCalled();
   });
 
   it('OPEN HOURS (Tue 2pm): proceeds to the dial branch (no message SMS)', async () => {

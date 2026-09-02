@@ -237,13 +237,16 @@ describe('buildInstructions — TRANSFER self-service + closed-hours rules', () 
     expect(failback).toMatch(/never repeat it/);
   });
 
-  it('closed-hours: caller messages use transfer; schedule-change FYIs stay automatic and silent', () => {
+  it('closed-hours: caller messages use the exact-message tool; schedule-change FYIs stay automatic and silent', () => {
     const instructions = buildInstructions();
     expect(instructions).toMatch(/never say you will get her/i);
+    expect(instructions).toMatch(/leave_message_for_owner silently/i);
     expect(instructions).toMatch(
-      /Schedule-change FYIs are handled automatically in the background/i
+      /Schedule-change FYIs happen automatically/i
     );
-    expect(instructions).toMatch(/never call transfer_to_owner for them/i);
+    expect(instructions).toMatch(
+      /never call a message or transfer tool for them/i
+    );
     expect(instructions).not.toMatch(
       /cancellation or reschedule affecting today/i
     );
@@ -329,7 +332,7 @@ describe('buildInstructions — transfer failback greeting', () => {
     const failback = buildInstructions(NOW, null, { transferFailback: true });
     expect(failback).toContain('GREETING (transfer failback');
     expect(failback).toMatch(/Richa did not pick up/);
-    expect(failback).toMatch(/text message to Richa/);
+    expect(failback).toMatch(/take a message for Richa/);
     // The standard greeting — recorded-line notice and all — must be GONE:
     // repeating it mid-call is the exact defect this branch exists to avoid.
     expect(failback).not.toContain('on a recorded line');
@@ -567,12 +570,24 @@ describe('buildInstructions — production prompt architecture (2026-08-28)', ()
       p.indexOf('═══ TOOLS ═══')
     );
     expect(preambles).toMatch(/AT MOST ONE/);
-    expect(preambles).toMatch(/whole lookup sequence/);
+    expect(preambles).toMatch(
+      /whole remote account lookup, availability check, or appointment write/
+    );
     expect(preambles).toMatch(/never thinking or a tool name/);
     expect(preambles).toMatch(/direct answers, confirmations, corrections/);
     expect(preambles).toMatch(/unclear\/background audio/);
     expect(preambles).toMatch(/routine fast lookups/);
+    expect(preambles).toMatch(/message-taking/);
+    expect(preambles).toMatch(/leave_message_for_owner silently/);
+    expect(preambles).toMatch(/no acknowledgement, transition/);
     expect(preambles).not.toMatch(/end_call/);
+  });
+
+  it('keeps empty/noise-only turns silent and never recites an intent menu', () => {
+    const p = buildInstructions();
+    expect(p).toMatch(/empty or noise-only turn gets silence/i);
+    expect(p).toMatch(/Empty audio, noise, media, silence.*get no response/i);
+    expect(p).toMatch(/do not.*list possible tasks/i);
   });
 });
 
@@ -720,9 +735,24 @@ describe('high-salience write tool descriptions', () => {
     expect(tool!.description).toMatch(
       /speak or talk.*connected or transferred/i
     );
-    expect(tool!.description).toMatch(
-      /Never use this tool for an internal FYI/i
+    expect(tool!.description).toMatch(/Never use this tool.*internal FYI/i);
+    expect(tool!.description).toMatch(/live call transfer/i);
+    expect(tool!.description).toMatch(/leave_message_for_owner/i);
+  });
+
+  it('keeps caller messages argument-free and separate from live transfer', () => {
+    const messageTool = TOOL_DEFINITIONS.find(
+      (candidate) => candidate.name === 'leave_message_for_owner'
     );
+    const transferTool = TOOL_DEFINITIONS.find(
+      (candidate) => candidate.name === 'transfer_to_owner'
+    );
+    expect(messageTool).toBeDefined();
+    expect(messageTool!.description).toMatch(/exact message/i);
+    expect(messageTool!.description).toMatch(/server supplies/i);
+    expect(messageTool!.description).toMatch(/silently/i);
+    expect((messageTool!.parameters as any).properties).toEqual({});
+    expect((transferTool!.parameters as any).properties).toEqual({});
   });
 
   it('distinguishes list_appointments clientId from an appointmentId', () => {
