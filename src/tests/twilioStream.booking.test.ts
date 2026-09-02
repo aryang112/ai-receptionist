@@ -270,3 +270,48 @@ describe('B5 — a served appointmentId can never become list_appointments.clien
     expect(listSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('FR-10 — cancelled appointments cannot be rescheduled', () => {
+  it('blocks book → cancel → reschedule before availability or update calls', async () => {
+    const availabilitySpy = vi
+      .spyOn(phorest, 'getAvailability')
+      .mockResolvedValue(['2026-10-01T13:15:00']);
+    vi.spyOn(phorest, 'createAppointment').mockResolvedValue({
+      appointmentId: 'booked-then-cancelled',
+    });
+    const cancelSpy = vi.spyOn(phorest, 'cancelAppointment');
+    const updateSpy = vi.spyOn(phorest, 'updateAppointment');
+    const call = buildCall();
+    call.notifyOwnerSms = vi.fn();
+
+    const booked = await call.handleBookAppointment({
+      serviceName: 'Lash Lift',
+      date: '2026-10-01',
+      time: '13:15',
+      customer: { name: 'Jane Smith' },
+    });
+    expect(booked.error).toBeUndefined();
+
+    const cancelled = await call.handleCancel({
+      appointmentId: 'booked-then-cancelled',
+    });
+    expect(cancelled.cancelled).toBe(true);
+    expect(cancelSpy).toHaveBeenCalledTimes(1);
+
+    availabilitySpy.mockClear();
+    const rescheduled = await call.handleReschedule({
+      appointmentId: 'booked-then-cancelled',
+      date: '2026-10-02',
+      time: '13:15',
+    });
+
+    expect(rescheduled).toMatchObject({
+      appointmentId: 'booked-then-cancelled',
+      cancelled: true,
+      alreadyCancelled: true,
+    });
+    expect(rescheduled.error).toMatch(/already cancelled/i);
+    expect(availabilitySpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+});

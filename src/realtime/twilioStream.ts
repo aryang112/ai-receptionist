@@ -2868,6 +2868,24 @@ export class TwilioRealtimeCall {
             'I need to pull up your appointments first — please call list_appointments.',
         };
       }
+      // FR-10: a successful cancellation is terminal for this appointment on
+      // this call. Never send a later reschedule to Phorest for the same ID.
+      if (this.cancelledAppointmentIds.has(payload.appointmentId)) {
+        logger.warn(
+          {
+            tool: 'reschedule_appointment',
+            appointmentId: payload.appointmentId,
+          },
+          'Reschedule blocked — appointment was already cancelled'
+        );
+        return {
+          appointmentId: payload.appointmentId,
+          cancelled: true,
+          alreadyCancelled: true,
+          error:
+            'That appointment was already cancelled and cannot be rescheduled.',
+        };
+      }
       // F6: slot validation. Reschedule carries no serviceName, so validate the
       // requested time against every slot we offered for that date (Erica calls
       // suggest_availability before rescheduling, which populates offeredSlots).
