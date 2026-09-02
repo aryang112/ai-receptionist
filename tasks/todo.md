@@ -13,7 +13,9 @@ checklist. Fix ladder applies (note → schema → code → flow → prose).
 - [x] scripts: render-prompt / validate-session-fields / validate-transcription-fields / probe-client-history
 
 ## P0 — before the next deploy
-- [ ] Deploy after the 4 direct-dial checks in audit §0 (Aryan's call; rollback 51d62be6…)
+- [x] Deploy the vacation MVP to the direct-number stage with forwarding OFF
+      (Aryan explicitly authorized staging first; direct-dial acceptance is still
+      required before forwarding; rollback 51d62be6…)
 - [ ] Transcription `language:'en'` + salon-vocabulary `prompt` behind env
       (both accepted live 2026-09-01; `keywords` rejected) — snapshot test for
       byte-identical payload when unset; one live call before flipping

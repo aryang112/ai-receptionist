@@ -3,7 +3,41 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
-## 2026-09-01 — 🔍 PROMPT AUDIT + away-period fixes (committed, NOT deployed)
+## ✅ DEPLOYED 2026-09-01 ~10:58 PM ET: vacation reliability MVP
+
+- Production commit `6f696a4`; Railway deployment
+  `d92ad566-82fb-4877-9199-b6fa381c3a4b` is `SUCCESS`.
+- Vacation behavior is explicit and date-safe: Richa is away from the salon
+  through September 9, the salon reopens Thursday, September 10 at noon, and
+  Erica offers September 10 onward rather than calling closed dates booked.
+- Caller messages to Richa now wait for Twilio queue acceptance before Erica
+  confirms success. Same-day/next-open-day cancel and reschedule FYIs are sent
+  server-side after successful Phorest writes and are never narrated aloud.
+- A newly booked appointment ID can be cancelled or rescheduled immediately;
+  mistaken appointment-ID-as-client-ID calls are intercepted and repeated
+  cancellation is idempotent.
+- Model-driven call closing is two-phase and server-owned: `end_call` is the
+  only item in its source response; its separate result response produces one
+  natural farewell; the server requires fresh response audio, drains Twilio
+  playback, and aborts on caller interruption or missing audio.
+- Verification: 43 files / 425 tests in local and `TZ=UTC`, TypeScript build,
+  `git diff --check`, prompt estimate 4,180/4,200, and production-shaped live
+  GPT-Realtime-2.1 audio probes 12/12 (10 ordinary closes, exact wrap-regression,
+  spam). OpenAI's documented `function_call_output` → `response.create` order is
+  preserved; no new session field was added.
+- Deployment boot evidence: PID 1 server up; 63 services warmed; complete client
+  phone index loaded (4,187 clients / 28 pages / `incomplete=false`); `/health`
+  returned HTTP 200 at `2026-09-02T02:58:49Z`.
+- Immediate rollback deployment:
+  `51d62be6-07e1-4352-81dd-d463aa14b34a`. Vonage forwarding remains OFF.
+- **Next action (Aryan):** direct-dial the staging number before enabling
+  forwarding: tomorrow booking, ambiguous/explicit Richa requests, one real
+  message, one Sep 10 booking + immediate cancellation, natural goodbye, and
+  “actually, one more thing” during the farewell.
+- Deferred on purpose: service-history personalization, reasoning/VAD tuning,
+  parallel tool calls, spam-vendor integration, and other human-like extras.
+
+## 2026-09-01 — 🔍 PROMPT AUDIT + away-period fixes (audit baseline)
 
 - Aryan asked for a full prompt audit (conflicts, bugs/edge cases, naturalness,
   parallel tool calling, service-history personalization, OpenAI/enterprise
