@@ -23,7 +23,7 @@ checklist. Fix ladder applies (note → schema → code → flow → prose).
       day while closed) in CODE; delete the MESSAGE MODE sentence; update prompt test
 - [ ] C5: unrecognized context says the calling number was already checked →
       existing-appointment path asks for the booking number or name (4 wasted turns seen)
-- [ ] C7: end_call goodbye contract ("never announce the call is ending")
+- [x] C7: end_call goodbye contract ("never announce the call is ending")
 - [ ] B5 un-park: appointmentId-in-clientId guard (note + param desc + short-circuit)
 - [ ] `reasoning.effort` env knob (default unset) + staged A/B on latency/ear
 - [ ] Log `phase` (commentary | final_answer) per output item

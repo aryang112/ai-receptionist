@@ -662,7 +662,23 @@ describe('high-salience write tool descriptions', () => {
       /caller clearly indicates they are done/i
     );
     expect(tool!.description).toMatch(/same turn/i);
+    expect(tool!.description).toMatch(/natural goodbye addressed to the caller/i);
+    expect(tool!.description).toMatch(/never announce that the call is ending/i);
+    expect(tool!.description).toMatch(/being wrapped up, or has ended/i);
+    expect(tool!.description).toMatch(/never narrate.*hangup mechanics/i);
     expect(tool!.description).not.toMatch(/"/);
+  });
+
+  it('keeps the same no-call-mechanics rule in the closing flow', () => {
+    const instructions = buildInstructions();
+    const close = instructions.slice(
+      instructions.indexOf('CLOSE:'),
+      instructions.indexOf('═══ SAFETY & ESCALATION ═══')
+    );
+    expect(close).toMatch(/natural goodbye addressed to the caller/i);
+    expect(close).toMatch(/never announce that the call is ending/i);
+    expect(close).toMatch(/being wrapped up, or has ended/i);
+    expect(close).toMatch(/never narrate end_call or hangup mechanics/i);
   });
 
   it('keeps ambiguous Richa availability out of the transfer tool', () => {
