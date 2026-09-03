@@ -74,7 +74,13 @@ describe('V1 — live transfer during away closure', () => {
     expect(result).toEqual({
       transferred: false,
       messageRequired: true,
-      note: expect.stringContaining('September 10'),
+      temporaryClosure: {
+        from: '2026-09-01',
+        through: '2026-09-09',
+        reopens: '2026-09-10',
+        publicExplanation: 'Richa is away',
+      },
+      note: expect.stringContaining('TEMPORARY CLOSURE POLICY'),
     });
     expect(result.note).toMatch(/leave_message_for_owner/);
     expect(notifyOwnerSms).not.toHaveBeenCalled();

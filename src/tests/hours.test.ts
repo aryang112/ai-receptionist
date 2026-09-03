@@ -83,6 +83,7 @@ describe('vacations (V1)', () => {
       from: '2026-09-01',
       to: '2026-09-09',
       reopenISO: '2026-09-10',
+      publicExplanation: 'Richa is away',
     });
     expect(getVacationForDate('2026-09-10')).toBeNull();
     expect(getVacationForDate('2026-08-31')).toBeNull();
@@ -100,6 +101,7 @@ describe('vacations (V1)', () => {
       from: '2026-09-01',
       to: '2026-09-09',
       reopenISO: '2026-09-10',
+      publicExplanation: 'Richa is away',
     });
   });
 
@@ -110,6 +112,7 @@ describe('vacations (V1)', () => {
       from: '2026-09-01',
       to: '2026-09-09',
       reopenISO: '2026-09-10',
+      publicExplanation: 'Richa is away',
     });
   });
 

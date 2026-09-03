@@ -37,11 +37,16 @@ function isOnVacation(iso: string): boolean {
  */
 export function getVacationForDate(
   iso: string
-): { from: string; to: string; reopenISO: string } | null {
+): ActiveOrUpcomingVacation | null {
   const v = VACATIONS.find((r) => r.from <= iso && iso <= r.to);
   if (!v) return null;
   const reopen = DateTime.fromISO(v.to, { zone: TZ }).plus({ days: 1 });
-  return { from: v.from, to: v.to, reopenISO: reopen.toISODate() ?? v.to };
+  return {
+    from: v.from,
+    to: v.to,
+    reopenISO: reopen.toISODate() ?? v.to,
+    ...(v.note?.trim() ? { publicExplanation: v.note.trim() } : {}),
+  };
 }
 
 function rangesForDate(date: DateTime): string[] {
@@ -204,6 +209,8 @@ export type ActiveOrUpcomingVacation = {
   to: string;
   /** First calendar day the salon reopens (day after `to`). */
   reopenISO: string;
+  /** Salon-approved public explanation, sourced from business.json. */
+  publicExplanation?: string;
 };
 
 /**
@@ -223,7 +230,12 @@ export function getActiveOrUpcomingVacation(
 
   const toResult = (v: Vacation): ActiveOrUpcomingVacation => {
     const reopen = DateTime.fromISO(v.to, { zone: TZ }).plus({ days: 1 });
-    return { from: v.from, to: v.to, reopenISO: reopen.toISODate() ?? v.to };
+    return {
+      from: v.from,
+      to: v.to,
+      reopenISO: reopen.toISODate() ?? v.to,
+      ...(v.note?.trim() ? { publicExplanation: v.note.trim() } : {}),
+    };
   };
 
   const active = VACATIONS.find((v) => v.from <= todayISO && todayISO <= v.to);

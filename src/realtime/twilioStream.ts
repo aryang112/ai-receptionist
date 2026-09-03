@@ -29,6 +29,7 @@ import {
   getOpenClose,
   getActiveOrUpcomingVacation,
   getVacationForDate,
+  type ActiveOrUpcomingVacation,
   fmtTime,
   isOpenNow,
   isWithinTransferWindow,
@@ -400,6 +401,36 @@ function buildHoursLine(): string {
   return `${days}.${closed}`;
 }
 
+/**
+ * Closure explanations are operator-owned config data, not prompt
+ * instructions. Flatten control whitespace, remove quote delimiters, and cap
+ * the length before placing the explanation in model context.
+ */
+function sanitiseClosurePublicExplanation(value?: string): string {
+  return (
+    value
+      ?.replace(/[\r\n]+/g, ' ')
+      .replace(/["\\]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 160) || 'The salon is temporarily closed'
+  );
+}
+
+function temporaryClosureToolContext(closure: ActiveOrUpcomingVacation) {
+  return {
+    from: closure.from,
+    through: closure.to,
+    reopens: closure.reopenISO,
+    publicExplanation: sanitiseClosurePublicExplanation(
+      closure.publicExplanation
+    ),
+  };
+}
+
+const TEMPORARY_CLOSURE_RESULT_NOTE =
+  'This date falls within a configured temporary salon closure. Follow TEMPORARY CLOSURE POLICY, match the explanation to what the caller asked about, give the full reopen date, and offer the first bookable dates after reopening. Never call a closed date fully booked.';
+
 /** H1: strip Phorest's "3) " style ordinal prefixes for the hot-loaded price
  * list — same cosmetic strip get_prices applies (kept as a local copy here so
  * this task doesn't touch get_prices' own formatter, per the hard constraint). */
@@ -540,16 +571,16 @@ export function buildInstructions(
       }. Tomorrow (${now.plus({ days: 1 }).toFormat('cccc')}): ${tomorrowHours ?? 'unknown'}.`
     : '';
 
-  // V1: one business.json entry drives the whole vacation story. Non-null
-  // covers BOTH an active vacation and one starting within 14 days, so the
-  // wording below is phrased to stay true in either case (never claims
-  // "Richa is away" before she actually is).
-  const vacation = getActiveOrUpcomingVacation(now);
-  const vacationActive = !!(
-    vacation &&
+  // One business.json entry drives the whole temporary-closure story. Non-null
+  // covers BOTH an active closure and one starting within 14 days. The prompt
+  // supplies one global policy, then adapts the spoken subject to the caller's
+  // question instead of repeating Richa-specific scripts in every flow.
+  const temporaryClosure = getActiveOrUpcomingVacation(now);
+  const temporaryClosureActive = !!(
+    temporaryClosure &&
     todayISO &&
-    vacation.from <= todayISO &&
-    todayISO <= vacation.to
+    temporaryClosure.from <= todayISO &&
+    todayISO <= temporaryClosure.to
   );
   // AUDIT FIX (2026-08-22, P1): the transfer-becomes-a-text instruction is
   // ONLY true while the vacation is ACTIVE (the handler gate is active-only).
@@ -561,33 +592,35 @@ export function buildInstructions(
   // The section header deliberately avoids the word too: a header is prompt
   // text the model can echo. The reopen day carries its full date because a
   // bare weekday is ambiguous across a closure longer than a week.
-  const reopenLabel = vacation
-    ? DateTime.fromISO(vacation.reopenISO, { zone: env.TIMEZONE }).toFormat(
-        'cccc, MMMM d'
-      )
+  const reopenLabel = temporaryClosure
+    ? DateTime.fromISO(temporaryClosure.reopenISO, {
+        zone: env.TIMEZONE,
+      }).toFormat('cccc, MMMM d')
     : '';
-  const awayRangeLabel = vacation
-    ? `${DateTime.fromISO(vacation.from, { zone: env.TIMEZONE }).toFormat('MMMM d')} through ${DateTime.fromISO(vacation.to, { zone: env.TIMEZONE }).toFormat('MMMM d')}`
+  const closureRangeLabel = temporaryClosure
+    ? `${DateTime.fromISO(temporaryClosure.from, { zone: env.TIMEZONE }).toFormat('MMMM d')} through ${DateTime.fromISO(temporaryClosure.to, { zone: env.TIMEZONE }).toFormat('MMMM d')}`
     : '';
-  const vacationBlock = vacation
+  const closureExplanation = temporaryClosure
+    ? sanitiseClosurePublicExplanation(temporaryClosure.publicExplanation)
+    : '';
+  const temporaryClosureBlock = temporaryClosure
     ? `
 
-═══ RICHA IS AWAY FROM THE SALON ═══
-- Wording: say only that Richa is away from the salon. Never say vacation, holiday, or trip, and never guess or explain why she is away.
-${
-  vacationActive
-    ? `- Richa is away right now, ${awayRangeLabel}; the salon is closed until she is back on ${reopenLabel}.
-- Any appointment request for a date through ${DateTime.fromISO(vacation.to, { zone: env.TIMEZONE }).toFormat('MMMM d')} (today, tomorrow, this week, a walk-in): say warmly that Richa is away from the salon and the salon reopens ${reopenLabel}, then offer to check the first days after she is back. Never call those days fully booked. Book normally for ${reopenLabel} onward.
-- Erica cannot connect a caller to Richa while she is away. Offer to take a message instead; after the caller gives the complete message, call leave_message_for_owner silently and wait for its result.`
-    : `- Richa will be away from the salon ${awayRangeLabel}, back ${reopenLabel}. The salon is closed those dates — if a caller asks for one, say warmly that Richa is away from the salon then and offer the first days after she is back. Until she leaves, everything works normally (including transferring to Richa).`
-}`
+═══ TEMPORARY CLOSURE POLICY ═══
+- ${temporaryClosureActive ? 'ACTIVE NOW' : 'UPCOMING'} salon-wide: ${closureRangeLabel}; reopens ${reopenLabel}. Public reason and sole whereabouts exception: "${closureExplanation}." Never say vacation, holiday, or trip or guess why.
+- First relevant answer: give the reason, full reopen date, and useful next step. Adapt its subject:
+  - Named person → say they are unavailable; during an ACTIVE live-connection request, offer a message.
+  - Salon or hours → say the salon is temporarily closed.
+  - Booking, walk-in, or affected date → say closed that date and offer ${reopenLabel} onward.
+  - Different provider → mention only the salon closure; never say they are away.
+- Give full context once; repeat only if asked or correcting confusion. Never call closure dates fully booked. UPCOMING applies only to its date range.`
     : '';
   // The transfer line must agree with the away block: while Richa is away her
   // phone is never dialed (handleTransferToOwner's vacation gate), so the
   // precomputed status says so outright instead of "POSSIBLE" plus a
   // contradicting paragraph the model had to reconcile on every call.
-  const richaLine = vacationActive
-    ? `NOT possible right now — Richa is away from the salon until ${reopenLabel}; offer to pass a message along instead`
+  const richaLine = temporaryClosureActive
+    ? `NOT possible due to the active temporary salon closure; follow TEMPORARY CLOSURE POLICY and offer a message`
     : transferPossibleNow
       ? 'POSSIBLE right now'
       : 'NOT possible right now (outside her calling hours)';
@@ -695,16 +728,16 @@ CLOSE: after helping, ask if there's anything else; help if needed, then ask aga
 
 ═══ SAFETY & ESCALATION ═══
 ASKED FOR RICHA:
-- SPEAK, TALK, CONNECT, or TRANSFER to Richa or a real person is always an explicit live connection, including a follow-up choosing to speak/connect "with her." Never clarify those words as appointment availability. If RICHA'S LINE says POSSIBLE and no active away notice applies, transfer promptly without probing. While Richa is away, every reply MUST include all three: away from the salon, back on the full date in CURRENT STATUS, and an offer to take a message. Otherwise say briefly that a live transfer is unavailable and offer a message. Never promise a transfer and retract it.
+- SPEAK, TALK, CONNECT, or TRANSFER to Richa or a real person is always an explicit live connection, including a follow-up choosing to speak/connect "with her." Never clarify those words as appointment availability. If RICHA'S LINE says POSSIBLE, transfer promptly without probing. If RICHA'S LINE says the temporary closure applies, follow TEMPORARY CLOSURE POLICY for a Richa request and offer a message. Otherwise say briefly that a live transfer is unavailable and offer a message. Never promise a transfer and retract it.
 - ONLY "Is Richa available, free, or there?" with none of those live-connection words is AMBIGUOUS, not permission to transfer. Ask exactly: "Are you checking Richa's availability for an appointment, or would you like me to connect you with her?" Then STOP and WAIT. Appointment service, date, or time context follows the booking flow.
 
 SELF-SERVICE FIRST: if the caller describes a problem or asks to send a message without explicitly asking for Richa, first offer to handle any supported task. If they cannot make an appointment, offer a new time; if they do not want one, offer cancellation. After helping, offer a message only if something personal remains.
 
 OTHER TRANSFERS are last resort: several different people in one group booking, a request outside your tools, an upset caller who wants a human, or MORE THAN 2 tool failures. Persistent abuse → use end_call SILENT/PROACTIVE so its result owns the polite closing, or transfer if safety requires it.
 
-LIVE TRANSFER: only when RICHA'S LINE says POSSIBLE and no active away notice applies. Give one short handoff sentence, then call transfer_to_owner; longer speech is cut off.
+LIVE TRANSFER: only when RICHA'S LINE says POSSIBLE. Give one short handoff sentence, then call transfer_to_owner; longer speech is cut off.
 
-MESSAGE MODE: outside Richa's calling hours or while Richa is away from the salon, never say you will get her. Offer to take a message, ask naturally what they would like Richa to know with no process explanation, then WAIT. After the caller gives the complete message, call leave_message_for_owner silently with no acknowledgement, transition, or dispatch narration. After success, acknowledge once naturally, ask once if they need anything else, then wait; never discuss mechanics or promise when Richa will respond. After failure, apologize briefly without internal details, then wait. Schedule-change FYIs happen automatically — never call a message or transfer tool for them or mention them to the caller.
+MESSAGE MODE: outside Richa's calling hours or when an active temporary closure prevents a transfer, never say you will get her. Offer to take a message, ask naturally what they would like Richa to know with no process explanation, then WAIT. After the caller gives the complete message, call leave_message_for_owner silently with no acknowledgement, transition, or dispatch narration. After success, acknowledge once naturally, ask once if they need anything else, then wait; never discuss mechanics or promise when Richa will respond. After failure, apologize briefly without internal details, then wait. Schedule-change FYIs happen automatically — never call a message or transfer tool for them or mention them to the caller.
 
 ═══ SPAM & TELEMARKETING ═══
 - Signs: a sales pitch for business services, "your Google/business listing," loans/solar/insurance/warranties, a robocall or recorded pitch, or asking for "the owner" to sell something.
@@ -718,7 +751,7 @@ EXCEPTION — an urgent problem with the salon premises itself (alarm going off,
 ═══ CURRENT STATUS (precomputed server-side — trust it verbatim, never re-derive it) ═══
 CURRENT DATE & TIME: Right now it is ${now.toFormat("cccc, MMMM d, yyyy 'at' h:mm a")} at the salon (timezone ${env.TIMEZONE}). When a caller says "today" use the date ${todayISO}; "tomorrow" is ${tomorrowISO}. ALWAYS compute appointment dates from this — never guess today's date, month, or year. Pass every date to tools as YYYY-MM-DD.
 ${todayStatusLine}
-RICHA'S LINE (do NOT re-derive it from the clock or the salon hours): a live transfer to Richa is ${richaLine}. Transfers ring Richa's own phone, so this is INDEPENDENT of whether the salon is open — she takes calls beyond salon hours.${vacationBlock}
+RICHA'S LINE (do NOT re-derive it from the clock or the salon hours): a live transfer to Richa is ${richaLine}. Transfers ring Richa's own phone, so this is INDEPENDENT of whether the salon is open — she takes calls beyond salon hours.${temporaryClosureBlock}
 `;
 }
 
@@ -2777,7 +2810,7 @@ export class TwilioRealtimeCall {
         const hours = getHoursStatus(payload.date);
         const awayClosure = getVacationForDate(payload.date);
         const note = awayClosure
-          ? `Richa is away from the salon that day; the salon is closed ${DateTime.fromISO(awayClosure.from, { zone: env.TIMEZONE }).toFormat('MMMM d')} through ${DateTime.fromISO(awayClosure.to, { zone: env.TIMEZONE }).toFormat('MMMM d')} and reopens ${DateTime.fromISO(awayClosure.reopenISO, { zone: env.TIMEZONE }).toFormat('cccc, MMMM d')}. Say warmly that Richa is away from the salon (never say vacation, holiday, or trip, and never guess why) and offer to check the first days after she is back. Never call a closed day fully booked.`
+          ? TEMPORARY_CLOSURE_RESULT_NOTE
           : `The salon does not open that day at all — say we are closed then and offer the next opening (${hours.nextOpen ?? 'another day'}). Never call a closed day fully booked.`;
         CallStore.recordToolCall(this.callSid, {
           name: 'suggest_availability',
@@ -2792,6 +2825,9 @@ export class TwilioRealtimeCall {
           hoursThatDay: hours.hoursThatDay,
           closedRightNow: hours.closedRightNow,
           nextOpen: hours.nextOpen,
+          ...(awayClosure
+            ? { temporaryClosure: temporaryClosureToolContext(awayClosure) }
+            : {}),
           note,
         };
       }
@@ -2956,7 +2992,7 @@ export class TwilioRealtimeCall {
       // its full date so the caller hears the right week.
       const awayClosure = getVacationForDate(payload.date);
       const stateNote = awayClosure
-        ? `Richa is away from the salon that day; the salon is closed ${DateTime.fromISO(awayClosure.from, { zone: env.TIMEZONE }).toFormat('MMMM d')} through ${DateTime.fromISO(awayClosure.to, { zone: env.TIMEZONE }).toFormat('MMMM d')} and reopens ${DateTime.fromISO(awayClosure.reopenISO, { zone: env.TIMEZONE }).toFormat('cccc, MMMM d')}. Say warmly that Richa is away from the salon (never say vacation, holiday, or trip, and never guess why) and offer to check the first days after she is back. Never call a closed day fully booked.`
+        ? TEMPORARY_CLOSURE_RESULT_NOTE
         : !hours.salonOpenThatDay
           ? `The salon does not open that day at all — say we are closed then and offer the next opening (${hours.nextOpen ?? 'another day'}). Never call a closed day fully booked.`
           : hours.closedRightNow
@@ -2973,6 +3009,9 @@ export class TwilioRealtimeCall {
         hoursThatDay: hours.hoursThatDay,
         closedRightNow: hours.closedRightNow,
         nextOpen: hours.nextOpen,
+        ...(awayClosure
+          ? { temporaryClosure: temporaryClosureToolContext(awayClosure) }
+          : {}),
         note: stateNote,
       };
     } catch (error) {
@@ -3547,14 +3586,15 @@ export class TwilioRealtimeCall {
         address: `${businessHours.location.address}, ${businessHours.location.city}, ${businessHours.location.state} ${businessHours.location.zip}`,
         // OWNER DECISION (2026-09-01): the key name and note are model-facing
         // text — a "vacations" field invites the word "vacation" aloud.
-        awayClosures: (businessHours.vacations ?? []).map((v) => ({
+        temporaryClosures: (businessHours.vacations ?? []).map((v) => ({
           from: v.from,
-          to: v.to,
+          through: v.to,
           reopens: DateTime.fromISO(v.to, { zone: env.TIMEZONE })
             .plus({ days: 1 })
             .toISODate(),
+          publicExplanation: sanitiseClosurePublicExplanation(v.note),
         })),
-        note: 'awayClosures are dates Richa is away from the salon and it is closed. If one is relevant, say only that Richa is away from the salon and give the reopen day — never say vacation, holiday, or trip, and never guess why.',
+        note: "When a temporary closure affects the question, follow TEMPORARY CLOSURE POLICY and match the explanation to the caller's subject. Do not invent anyone's whereabouts.",
       };
 
       logger.info(
@@ -4386,41 +4426,43 @@ export class TwilioRealtimeCall {
         };
       }
 
-      // V1: while Richa is ACTIVELY on vacation (today falls inside the
+      // V1: while the temporary closure is ACTIVE (today falls inside the
       // range — NOT just "starting soon"), never dial her personal phone.
       // Take a message instead. The FATAL-ERROR failover (failoverToOwner,
       // below) is untouched by this and keeps dialing — a technical
       // meltdown should still reach a human even on vacation.
-      const vacationNow = DateTime.now().setZone(env.TIMEZONE);
-      const vacationTodayISO = vacationNow.toISODate();
-      const vacation = getActiveOrUpcomingVacation(vacationNow);
-      const vacationActive = !!(
-        vacation &&
-        vacationTodayISO &&
-        vacation.from <= vacationTodayISO &&
-        vacationTodayISO <= vacation.to
+      const closureNow = DateTime.now().setZone(env.TIMEZONE);
+      const closureTodayISO = closureNow.toISODate();
+      const temporaryClosure = getActiveOrUpcomingVacation(closureNow);
+      const temporaryClosureActive = !!(
+        temporaryClosure &&
+        closureTodayISO &&
+        temporaryClosure.from <= closureTodayISO &&
+        closureTodayISO <= temporaryClosure.to
       );
-      if (vacation && vacationActive) {
+      if (temporaryClosure && temporaryClosureActive) {
         logger.info(
           {
             tool: 'transfer_to_owner',
             callSid: this.callSid,
-            vacation,
+            temporaryClosure: {
+              from: temporaryClosure.from,
+              through: temporaryClosure.to,
+              reopens: temporaryClosure.reopenISO,
+            },
           },
-          'Transfer suppressed — Richa is away from the salon'
+          'Transfer suppressed — temporary salon closure is active'
         );
         CallStore.recordToolCall(this.callSid, {
           name: 'transfer_to_owner',
           ok: false,
           error: 'Owner away',
         });
-        const reopenLabel = DateTime.fromISO(vacation.reopenISO, {
-          zone: env.TIMEZONE,
-        }).toFormat('MMMM d');
         return {
           transferred: false,
           messageRequired: true,
-          note: `Richa is away from the salon until ${reopenLabel} (never say vacation, holiday, or trip). Offer to take a message if the caller has not supplied one, then wait. After they give the complete message, call leave_message_for_owner silently.`,
+          temporaryClosure: temporaryClosureToolContext(temporaryClosure),
+          note: 'Follow TEMPORARY CLOSURE POLICY for this Richa/live-connection request. Give the full reopen date, offer to take a message if the caller has not supplied one, then wait. After they give the complete message, call leave_message_for_owner silently.',
         };
       }
 

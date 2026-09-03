@@ -37,11 +37,12 @@ describe('buildInstructions — LOCATION', () => {
 // prompt (a header or rule is text the model can echo), and the reopen day is
 // named with its date so a closure longer than a week can't be misheard as
 // "this Thursday".
-describe('buildInstructions — RICHA IS AWAY (away closure)', () => {
+describe('buildInstructions — TEMPORARY CLOSURE POLICY', () => {
   it('injects an ACTIVE away block when "now" falls inside the range', () => {
     const instructions = buildInstructions(at('2026-09-05T12:00'));
-    expect(instructions).toContain('RICHA IS AWAY FROM THE SALON');
-    expect(instructions).toMatch(/Richa is away right now/);
+    expect(instructions).toContain('TEMPORARY CLOSURE POLICY');
+    expect(instructions).toMatch(/ACTIVE NOW salon-wide/);
+    expect(instructions).toMatch(/Public reason.*Richa is away/);
     expect(instructions).toMatch(/transfer_to_owner/);
     // Reopen day carries its full date, never a bare weekday.
     expect(instructions).toMatch(/Thursday, September 10/);
@@ -60,20 +61,33 @@ describe('buildInstructions — RICHA IS AWAY (away closure)', () => {
     }
   });
 
-  it("RICHA'S LINE agrees with the away block: inside her calling hours but away → NOT possible, names the reopen day", () => {
+  it("RICHA'S LINE agrees with the active closure even inside her calling hours", () => {
     const instructions = buildInstructions(at('2026-09-05T12:00')); // Sat noon, inside 09:00–21:00
     expect(instructions).toMatch(
-      /live transfer to Richa is NOT possible right now — Richa is away from the salon until Thursday, September 10/
+      /live transfer to Richa is NOT possible due to the active temporary salon closure/
     );
     expect(instructions).not.toMatch(/live transfer to Richa is POSSIBLE/);
   });
 
+  it('matches the closure explanation to the subject without inventing another provider whereabouts', () => {
+    const instructions = buildInstructions(at('2026-09-05T12:00'));
+    const policy = instructions.slice(
+      instructions.indexOf('TEMPORARY CLOSURE POLICY')
+    );
+    expect(policy).toMatch(/Named person.*say they are unavailable/i);
+    expect(policy).toMatch(/Salon or hours.*salon is temporarily closed/i);
+    expect(policy).toMatch(
+      /Booking, walk-in, or affected date.*closed that date/i
+    );
+    expect(policy).toMatch(/Different provider.*never say they are away/i);
+    expect(policy).toMatch(/full context once.*repeat only if asked/i);
+    expect(policy).toMatch(/sole whereabouts exception/i);
+  });
+
   it('injects an UPCOMING away block when "now" is within 14 days of the start', () => {
     const instructions = buildInstructions(at('2026-08-22T09:00'));
-    expect(instructions).toContain('RICHA IS AWAY FROM THE SALON');
-    expect(instructions).toMatch(/Richa will be away/);
-    // Must not claim she's already away before she actually is.
-    expect(instructions).not.toMatch(/Richa is away right now/);
+    expect(instructions).toContain('TEMPORARY CLOSURE POLICY');
+    expect(instructions).toMatch(/UPCOMING salon-wide/);
     // Transfers still work until she leaves.
     expect(instructions).toMatch(
       /live transfer to Richa is POSSIBLE right now/
@@ -82,7 +96,7 @@ describe('buildInstructions — RICHA IS AWAY (away closure)', () => {
 
   it('omits the away block entirely when no closure is active or upcoming', () => {
     const instructions = buildInstructions(at('2026-10-01T09:00'));
-    expect(instructions).not.toContain('RICHA IS AWAY FROM THE SALON');
+    expect(instructions).not.toContain('═══ TEMPORARY CLOSURE POLICY ═══');
   });
 });
 
@@ -314,7 +328,7 @@ describe("buildInstructions — transfer window (RICHA'S LINE)", () => {
       /follow-up choosing to speak\/connect "with her\."/i
     );
     expect(askedForRicha).toMatch(
-      /While Richa is away, every reply MUST include all three.*away from the salon.*full date in CURRENT STATUS.*offer to take a message/i
+      /temporary closure applies.*follow TEMPORARY CLOSURE POLICY.*offer a message/i
     );
     expect(askedForRicha).toMatch(
       /ONLY "Is Richa available, free, or there\?".*AMBIGUOUS/i
