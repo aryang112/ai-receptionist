@@ -825,15 +825,12 @@ async function createClient(customer: {
 }): Promise<string> {
   const { firstName, lastName } = splitName(customer.name);
   const phone = sanitisePhone(customer.phone);
-  // Phorest requires an email — generate a placeholder if none provided
-  const email =
-    customer.email?.trim() ||
-    `${phone || Date.now()}@placeholder.richasthreading.com`;
+  const email = customer.email?.trim();
   const payload = {
     firstName,
     lastName,
-    email,
-    mobile: phone,
+    ...(email ? { email } : {}),
+    ...(phone ? { mobile: phone } : {}),
     creatingBranchId: env.PHOREST_BRANCH_ID,
   };
 
@@ -867,7 +864,7 @@ async function createClient(customer: {
     firstName,
     lastName,
     ...(phone ? { mobile: phone } : {}),
-    email,
+    ...(email ? { email } : {}),
   });
 
   return response.clientId;

@@ -49,6 +49,7 @@ type ClientResolutionFetchOptions = {
 function clientResolutionFetch(options: ClientResolutionFetchOptions = {}) {
   const stats = {
     clientCreates: 0,
+    clientCreateBodies: [] as Array<Record<string, unknown>>,
     emailLookups: 0,
     nameLookups: 0,
     bookingClientIds: [] as string[],
@@ -116,6 +117,7 @@ function clientResolutionFetch(options: ClientResolutionFetchOptions = {}) {
         string,
         unknown
       >;
+      stats.clientCreateBodies.push(body);
       if (options.onClientCreate) {
         return options.onClientCreate(stats.clientCreates, body);
       }
@@ -701,6 +703,44 @@ describe('realPhorest client-resolution single-flight', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('omits absent or blank email from new-client payloads and preserves a real supplied email', async () => {
+    const { mock, stats } = clientResolutionFetch();
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+      name: 'No Email',
+      phone: '+1 (410) 555-1201',
+    });
+    await phorest.createAppointment('svc1', '2030-07-10T13:15:00', {
+      name: 'Blank Email',
+      phone: '+1 (410) 555-1202',
+      email: '   ',
+    });
+    await phorest.createAppointment('svc1', '2030-07-10T13:30:00', {
+      name: 'Real Email',
+      phone: '+1 (410) 555-1203',
+      email: ' person@example.com ',
+    });
+
+    expect(stats.clientCreateBodies).toHaveLength(3);
+    expect(stats.clientCreateBodies[0]).toMatchObject({
+      firstName: 'No',
+      lastName: 'Email',
+      mobile: '4105551201',
+      creatingBranchId: 'BRANCH',
+    });
+    expect(stats.clientCreateBodies[0]).not.toHaveProperty('email');
+    expect(stats.clientCreateBodies[1]).not.toHaveProperty('email');
+    expect(stats.clientCreateBodies[2]).toMatchObject({
+      email: 'person@example.com',
+      mobile: '4105551203',
+    });
+    expect(JSON.stringify(stats.clientCreateBodies)).not.toContain(
+      '@placeholder.'
+    );
   });
 
   it('coalesces concurrent and near-sequential normalized phone + full-name subjects', async () => {
