@@ -1,3 +1,28 @@
+# RELEASE — closure/message/client basics (2026-09-02)
+
+- [x] Exact caller-message capture and truthful SMS acknowledgement deployed
+      (`2d24cfe`). Live transfer is no longer reused as message content.
+- [x] Known salon-closure dates fail closed before availability and appointment
+      writes; transfer is suppressed while the closure is active.
+- [x] One global, config-driven temporary-closure policy replaces duplicated
+      Richa-specific scenarios. It adapts Richa, salon/hours, affected-booking,
+      and unrelated-provider wording and gives the complete reopen date.
+- [x] New Phorest client creation omits email when none was provided; no new
+      `@placeholder.richasthreading.com` address is manufactured.
+- [x] Production deployed after hours: behavior `eca23f1`, Railway
+      `de80d873-ce67-4f6d-a892-30e8ee53b663`, forwarding ON, health passing.
+- [ ] Monitor real forwarded calls and compare recordings against transcripts,
+      especially closure wording, message contents, skipped speech, and tool
+      outcomes.
+- [ ] Existing Tony Stark placeholder cleanup is separate and requires an
+      explicit customer-data edit; the release did not alter it.
+- [ ] Before multi-provider onboarding, add provider-level schedule/absence
+      state. `business.json.vacations` is salon-wide only.
+- [ ] Continue the open FR-02/04/05/06/07/11 work in
+      `docs/FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md` before enhancements.
+
+---
+
 # PLAN — Prompt audit follow-ups (2026-09-01) — from docs/PROMPT_AUDIT_2026-09-01.md
 
 Audit of the live prompt (ade8b16) + 34 test calls + OpenAI/ElevenLabs/Vapi
@@ -14,8 +39,8 @@ checklist. Fix ladder applies (note → schema → code → flow → prose).
 
 ## P0 — before the next deploy
 - [x] Deploy the vacation MVP to the direct-number stage with forwarding OFF
-      (Aryan explicitly authorized staging first; direct-dial acceptance is still
-      required before forwarding; rollback 51d62be6…)
+      (historical step; forwarding is now ON and the later subject-aware release
+      is deployed — see the release block above)
 - [ ] Transcription `language:'en'` + salon-vocabulary `prompt` behind env
       (both accepted live 2026-09-01; `keywords` rejected) — snapshot test for
       byte-identical payload when unset; one live call before flipping
@@ -65,7 +90,7 @@ calls + a blanket never-disclose rule.
 - [x] 5. Committed 58dabd1; state.md updated.
 - NOT in scope: Wix careers blurb (separate repo, publish needs approval),
   multilingual policy (flagged, no decision).
-- [ ] Deploy: needs `railway up` — Aryan's call.
+- [x] Deploy: included in the current production release; forwarding is ON.
 
 ---
 

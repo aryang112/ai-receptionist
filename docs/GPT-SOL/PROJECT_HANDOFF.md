@@ -71,7 +71,7 @@ configuration and tenant-keyed caches, not a wholesale service split.
 | `src/services/booking.ts`               | Service matching, aliases, suggestion/booking helpers                                                   | Catalog matching, not caller conversation state                            |
 | `src/services/callStore.ts`             | Append-only audit persistence and sanctioned reader                                                     | Avoid ad-hoc readers that reinterpret row semantics                        |
 | `src/routes/admin.ts`                   | Read-only owner dashboard/API and recording proxy                                                       | Must remain authenticated and avoid credential/PII leakage                 |
-| `src/core/hours.ts`                     | Salon hours, vacations, independent transfer window                                                     | `business.json` is the hours source of truth                               |
+| `src/core/hours.ts`                     | Salon hours, temporary salon closures, independent transfer window                                      | `business.json` is the hours source of truth                               |
 | `src/core/slots.ts`                     | Clean-grid normalization of Phorest availability                                                        | Always rounds starts upward and preserves valid runway                     |
 | `src/services/ownerSms.ts`, `digest.ts` | Best-effort owner messages and summaries                                                                | Failures must not break a live call                                        |
 
@@ -104,7 +104,7 @@ See [`../CODEMAP.md`](../CODEMAP.md) for the complete map.
   in flight;
 - active assistant audio item and Twilio playback marks for barge-in;
 - greeting protection and early-speech context;
-- transfer/failback/vacation state;
+- transfer/failback/temporary-closure state;
 - silence and maximum-duration timers;
 - transcript, token usage, cost estimate, outcome, and booking data.
 
@@ -124,63 +124,98 @@ The safest behavior is implemented in layers:
 
 Examples already in production include appointment ownership checks, an
 offered-slot whitelist, a fresh availability recheck, explicit booking and
-reschedule consent, person-as-service rejection, vacation-aware transfer,
+reschedule consent, person-as-service rejection, temporary-closure transfer,
 caller protections around blocklisting, and bounded retries.
 
 When a behavior is safety- or write-critical, a prompt-only fix is incomplete.
 
 ## Current deployed state
 
-**Observed, 2026-08-28:**
+**Observed, 2026-09-02:**
 
-- `gpt-realtime-2.1` is deployed and the health endpoint is passing.
-- Production voice is Marin. Voice remains environment-tunable and becomes
-  fixed after the first emitted audio in a Realtime session.
-- Prompt, tool definitions, salon policy, and explicit reasoning configuration
-  were not changed as part of the model upgrade.
-- A subsequent 2026-08-28 prompt release is implemented and tested locally but
-  is not claimed as deployed. It changes conversation guidance and high-salience
-  tool descriptions without changing the Realtime session shape.
-- Reasoning effort is omitted, so provider/default behavior applies.
-- Vonage forwarding is disabled. A direct Twilio call is the staging path.
-- Production and `main` are aligned again. Older `state.md` banners that say
-  otherwise are historical and are superseded by the newest entries.
+- Production behavior is commit `eca23f1`; Railway deployment
+  `de80d873-ce67-4f6d-a892-30e8ee53b663` is `SUCCESS`.
+- The active runtime is `gpt-realtime-2.1`, Marin, real Phorest, and
+  `gpt-4o-mini-transcribe`. Reasoning effort and parallel tool calls are not
+  explicitly configured.
+- Vonage forwarding is ON. Deploy only in an owner-confirmed after-hours quiet
+  window after confirming no active call. A direct Twilio call is not isolated
+  staging: it reaches this production service and can write to real Phorest.
+- The health endpoint passed after deployment; the container warmed 63 services
+  and loaded a complete 4,188-client, 28-page phone index.
+- The immediate rollback code baseline is commit `e1e5268`. Its old Railway
+  deployment is superseded/removed, so rollback means redeploying that commit,
+  not switching traffic to a still-running container.
+- `main` may contain documentation-only commits newer than the production
+  behavior commit. Do not infer a runtime mismatch from those docs commits.
 
-## Latest behavior findings
+## Latest behavior and release evidence
 
-The first audited 2.1 test call successfully understood “Is Richa available
-tomorrow at twelve?” as a question about a person and asked for the service
-before calling availability. This exercises the exact failure that previously
-treated Richa as a service. The transcript model produced near-homophones for
-some names, but the conversation behavior and a later high-quality recording
-transcription indicate the speech model understood the intended names.
+The current release combines three caller-facing reliability changes:
 
-The same call exposed two prompt/model interaction problems in the prompt that
-was deployed for that test:
+1. One global temporary-closure policy is built from the configured salon-wide
+   range, public explanation, and reopen date. Richa questions lead with
+   Richa's unavailability; hours questions lead with the salon closure; booking
+   requests for affected dates offer to check from reopening onward; questions
+   about another provider never claim that provider is away.
+2. Live transfer and message-taking are separate. Message delivery accepts no
+   model-authored summary; it sends only captured caller transcript content
+   after the caller actually supplies a message. Erica acknowledges accepted
+   delivery once without describing SMS/tool mechanics or promising a callback.
+3. New-client creation omits email entirely when the caller did not provide
+   one. It trims and preserves a real supplied email and never manufactures an
+   `@placeholder.richasthreading.com` address.
 
-1. Realtime 2.1 produced repeated tool preambles. The model appears to combine
-   native preamble behavior with the prompt's mandatory filler-before-every-tool
-   rule, and the application currently plays every spoken phase.
-2. The recognized-caller path bundled identity confirmation with a service
-   question. When the caller answered only the service question, identity
-   remained unresolved and was asked again. The prompt simultaneously says
-   “one question at a time” and tells the model to check the recognized name
-   “in the same breath” as acknowledging the request.
+The closure is reinforced below the prompt: known closed dates are rejected
+before availability/write calls, and owner transfer is suppressed while the
+salon closure is active. Tool results carry structured closure dates and the
+configured public explanation so the model does not have to reconcile
+duplicated scenario prose.
 
-The local prompt release removes both collisions: tool commentary is now
-selective and capped at one action update for a whole lookup sequence, while
-recognized identity is the sole question in its turn followed by an explicit
-wait. It also removes forced vocal tics, reflexive request echoing, and
-ready-made dialogue from later system notes. This is an implemented contract,
-not yet live evidence. Identity transitions remain model-tracked rather than a
-deterministic server authorization state, and response phases are not yet
-persisted.
+Verification passed in 44 files / 512 tests locally and under `TZ=UTC`, plus a
+clean TypeScript build and prompt-budget checks. Live `gpt-realtime-2.1`
+text-to-audio-transcript probes covered today/tomorrow hours, explicit and bare
+Richa requests, an affected booking request, another provider, and a three-turn
+hours conversation. These probes exercised the live model but intercepted
+business tools; they are not a direct-phone ear test or a real Phorest write.
 
-See [`PROMPT_ARCHITECTURE.md`](PROMPT_ARCHITECTURE.md) for the implementation
-rationale and release gate, and
-[`REALTIME_2_1_ANALYSIS.md`](REALTIME_2_1_ANALYSIS.md) for the source evidence.
+See [`PROMPT_ARCHITECTURE.md`](PROMPT_ARCHITECTURE.md) for the implemented
+prompt policy, [`REALTIME_2_1_ANALYSIS.md`](REALTIME_2_1_ANALYSIS.md) for model
+behavior, and
+[`../FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md`](../FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md)
+for remaining reliability work.
 
 ## Requirements that are documented but not implemented
+
+### Multi-provider availability and absence
+
+`business.json.vacations` currently represents a **salon-wide closure**. That
+is correct for Richa's one-person salon: the salon is closed because Richa is
+away. It is not a general stylist-time-off model.
+
+Before onboarding a salon where one provider can be away while others work,
+add tenant/provider data that answers independently:
+
+- whether the salon is open;
+- which provider the caller asked about;
+- whether that provider is working;
+- whether another qualified provider may serve the request.
+
+The conversational policy can remain subject-aware, but provider identity and
+availability must come from deterministic data. Never put one stylist's absence
+into the salon-wide closure list, and never infer a provider's whereabouts from
+the salon being closed.
+
+### Remaining write and response coordination
+
+The current release fixes known-closure gating, in-process new-client
+single-flight, exact message provenance, SMS outcome handling, and cancelled-
+appointment reschedule rejection. It does **not** yet provide the full per-call
+appointment mutation queue, semantic operation idempotency, restart-durable
+write reconciliation, source-response settlement barrier, or deterministic
+appointment-subject binding. Follow the current statuses and acceptance tests
+in
+[`../FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md`](../FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md).
 
 ### Early-arrival / squeeze-in policy
 
@@ -206,8 +241,9 @@ as unavailable and does not encode multitasking exceptions.
 
 ### Parked issues
 
-- A prior cancel failure passed an appointment ID where `list_appointments`
-  expected a client ID. It is parked pending recurrence/evidence.
+- The appointment-ID-as-client-ID failure now has a deterministic short-circuit
+  and tool-contract guidance. Keep its regression test; it is no longer merely
+  parked.
 - “Usual service” personalization is designed but not implemented.
 - The owner explicitly chose no phone-on-file updates and no last-four identity
   check. The prompt preserves the resolved account and does not ask for a new
@@ -215,6 +251,9 @@ as unavailable and does not encode multitasking exceptions.
   remains parked.
 - Historical Twilio 31924 disconnects have additional forensics. Escalate to
   Twilio support with a call-specific evidence bundle if they recur.
+- Tony Stark's already-existing placeholder email was not cleaned up by the
+  code release. New placeholder creation is fixed; modifying old customer data
+  remains an explicit, separate operation.
 
 ## Independent architecture assessment
 

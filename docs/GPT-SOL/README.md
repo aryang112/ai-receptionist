@@ -1,6 +1,6 @@
 # GPT-SOL project handoff
 
-Last refreshed: 2026-08-28
+Last refreshed: 2026-09-02
 
 This folder is the durable orientation package for an agent joining the AI
 Receptionist project. It synthesizes the current implementation, production
@@ -39,35 +39,43 @@ are not automatically current work. Confirm every item against the newest
 - Calls use Twilio Media Streams and OpenAI Realtime speech-to-speech with G.711
   mu-law passthrough. Phorest is the source of client, service, appointment,
   and availability data.
-- Production is staged on `gpt-realtime-2.1` with the Marin voice. The code
-  default remains Cedar, so do not infer the production voice from `env.ts`
-  alone.
+- Production behavior is commit `eca23f1`, Railway deployment
+  `de80d873-ce67-4f6d-a892-30e8ee53b663` (`SUCCESS`). The model is
+  `gpt-realtime-2.1`, the voice is Marin, and real Phorest is enabled.
 - Realtime reasoning effort is not explicitly configured. No reasoning-level
   change was made as part of this documentation pass.
-- Vonage forwarding is OFF. Production can be tested only by calling the
-  direct Twilio number until the owner deliberately re-enables forwarding.
-- The prompt rework is implemented and locally tested but was not deployed in
-  this documentation/change pass. Production still requires a direct Twilio
-  staging call and explicit release decision.
-- The test baseline at this refresh is 42 test files and 394 passing tests.
+- Vonage forwarding is ON. Do not deploy code, prompt, configuration, model,
+  voice, or Realtime session changes during business/live hours. A direct
+  Twilio call still reaches the production service and real Phorest.
+- The current prompt release is deployed. One config-driven temporary-closure
+  policy adapts its answer to the subject: questions about Richa describe
+  Richa's unavailability; hours questions describe the salon closure; affected
+  booking requests offer to check from reopening onward; questions about a
+  different provider never invent that provider's whereabouts.
+- Exact caller-message delivery is separate from live transfer and uses captured
+  caller transcript content. New Phorest clients no longer receive synthetic
+  placeholder email addresses when no email was supplied.
+- The test baseline at this refresh is 44 test files and 512 passing tests,
+  repeated successfully under `TZ=UTC`; the TypeScript build is clean.
 - Call records, tool history, both-side transcripts when enabled, recording
   references, usage, cost estimates, and warnings are available through the
   protected admin surface and the append-only call store.
 
 ## Highest-value open work
 
-1. Stage and listen-test the 2026-08-28 prompt release. Verify zero preambles on
-   routine price lookup, at most one across a two-date availability sequence,
-   and identity as the only question in its turn.
-2. Add response-phase instrumentation and deterministic server-owned identity
-   states if staged evidence shows prompt guidance alone is insufficient. The
-   current `UNCONFIRMED`/`CONFIRMED`/`REJECTED` contract is model-tracked.
-3. Design and implement the owner-defined squeeze-in policy. It is not yet in
-   production: an early caller may be accepted during another appointment only
-   when the in-progress service permits multitasking; facials, haircuts, and
-   Brazilian waxing explicitly do not.
-4. Keep monitoring the Richa-as-service safeguard. The latest 2.1 call handled
-   it correctly, but a single successful sample is evidence, not proof.
+1. Monitor real forwarded calls for closure wording, exact message capture,
+   unnecessary narration, and any skipped/odd speech. Compare the transcript
+   with the dual-channel recording before treating transcription as truth.
+2. Before the salon becomes multi-provider, add provider-specific schedules
+   and absence state. `business.json.vacations` currently means the whole salon
+   is closed and must never represent one stylist's time off while others work.
+3. Add the remaining appointment mutation coordinator, semantic idempotency,
+   timeout reconciliation, and response-settlement protections in
+   [`../FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md`](../FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md).
+4. Add response-phase instrumentation and deterministic server-owned identity
+   state if live evidence shows prompt guidance is insufficient.
+5. Keep service-history personalization, squeeze-in policy, reasoning/VAD
+   experiments, and external spam scoring behind the reliability work.
 
 ## Documentation convention
 

@@ -306,3 +306,27 @@ word ("vacation"), grep the *rendered* prompt AND every tool-result key/note
 for it — the section header and a JSON key were both handing it to the model.
 Lock it with a test that strips the explicit ban clause and asserts the word
 appears nowhere else. `scripts/render-prompt.ts` prints today's tail for this.
+
+## 2026-09-02 — A salon closure and a provider absence are different facts
+The current salon has one provider, so “Richa is away” truthfully explains a
+salon-wide closure. That shortcut will become wrong at a multi-stylist salon:
+one provider can be unavailable while the salon and other providers remain
+open. **Rule:** `business.json.vacations` means the whole salon is closed. Use
+it to gate salon hours, bookings, and transfer. Future individual time off must
+live in provider-specific availability data, and the model must never infer a
+different stylist's whereabouts from a salon closure.
+
+Caller wording should follow the subject without duplicating scenario prompts:
+Richa question → Richa unavailable plus reopen date; hours/salon question →
+temporary salon closure plus configured public reason; affected booking → offer
+to check from reopening; different provider → salon closure only. Keep the
+action gates deterministic and pass structured closure context to one global
+conversation policy.
+
+## 2026-09-02 — Missing optional customer data should stay missing
+Generating a plausible placeholder email made Phorest accept the client but
+polluted the customer record and could feed downstream marketing campaigns.
+**Rule:** if a caller did not provide an email and the provider accepts an
+email-less client, omit the field entirely. Trim and preserve a real supplied
+email; do not manufacture one. Fix future writes in the adapter and treat old
+placeholder-record cleanup as a separate, explicit data operation.

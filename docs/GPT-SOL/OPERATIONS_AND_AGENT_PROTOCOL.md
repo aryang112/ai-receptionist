@@ -18,7 +18,7 @@
 6. Reconcile the requested work with the newest `state.md` pending section.
    Old unchecked plan items are not permission to act.
 
-At the 2026-08-28 handoff baseline, `AGENTS.md` and `outputs/` are unrelated
+At the 2026-09-02 handoff baseline, `AGENTS.md` and `outputs/` are unrelated
 untracked paths. Preserve them and do not stage them as part of project work.
 
 ## Source-of-truth precedence
@@ -72,23 +72,27 @@ completed unit with a specific message.
 
 ## Live-call testing
 
-Vonage forwarding is currently OFF. This gives the direct Twilio number a safe
-staging role, but it does not make production writes harmless: the deployment
-uses real Phorest credentials.
+Vonage forwarding is currently ON. The direct Twilio number also reaches the
+same production service and real Phorest; it is not an isolated staging system.
+Do not replace the production container during business/live hours. Make
+runtime changes only in an owner-confirmed after-hours quiet window after
+checking for active calls and recording the rollback commit.
 
 Use this sequence:
 
 1. Test/build locally.
 2. Validate any changed Realtime session payload against the live API without
    a customer call.
-3. Deploy during a quiet window; Railway replacement can drop an in-flight
-   WebSocket even though shutdown is graceful.
+3. Confirm no queued, ringing, or in-progress calls, then deploy during the
+   approved quiet window; Railway replacement can drop an in-flight WebSocket
+   even though shutdown is graceful.
 4. Confirm `/health` and session acknowledgement.
 5. Make a direct Twilio test call with a scripted scenario.
 6. Review the call-store record, tool results, assistant/user transcript,
    recording, latency, usage, cache hit, warning logs, and any Phorest write.
 7. Update `state.md` with deployment and call evidence.
-8. Re-enable Vonage forwarding only on explicit owner direction.
+8. Leave forwarding in the state the owner requested. Never disable or
+   re-enable it merely as a side effect of a code release.
 
 Never use a real booking/cancel/reschedule scenario unless the intended test
 record and cleanup are understood.
@@ -128,7 +132,7 @@ audio before treating the input transcript as ground truth.
 | Name requested twice                | Caller-context note and exact previous caller answer        | Model-tracked identity state failed to resolve                     |
 | Silent caller after a tool          | Active response/pending response-create and tool completion | Response collision/retry orchestration                            |
 | Call drops mid-sentence             | Twilio error, OpenAI close, Railway deploy lifecycle        | Telephony/network/container rather than prompt                    |
-| Richa receives no transfer          | transfer window, vacation, Dial status/failback, SMS result | Transfer policy or carrier outcome                                |
+| Richa receives no transfer          | transfer window, temporary closure, Dial status/failback, SMS result | Transfer policy or carrier outcome                         |
 
 ## Rollback posture
 
@@ -155,9 +159,12 @@ Every meaningful agent handoff should answer:
 - What is the exact safest next action?
 - What rollback point exists?
 
-For the current handoff, the prompt/state design and local tests are complete.
-The safest next action is a direct Twilio staging evaluation of the scenarios in
-[`PROMPT_ARCHITECTURE.md`](PROMPT_ARCHITECTURE.md), followed by an explicit
-deploy decision. Response-phase instrumentation and deterministic server-owned
-identity state are the next hardening layers if the staged evidence requires
-them. The early-arrival policy remains a separate subsequent implementation.
+For the current handoff, production is already running behavior commit
+`eca23f1` on Railway deployment
+`de80d873-ce67-4f6d-a892-30e8ee53b663`, and forwarding is ON. The safest next
+action is monitoring real calls and comparing recordings, transcripts, tool
+results, and owner-message outcomes. Do not redeploy merely to test wording.
+The next code release should come from the prioritized reliability backlog and
+use the same after-hours gate. Multi-provider absence, service-history
+personalization, early-arrival policy, response-phase instrumentation, and
+deterministic identity authorization remain separate future work.

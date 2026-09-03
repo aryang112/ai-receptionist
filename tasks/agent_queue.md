@@ -1,5 +1,13 @@
 # AGENT QUEUE — Erica (AI Receptionist)
 
+> **Current status, 2026-09-02:** this file is an implementation-history archive;
+> all tasks below are already completed unless a newer top-level status says
+> otherwise. The current baseline is 44 files / 512 tests, production behavior
+> is `eca23f1`, forwarding is ON, and current work is tracked at the top of
+> `state.md`, `tasks/todo.md`, and
+> `docs/FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md`. Do not claim an old queue
+> item or treat provisional wording below as current salon policy.
+
 > **Purpose:** executable task queue for Opus worker agents. Fable (Jarvis) is
 > advisor/leader: it specs tasks here and reviews results; workers implement.
 > Only NEW tasks live here — the historical backlog stays in `tasks/todo.md`.

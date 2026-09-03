@@ -1,9 +1,11 @@
 # Erica prompt architecture and rationale
 
-Last updated: 2026-08-28
+Last updated: 2026-09-02
 
-Implementation status: code and automated tests complete on the working branch;
-not deployed or validated by a direct Twilio call as part of this change.
+Implementation status: deployed in production behavior commit `eca23f1`;
+automated, UTC, build, prompt-budget, and live Realtime model probes passed.
+The latest closure probes intercepted business tools and are not a direct-phone
+ear test or a real Phorest write.
 
 ## Purpose
 
@@ -27,7 +29,7 @@ of prompt design and must be reviewed together.
 | Layer | Canonical source | Role |
 | --- | --- | --- |
 | Core instructions | `buildInstructions()` | Role, speaking behavior, business facts, flows, privacy, and escalation |
-| Dynamic business context | `buildInstructions()` tail | Salon-local date/time, today's status, transfer availability, vacation state, and optional live price catalog |
+| Dynamic business context | `buildInstructions()` tail | Salon-local date/time, today's status, transfer availability, temporary-closure state, and optional live price catalog |
 | Tool contracts | `TOOL_DEFINITIONS` | High-salience argument and confirmation rules beside each function |
 | Caller context | `buildRecognizedCallerContext()` and `buildUnrecognizedCallerContext()` | Caller-ID match state and the next permitted identity/contact step |
 | Tool-result coaching | Individual tool handlers | State-specific next action based on the result that just occurred |
@@ -117,9 +119,38 @@ The replacement rule is sequence-based:
 
 This is a prompt-level control, not proof that Realtime will always emit zero
 or one spoken preamble. The application still streams all emitted audio and
-does not persist response-phase labels. A staged call and phase instrumentation
-remain the right way to determine whether provider-native preambles need an
-additional code-level guard.
+does not persist response-phase labels. Controlled after-hours call testing and
+phase instrumentation remain the right way to determine whether provider-native
+preambles need an additional code-level guard.
+
+## Temporary-closure policy
+
+One global, config-driven policy replaces duplicated Richa-specific scenario
+scripts. It receives the closure range, reopen date, whether the range is
+active or upcoming, and the salon-approved public explanation from
+`business.json`.
+
+The first affected answer adapts to what the caller asked:
+
+- Richa or live connection: state that Richa is unavailable, give the complete
+  reopen date, and offer to take a message;
+- salon hours/access: state that the salon is temporarily closed, give the
+  configured public reason, and provide the reopen date;
+- booking/walk-in on an affected date: state that the salon is closed and offer
+  to check availability from reopening onward without promising an unchecked
+  slot;
+- another provider: do not claim that person is away; explain only the
+  salon-wide closure and reopen date.
+
+After the first complete explanation, Erica may answer follow-ups briefly
+without reciting the full closure story on every turn. The model-facing prompt
+may contain the word “vacation” only in the explicit prohibition against saying
+it; caller-facing wording uses the approved public explanation.
+
+This conversational policy is reinforced by deterministic handlers: closed
+dates cannot reach Phorest availability/writes, and active closure suppresses
+live transfer. `business.json.vacations` is a salon-wide closure mechanism,
+not provider time off. Multi-provider absences require separate provider data.
 
 ## Identity and contact flow
 
@@ -183,14 +214,15 @@ artificial speech:
 3. forced smile/laughter/backchannel directions;
 4. quotable reply examples in caller, silence, duration, and goodbye notes.
 
-Repeated transfer prose was also collapsed into four mutually exclusive
-branches: explicit request for Richa, self-service first, live transfer, and
-message mode. No business capability or safety rule was intentionally removed.
+Repeated transfer prose was also consolidated around explicit requests,
+self-service, live transfer, exact caller-message collection, and the global
+temporary-closure state. No business capability or safety rule was
+intentionally removed.
 
 Using the repository's conservative `characters / 4` estimate, the fallback
-prompt is about 3.9k tokens. The test fixture combining 63 realistically named
-services, active vacation state, and transfer failback remains below 5k. These
-are regression budgets, not tokenizer-accurate billing figures.
+prompt remains below 4.2k tokens. The test fixture combining 63 realistically
+named services, active closure state, and transfer failback remains below 5k.
+These are regression budgets, not tokenizer-accurate billing figures.
 
 ## Verification and release gate
 
@@ -204,10 +236,12 @@ Automated tests lock:
   control-whitespace handling;
 - descriptive, unscripted silence/duration/goodbye notes;
 - confirmation and successful-result language beside every write tool.
+- subject-aware closure branches, complete reopen date, unrelated-provider
+  protection, and the deterministic transfer gate;
+- the caller-message provenance boundary and absence of SMS/tool narration.
 
 String tests prove that the contract is present; they do not prove natural
-speech. Before deployment, use the direct Twilio staging number and evaluate at
-least:
+speech. Before any next prompt deployment, evaluate at least:
 
 1. price lookup: zero spoken preambles;
 2. two-date availability: no more than one preamble for the sequence;
@@ -218,6 +252,8 @@ least:
 7. booking, reschedule, and cancellation: no write before explicit yes and no
    success claim after failure;
 8. caller interruption and goodbye: no internal or call-ended narration.
+9. temporary closure: hours today, hours tomorrow, the reopen day, explicit
+   and bare Richa requests, affected booking, and a different provider.
 
 Safety, privacy, legal greeting, and write boundaries are hard gates. Judge
 naturalness with blind side-by-side listening against the prior prompt rather
@@ -227,10 +263,11 @@ usage, and outcome.
 
 ## Deliberately out of scope
 
-This prompt release does not change the model, voice, reasoning effort, VAD,
-noise reduction, session schema, forwarding, deployment, or Phorest data. It
-also does not implement response-phase suppression, deterministic identity
-authorization, two-phase write state, or the owner's future early-arrival
+The closure/email release did not change the model, voice, reasoning effort,
+VAD, noise reduction, or Realtime session schema. It does not implement
+provider-specific time off, response-phase suppression, deterministic identity
+authorization, the full appointment mutation/idempotency/reconciliation layer,
+service-history personalization, or the owner's future early-arrival
 multitasking policy.
 
 ## Official references

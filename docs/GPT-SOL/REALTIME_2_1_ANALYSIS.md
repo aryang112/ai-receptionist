@@ -1,6 +1,6 @@
 # OpenAI Realtime 2.1 analysis
 
-Last evidence refresh: 2026-08-28
+Last evidence refresh: 2026-09-02
 
 ## Model and current controls
 
@@ -18,7 +18,7 @@ prosody and avoids a separate STT → text model → TTS latency chain.
 
 | Control                      | Current project state                                                             | Consequence                                                         |
 | ---------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Model                        | `gpt-realtime-2.1`                                                                | Production upgrade completed without changing tools or salon policy |
+| Model                        | `gpt-realtime-2.1`                                                                | Active production model                                             |
 | Voice                        | Marin in production; Cedar code fallback                                          | Natural female production voice; restart required for env change    |
 | Output modality              | Audio                                                                             | Audio transcript events are also captured for observability         |
 | Audio format                 | PCMU input/output                                                                 | Twilio frames pass through verbatim                                 |
@@ -26,7 +26,7 @@ prosody and avoids a separate STT → text model → TTS latency chain.
 | VAD threshold/silence/prefix | Env-tunable; current defaults 0.6 / 700 ms / 300 ms                               | Noise/interruption tradeoff can be tuned without changing code      |
 | Noise reduction              | Near-field default                                                                | Appropriate starting point for phone audio                          |
 | Truncation                   | Retention ratio 0.8                                                               | Preserves prompt caching better during long calls                   |
-| Input transcription          | Env-gated; historically off by default, enabled only after live schema validation | Transcript is asynchronous and advisory                             |
+| Input transcription          | `gpt-4o-mini-transcribe` in production after live schema validation               | Transcript is asynchronous and advisory                             |
 | Reasoning effort             | Omitted                                                                           | Provider/default behavior; no reasoning change was made             |
 | Parallel tool calls          | Not explicitly configured                                                         | Do not assume parallel execution semantics                          |
 | Response phase handling      | All emitted audio/text is streamed; phase is not persisted                        | Native preambles can become audible duplicates                      |
@@ -45,7 +45,7 @@ Realtime 2 follows explicit instructions closely. That improves structured
 flows, but conflicting rules become more visible. The prompt used for the first
 2.1 call simultaneously said “one question at a time,” “check identity in the
 same breath,” and “before every tool call say filler.” Those conflicts were
-removed in the local 2026-08-28 prompt release.
+removed in the deployed prompt release.
 
 Prefer:
 
@@ -60,7 +60,7 @@ Prefer:
 Realtime 2 can speak brief preambles before tool use and can produce multiple
 response phases. The prompt used for the audited call also required spoken
 filler before every tool call. Both mechanisms fired, so the caller heard
-duplicate commentary. The local prompt now permits at most one action update
+duplicate commentary. The deployed prompt now permits at most one action update
 for a whole noticeably slow lookup sequence and explicitly skips routine price
 lookups and several other fast paths. The application still forwards all audio
 and does not record a phase label, so prompt success must be verified by a
@@ -93,7 +93,31 @@ stable cached prefix and retention-ratio truncation; the latest call achieved a
 96–98% cache hit rate after the first turn. Prompt growth is therefore both a
 behavior problem and an operating-cost problem.
 
-## Latest audited call
+## 2026-09-02 release evidence
+
+The current production prompt is commit `eca23f1`. Live Realtime
+text-to-audio-transcript probes used the exact local prompt and exercised:
+
+- hours today, tomorrow, and the September 10 reopening day across one
+  conversation;
+- explicit and bare requests for Richa;
+- a booking request during the closure;
+- a question about an unrelated provider.
+
+The final three-turn hours probe explained the temporary closure and reason
+once, gave the September 10 reopen date, avoided repeating the full recital on
+the next turn, and returned the configured September 10 hours when asked. The
+Richa probes said she was unavailable through the closure and offered a
+message. The unrelated-provider probe did not claim that provider was away.
+
+These were live-model probes, not direct-phone calls: business tools were
+intercepted and speech quality was assessed from output transcripts rather
+than a phone recording. The model occasionally offered a Richa message in an
+unrelated-provider sample despite the contrary policy. That is not material to
+the current one-provider salon, but it is evidence that future multi-provider
+routing must be deterministic rather than prompt-only.
+
+## Historical 2026-08-28 audited call
 
 **Observed:** a direct Twilio test call after the 2.1 deployment lasted about
 98 seconds. It used Marin/PCMU, completed one successful
@@ -129,7 +153,7 @@ then two similar “let me check” preambles once the service was known.
 “before EVERY tool call” filler instruction overlap. The code then streams all
 spoken phases. This is a policy collision, not a Phorest or latency failure.
 
-**Implemented locally, not yet deployed:**
+**Resolved in the deployed prompt:**
 
 1. The universal filler mandate was removed.
 2. The prompt allows at most one brief action update for a whole lookup
@@ -138,10 +162,10 @@ spoken phases. This is a policy collision, not a Phorest or latency failure.
    routine fast lookups, and `end_call` explicitly receive no preamble.
 4. Tests lock the policy and both fallback/full-catalog prompt budgets.
 
-**Still required:** stage price, availability, booking, and slow/error calls.
-Capture response-phase metadata so a recurrence can be attributed. Suppress a
-provider commentary phase in code only if the prompt cannot make output
-consistent and the phase contract proves stable.
+**Still required:** monitor real forwarded price, availability, booking, and
+slow/error calls. Capture response-phase metadata so a recurrence can be
+attributed. Suppress a provider commentary phase in code only if the prompt
+cannot make output consistent and the phase contract proves stable.
 
 Avoid a brittle list of forbidden phrases; the duplication is structural.
 
@@ -159,7 +183,7 @@ told Erica to acknowledge the request and check the name “in the same breath.�
 The first turn created two answerable questions, and the model had no
 deterministic identity state transition because the reply did not answer both.
 
-**Implemented locally, not yet deployed:** recognized-caller context starts at
+**Resolved in the deployed prompt:** recognized-caller context starts at
 `UNCONFIRMED`, makes identity the only question in the turn, requires a stop and
 wait, preserves the original request, and defines clear yes/no/unrelated-answer
 handling. Public hours, services, prices, and availability do not require
@@ -170,8 +194,8 @@ and the caller-context builders now have focused tests.
 conversation contract, not a server-owned enum that authorizes every account
 tool. A future hardening pass should track `unconfirmed`, `confirmed`, and
 `rejected` in call state and reject account reads/writes while unresolved. The
-staged release test must still cover partial answers, corrections, “no,” and a
-conversational detour.
+future controlled test must still cover partial answers, corrections, “no,”
+and a conversational detour.
 
 ## Person versus service: current conclusion
 

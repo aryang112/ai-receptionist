@@ -8,8 +8,9 @@ contains the full history and must still be read before relevant changes.
 - Use `.js` extensions in local TypeScript imports; this project emits ESM.
 - `PhorestPort` is the appointment-system contract. Change the interface, real
   adapter, mock, and tests together.
-- `src/config/business.json` is the canonical hours, closures, vacation, and
-  location source. Do not “fix” hours in prompt text or environment variables.
+- `src/config/business.json` is the canonical hours, salon-wide temporary
+  closures, and location source. Do not “fix” hours or closure dates in prompt
+  text or environment variables.
 - Tool JSON schemas, `toolSchemas.ts`, handlers, and tests must describe the
   same arguments. A model-facing schema test alone does not test runtime
   rejection, and a Zod test alone does not protect the model contract.
@@ -89,8 +90,9 @@ contains the full history and must still be read before relevant changes.
 - End-call and transfer paths drain queued audio. A caller barge-in during a
   goodbye cancels the pending hangup.
 - Live transfer hours are Richa's independent calling window (default
-  09:00–21:00 salon time), not salon operating hours. Active vacation still
-  suppresses the live call and uses SMS message delivery.
+  09:00–21:00 salon time), not salon operating hours. An active temporary
+  salon closure still suppresses the live call and routes an actual caller
+  message through the separate exact-message tool.
 - A failed transfer returns to a new Erica segment without duplicating the
   original call start or recording record and without dialing Richa twice.
 
@@ -112,6 +114,11 @@ contains the full history and must still be read before relevant changes.
 - Cancel/reschedule acts only on appointment IDs served into the current call.
 - Server-resolved names should drive owner SMS, not untrusted model-supplied
   identity text.
+- Message-taking accepts exact captured caller content, not a model-written
+  summary or a generic transfer reason. Erica may acknowledge accepted delivery
+  once but must not narrate texting/tool mechanics or promise a callback.
+- New-client creation omits the email field when no real email was supplied.
+  Never manufacture a placeholder address to satisfy a provider request.
 - A Phorest client must never be automatically spam-blocklisted.
 - Running-late messages should preserve how late the caller said they are and
   whether the existing schedule can squeeze them in.
@@ -133,6 +140,21 @@ The current defense is intentionally redundant:
 
 Do not replace these layers with a longer prompt paragraph. The latest 2.1 call
 passed this scenario, but keep it in regression tests and live-call scripts.
+
+## Salon closure versus provider absence
+
+`business.json.vacations` is currently a salon-wide closure mechanism. In this
+one-person salon, “Richa is away” can truthfully explain why the salon is closed.
+The global prompt policy still follows the caller's subject:
+
+- questions about Richa describe Richa's unavailability and the reopen date;
+- questions about hours/salon access describe the salon closure and reason;
+- affected booking requests offer to check from reopening onward;
+- questions about another provider never invent that provider's absence.
+
+For a future multi-stylist salon, individual provider time off must be modeled
+separately from salon hours. Never add one stylist's absence to this closure
+list while other providers or the salon remain available.
 
 ## Fix ladder
 
@@ -158,7 +180,8 @@ string assertion on the prompt.
 - Production log retrieval should use the exact Railway deployment ID when a
   newer deployment has replaced the container.
 - Never deploy merely to discover whether a change compiles or passes tests.
-  Use local tests/build first, then the direct Twilio staging path while Vonage
-  forwarding remains off.
+  Use local tests/build first. Forwarding is currently on, and the direct
+  Twilio number reaches the same production service, so deploy only in an
+  owner-confirmed after-hours quiet window.
 - Prepend new dated status to `state.md`; do not erase history. The top of that
   file is authoritative when old summaries conflict.

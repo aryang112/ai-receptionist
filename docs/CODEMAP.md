@@ -156,11 +156,12 @@ Caller dials Twilio number
 - **hours.ts** — `getHoursStatus(date)` (open/closed/closedRightNow/nextOpen),
   `getOpenClose(date)`. Reads `config/business.json` (the hours source of truth).
   V1: `vacations` ranges close those dates like closedDates;
-  `getActiveOrUpcomingVacation(now?)` → `{from,to,reopenISO}|null` (active or
-  starting ≤14 days) drives the prompt block + transfer gate.
-  `getVacationForDate(iso)` → the closure covering ANY date (feeds the
-  suggest_availability away-date note). `nextOpen` names the date when the
-  next opening is 7+ days out (2026-09-01: bare "Thursday" pointed at a closed day).
+  `getActiveOrUpcomingVacation(now?)` →
+  `{from,to,reopenISO,publicExplanation?}|null` (active or starting ≤14 days)
+  drives the prompt block + transfer gate. `getVacationForDate(iso)` returns
+  the same public closure context for ANY affected date (feeds the
+  suggest_availability note). `nextOpen` names the date when the next opening
+  is 7+ days out (2026-09-01: bare "Thursday" pointed at a closed day).
   `isWithinTransferWindow(now?)` — the HUMAN transfer window (2026-08-24, the
   Holly fix): live-transfer gate follows Richa's waking hours
   (`TRANSFER_WINDOW_START/END`, default 09:00–21:00 salon TZ, end-exclusive),

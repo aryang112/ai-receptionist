@@ -2,11 +2,12 @@
 
 **Created:** 2026-09-02
 
-**Production behavior commit:** `2d24cfe`
+**Production behavior commit:** `eca23f1`
 
-**Railway deployment:** `19df1b8b-ead0-4a6d-82da-c60e15d5eb4a` (`SUCCESS`)
+**Railway deployment:** `de80d873-ce67-4f6d-a892-30e8ee53b663` (`SUCCESS`)
 
-**Immediate rollback:** `d92ad566-82fb-4877-9199-b6fa381c3a4b`
+**Immediate rollback code baseline:** `e1e5268` (the superseded Railway
+deployment is removed, so redeploy the commit)
 
 **Operational state:** forwarding is ON
 
@@ -37,6 +38,11 @@ The owner authorized the first scoped after-hours release later that evening;
 its exact status is recorded below. This document does not authorize any
 additional production change.
 
+**Configuration boundary:** `business.json.vacations` means the entire salon
+is closed. It is correct for the current one-person salon. A future salon where
+one stylist is away while others work needs provider-specific availability;
+never represent that case with this salon-wide closure mechanism.
+
 ## After-hours release status — 2026-09-02
 
 The deployed release intentionally fixes the vacation-period basics without
@@ -51,16 +57,18 @@ claiming the entire P0 architecture is complete.
 | FR-09 SMS acceptance | **Fixed** | Five-second cap, SID requirement, explicit positive/terminal/unknown status mapping, and truthful result-specific speech. |
 | FR-10 cancelled reschedule | **Fixed** | Cancelled appointment IDs are rejected by reschedule in the same call. |
 | FR-19 unnecessary narration | **Fixed for reproduced flows** | Message-taking is silent before the tool, then one ordinary acknowledgement; direct hours/prices stay one-line. Broader conversation-quality work remains P2. |
-| Richa away/return flow | **Fixed for the active closure** | Explicit connection requests immediately say away from the salon, back Thursday, September 10, and offer a message. Availability-only wording clarifies first. |
+| Subject-aware away/closure flow | **Fixed for the active closure** | One config-driven policy distinguishes Richa questions, salon/hours questions, affected bookings, and unrelated providers. Explicit and bare Richa requests state unavailability plus the full September 10 reopen date; unrelated-provider whereabouts are never invented. |
+| New-client email | **Fixed for new writes** | A supplied email is trimmed and included; absent/blank email is omitted. No synthetic placeholder is generated. Existing placeholder records, including Tony Stark, are unchanged. |
 | FR-02 / FR-04 / appointment portion of FR-05 / FR-06 / FR-07 / FR-11 | **Still open** | Per-call appointment mutation queue, semantic idempotency, appointment-write reconciliation, source-response settlement, fatal-Realtime away fallback, and appointment-subject binding were not mixed into this vacation release. |
 
-Release evidence: 44 files / 510 tests passed locally and under `TZ=UTC`;
-TypeScript build, formatting, and diff checks passed; six intercepted live
-`gpt-realtime-2.1` scenarios passed on the exact candidate. Deployment health
-was HTTP 200, with 63 real services and 4,187 clients loaded completely. No
-direct phone ear call was made during this automated pass, so continue to
-listen closely to the first real calls and use the rollback above on any
-material regression.
+Release evidence: 44 files / 512 tests passed locally and under `TZ=UTC`;
+TypeScript build, formatting, diff, and prompt-budget checks passed. Live
+`gpt-realtime-2.1` probes on the exact candidate covered today/tomorrow/reopen
+hours, explicit and bare Richa requests, affected booking, and an unrelated
+provider. Deployment health was HTTP 200, with 63 real services and 4,188
+clients loaded completely. No direct phone ear call was made during this
+automated pass, so continue to compare recordings with transcripts and use the
+rollback code baseline above on any material regression.
 
 ## Is this a prompt fix?
 
@@ -200,7 +208,8 @@ errors during the basic vacation-period flow.
 | One known or new caller books one service, API responds normally | Passed in tests/synthetic probes; not fully production-certified | Monitor |
 | Caller checks hours/prices/availability | Passed in tests/synthetic probes | Monitor |
 | Caller books Sep 10 or later; Sep 1–9 ordinary closure lookup succeeds | Passed in tests/synthetic probes | Monitor |
-| Caller asks for Richa and follows the expected clarification/message path | Passed in tests/synthetic probes | Monitor closely because FR-08/FR-09 affect failure variants |
+| Caller asks for Richa during the closure | Explicit or bare requests state that she is unavailable through September 10 and offer a message; no clarification is needed because both meanings are unavailable | Monitor message delivery failure variants |
+| Caller asks about another provider during a salon-wide closure | Policy does not invent that provider's absence; live model had one sample that still offered a Richa message unnecessarily | Future multi-provider hardening; current one-provider salon unaffected |
 | One caller asks for two services | Normal customer request, not an exotic edge case; unsafe concurrency was reproduced | P0 |
 | Phorest write times out after reaching the provider | Uncommon timing case, high impact because it can duplicate records | P0 |
 | Availability fails on a known closed date | Failure-path edge case, but can violate the vacation promise | P0 |

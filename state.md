@@ -1,7 +1,20 @@
 # STATE — AI Receptionist (Erica)
 
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
-> Last major work: 2026-09-02 — subject-aware closure + no-placeholder-email release deployed.
+> Last major work: 2026-09-02 — agent handoff synchronized after the subject-aware closure release.
+
+## 2026-09-02 — agent handoff synchronized (documentation only)
+
+- Refreshed the durable `docs/GPT-SOL/` orientation package, `docs/CODEMAP.md`,
+  `tasks/lessons.md`, `tasks/todo.md`, and the functional reliability backlog
+  to match the deployed `eca23f1` behavior and forwarding-ON operating state.
+- The handoff now distinguishes the current salon-wide temporary closure from
+  future provider-specific absence, records subject-aware caller wording,
+  exact caller-message provenance, real-email-only client creation, live-model
+  probe evidence, the 512-test baseline, remaining architecture work, and the
+  after-hours-only release rule.
+- No runtime code, environment, Phorest data, forwarding, model, voice, session
+  field, or Railway deployment changed during this documentation pass.
 
 ## ✅ DEPLOYED 2026-09-02 ~9:50 PM ET: subject-aware closure + real-email-only clients
 
