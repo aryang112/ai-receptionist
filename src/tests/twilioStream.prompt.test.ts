@@ -64,7 +64,7 @@ describe('buildInstructions — TEMPORARY CLOSURE POLICY', () => {
   it("RICHA'S LINE agrees with the active closure even inside her calling hours", () => {
     const instructions = buildInstructions(at('2026-09-05T12:00')); // Sat noon, inside 09:00–21:00
     expect(instructions).toMatch(
-      /live transfer to Richa is NOT possible due to the active temporary salon closure/
+      /live transfer to Richa is NOT possible — Richa is away until Thursday, September 10/
     );
     expect(instructions).not.toMatch(/live transfer to Richa is POSSIBLE/);
   });
@@ -74,12 +74,16 @@ describe('buildInstructions — TEMPORARY CLOSURE POLICY', () => {
     const policy = instructions.slice(
       instructions.indexOf('TEMPORARY CLOSURE POLICY')
     );
-    expect(policy).toMatch(/Named person.*say they are unavailable/i);
-    expect(policy).toMatch(/Salon or hours.*salon is temporarily closed/i);
     expect(policy).toMatch(
-      /Booking, walk-in, or affected date.*closed that date/i
+      /Person named in the public reason.*MUST say unavailable.*full reopen date before any message offer.*explicit SPEAK, TALK, CONNECT, or TRANSFER.*never clarify/i
     );
-    expect(policy).toMatch(/Different provider.*never say they are away/i);
+    expect(policy).toMatch(/Salon or hours.*temporary closure.*public reason/i);
+    expect(policy).toMatch(
+      /Booking, walk-in, or affected date.*closed.*offer to check.*never promise a slot before checking/i
+    );
+    expect(policy).toMatch(
+      /Different provider.*never say they are away.*salon closure.*full reopen date.*Do not offer the owner a message unless asked/i
+    );
     expect(policy).toMatch(/full context once.*repeat only if asked/i);
     expect(policy).toMatch(/sole whereabouts exception/i);
   });
@@ -319,25 +323,28 @@ describe("buildInstructions — transfer window (RICHA'S LINE)", () => {
     );
     expect(askedForRicha).toMatch(/ASKED FOR RICHA/);
     expect(askedForRicha).toMatch(
-      /SPEAK, TALK, CONNECT, or TRANSFER.*always an explicit live connection/i
+      /SPEAK, TALK, CONNECT, or TRANSFER.*is an explicit live connection/i
     );
     expect(askedForRicha).toMatch(
       /Never clarify those words as appointment availability/i
     );
     expect(askedForRicha).toMatch(
-      /follow-up choosing to speak\/connect "with her\."/i
+      /follow-up choosing to speak\/connect "with her" is too/i
     );
     expect(askedForRicha).toMatch(
-      /temporary closure applies.*follow TEMPORARY CLOSURE POLICY.*offer a message/i
+      /temporary closure.*follow TEMPORARY CLOSURE POLICY.*offer a message/i
     );
     expect(askedForRicha).toMatch(
-      /ONLY "Is Richa available, free, or there\?".*AMBIGUOUS/i
+      /ONLY "Is Richa available, free, or there\?".*AMBIGUOUS while RICHA'S LINE says POSSIBLE/i
     );
     expect(askedForRicha).toContain(
       "Are you checking Richa's availability for an appointment, or would you like me to connect you with her?"
     );
     expect(askedForRicha).toMatch(
-      /Appointment service, date, or time context follows the booking flow/i
+      /Service, date, or time context follows the booking flow/i
+    );
+    expect(askedForRicha).toMatch(
+      /Under the closure.*both meanings are unavailable.*without clarifying/i
     );
     expect(
       askedForRicha.indexOf('SPEAK, TALK, CONNECT, or TRANSFER')

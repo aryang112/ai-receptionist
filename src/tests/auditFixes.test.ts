@@ -81,6 +81,7 @@ describe('P0 — closed/vacation days must yield ZERO open slots (fetchOpenSlots
       publicExplanation: 'Richa is away',
     });
     expect(res.note).toMatch(/TEMPORARY CLOSURE POLICY/);
+    expect(res.note).toMatch(/offer to check dates after reopening/);
     expect(res.note.toLowerCase()).not.toMatch(/\bvacation\b/);
     expect(res.note).toMatch(/Never call a closed date fully booked/);
   });

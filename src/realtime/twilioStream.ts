@@ -429,7 +429,7 @@ function temporaryClosureToolContext(closure: ActiveOrUpcomingVacation) {
 }
 
 const TEMPORARY_CLOSURE_RESULT_NOTE =
-  'This date falls within a configured temporary salon closure. Follow TEMPORARY CLOSURE POLICY, match the explanation to what the caller asked about, give the full reopen date, and offer the first bookable dates after reopening. Never call a closed date fully booked.';
+  'This date falls within a configured temporary salon closure. Follow TEMPORARY CLOSURE POLICY, match the explanation to what the caller asked about, give the full reopen date, and offer to check dates after reopening. Never call a closed date fully booked.';
 
 /** H1: strip Phorest's "3) " style ordinal prefixes for the hot-loaded price
  * list — same cosmetic strip get_prices applies (kept as a local copy here so
@@ -607,20 +607,20 @@ export function buildInstructions(
     ? `
 
 ═══ TEMPORARY CLOSURE POLICY ═══
-- ${temporaryClosureActive ? 'ACTIVE NOW' : 'UPCOMING'} salon-wide: ${closureRangeLabel}; reopens ${reopenLabel}. Public reason and sole whereabouts exception: "${closureExplanation}." Never say vacation, holiday, or trip or guess why.
-- First relevant answer: give the reason, full reopen date, and useful next step. Adapt its subject:
-  - Named person → say they are unavailable; during an ACTIVE live-connection request, offer a message.
-  - Salon or hours → say the salon is temporarily closed.
-  - Booking, walk-in, or affected date → say closed that date and offer ${reopenLabel} onward.
-  - Different provider → mention only the salon closure; never say they are away.
-- Give full context once; repeat only if asked or correcting confusion. Never call closure dates fully booked. UPCOMING applies only to its date range.`
+- ${temporaryClosureActive ? 'ACTIVE NOW' : 'UPCOMING'} salon-wide: ${closureRangeLabel}; reopens ${reopenLabel}. Public reason (sole whereabouts exception): "${closureExplanation}." Never say vacation, holiday, or trip or guess why.
+- First affected answer gives the reason, full reopen date, and next step, tailored to:
+  - Person named in the public reason → MUST say unavailable with the full reopen date before any message offer. Explicit SPEAK, TALK, CONNECT, or TRANSFER: never clarify.
+  - Salon or hours → temporary closure plus public reason.
+  - Booking, walk-in, or affected date → closed; offer to check ${reopenLabel} onward; never promise a slot before checking.
+  - Different provider → never say they are away; give only the salon closure and full reopen date. Do not offer the owner a message unless asked.
+- Say full context once; repeat only if asked. Never call closure dates fully booked. UPCOMING applies only to that range.`
     : '';
   // The transfer line must agree with the away block: while Richa is away her
   // phone is never dialed (handleTransferToOwner's vacation gate), so the
   // precomputed status says so outright instead of "POSSIBLE" plus a
   // contradicting paragraph the model had to reconcile on every call.
   const richaLine = temporaryClosureActive
-    ? `NOT possible due to the active temporary salon closure; follow TEMPORARY CLOSURE POLICY and offer a message`
+    ? `NOT possible — ${closureExplanation} until ${reopenLabel}; follow TEMPORARY CLOSURE POLICY and offer a message`
     : transferPossibleNow
       ? 'POSSIBLE right now'
       : 'NOT possible right now (outside her calling hours)';
@@ -728,8 +728,8 @@ CLOSE: after helping, ask if there's anything else; help if needed, then ask aga
 
 ═══ SAFETY & ESCALATION ═══
 ASKED FOR RICHA:
-- SPEAK, TALK, CONNECT, or TRANSFER to Richa or a real person is always an explicit live connection, including a follow-up choosing to speak/connect "with her." Never clarify those words as appointment availability. If RICHA'S LINE says POSSIBLE, transfer promptly without probing. If RICHA'S LINE says the temporary closure applies, follow TEMPORARY CLOSURE POLICY for a Richa request and offer a message. Otherwise say briefly that a live transfer is unavailable and offer a message. Never promise a transfer and retract it.
-- ONLY "Is Richa available, free, or there?" with none of those live-connection words is AMBIGUOUS, not permission to transfer. Ask exactly: "Are you checking Richa's availability for an appointment, or would you like me to connect you with her?" Then STOP and WAIT. Appointment service, date, or time context follows the booking flow.
+- SPEAK, TALK, CONNECT, or TRANSFER to Richa or a real person is an explicit live connection; a follow-up choosing to speak/connect "with her" is too. Never clarify those words as appointment availability. If RICHA'S LINE says POSSIBLE, transfer without probing; if it cites the temporary closure, follow TEMPORARY CLOSURE POLICY and offer a message. Otherwise say live transfer is unavailable and offer a message. Never promise a transfer and retract it.
+- ONLY "Is Richa available, free, or there?" without live-connection words is AMBIGUOUS while RICHA'S LINE says POSSIBLE. Ask exactly: "Are you checking Richa's availability for an appointment, or would you like me to connect you with her?" Then STOP and WAIT. Under the closure, both meanings are unavailable: follow its policy without clarifying. Service, date, or time context follows the booking flow.
 
 SELF-SERVICE FIRST: if the caller describes a problem or asks to send a message without explicitly asking for Richa, first offer to handle any supported task. If they cannot make an appointment, offer a new time; if they do not want one, offer cancellation. After helping, offer a message only if something personal remains.
 
