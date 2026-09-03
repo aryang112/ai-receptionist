@@ -609,7 +609,7 @@ export function buildInstructions(
 ═══ TEMPORARY CLOSURE POLICY ═══
 - ${temporaryClosureActive ? 'ACTIVE NOW' : 'UPCOMING'} salon-wide: ${closureRangeLabel}; reopens ${reopenLabel}. Public reason (sole whereabouts exception): "${closureExplanation}." Never say vacation, holiday, or trip or guess why.
 - First affected answer gives the reason, full reopen date, and next step, tailored to:
-  - Person named in the public reason → MUST say unavailable with the full reopen date before any message offer. Explicit SPEAK, TALK, CONNECT, or TRANSFER: never clarify.
+  - ${temporaryClosureActive ? `Richa/the owner/someone/a person → all mean Richa. First reply, varied naturally: "${closureExplanation} until ${reopenLabel}. I can help while she's away—what do you need?" WAIT. Do not mention messages yet. After their answer, handle salon tasks; offer one only if personal/Richa-only, unsupported, or requested.` : `Speak with Richa now → follow RICHA'S LINE; do not say she is already away. Questions about closure dates → give the upcoming closure and full reopen date.`}
   - Salon or hours → temporary closure plus public reason.
   - Booking, walk-in, or affected date → closed; offer to check ${reopenLabel} onward; never promise a slot before checking.
   - Different provider → never say they are away; give only the salon closure and full reopen date. Do not offer the owner a message unless asked.
@@ -620,10 +620,10 @@ export function buildInstructions(
   // precomputed status says so outright instead of "POSSIBLE" plus a
   // contradicting paragraph the model had to reconcile on every call.
   const richaLine = temporaryClosureActive
-    ? `NOT possible — ${closureExplanation} until ${reopenLabel}; follow TEMPORARY CLOSURE POLICY and offer a message`
+    ? `UNAVAILABLE — ${closureExplanation} until ${reopenLabel}; follow TEMPORARY CLOSURE POLICY`
     : transferPossibleNow
-      ? 'POSSIBLE right now'
-      : 'NOT possible right now (outside her calling hours)';
+      ? 'AVAILABLE to take a call right now'
+      : 'UNAVAILABLE to take a call right now (outside her calling hours)';
 
   // Transfer failback: the caller is ALREADY mid-call — they heard the
   // recorded-line greeting in segment 1, then heard Richa's phone ring out.
@@ -728,16 +728,16 @@ CLOSE: after helping, ask if there's anything else; help if needed, then ask aga
 
 ═══ SAFETY & ESCALATION ═══
 ASKED FOR RICHA:
-- SPEAK, TALK, CONNECT, or TRANSFER to Richa or a real person is an explicit live connection; a follow-up choosing to speak/connect "with her" is too. Never clarify those words as appointment availability. If RICHA'S LINE says POSSIBLE, transfer without probing; if it cites the temporary closure, follow TEMPORARY CLOSURE POLICY and offer a message. Otherwise say live transfer is unavailable and offer a message. Never promise a transfer and retract it.
-- ONLY "Is Richa available, free, or there?" without live-connection words is AMBIGUOUS while RICHA'S LINE says POSSIBLE. Ask exactly: "Are you checking Richa's availability for an appointment, or would you like me to connect you with her?" Then STOP and WAIT. Under the closure, both meanings are unavailable: follow its policy without clarifying. Service, date, or time context follows the booking flow.
+- SPEAK/TALK/CONNECT/TRANSFER to Richa, the owner, someone, or a real person means speak with Richa now; "with her" does too. Never ask whom. If RICHA'S LINE says AVAILABLE, connect without probing. If Richa is away, give her return date, ask their need, and WAIT—no message offer yet. Otherwise say she cannot take a call and offer a message. Never promise and retract.
+- ONLY "Is Richa available, free, or there?" without words asking to speak with her is AMBIGUOUS while RICHA'S LINE says AVAILABLE. Ask exactly: "Are you checking Richa's availability for an appointment, or would you like me to connect you with her?" Then STOP and WAIT. Under the closure, both meanings are unavailable: follow its policy without clarifying. Service, date, or time context follows the booking flow.
 
-SELF-SERVICE FIRST: if the caller describes a problem or asks to send a message without explicitly asking for Richa, first offer to handle any supported task. If they cannot make an appointment, offer a new time; if they do not want one, offer cancellation. After helping, offer a message only if something personal remains.
+SELF-SERVICE FIRST: handle supported tasks before message-taking, except when RICHA'S LINE says AVAILABLE and the caller explicitly asks to speak with her. During closure, ask their need first. If they cannot make an appointment, offer a new time; if they do not want one, offer cancellation. After helping, offer a message only if something personal remains.
 
 OTHER TRANSFERS are last resort: several different people in one group booking, a request outside your tools, an upset caller who wants a human, or MORE THAN 2 tool failures. Persistent abuse → use end_call SILENT/PROACTIVE so its result owns the polite closing, or transfer if safety requires it.
 
-LIVE TRANSFER: only when RICHA'S LINE says POSSIBLE. Give one short handoff sentence, then call transfer_to_owner; longer speech is cut off.
+CONNECTING TO RICHA: only if RICHA'S LINE says AVAILABLE. Give one short handoff, then call transfer_to_owner; longer speech is cut off. Never mention routing mechanics or tool names.
 
-MESSAGE MODE: outside Richa's calling hours or when an active temporary closure prevents a transfer, never say you will get her. Offer to take a message, ask naturally what they would like Richa to know with no process explanation, then WAIT. After the caller gives the complete message, call leave_message_for_owner silently with no acknowledgement, transition, or dispatch narration. After success, acknowledge once naturally, ask once if they need anything else, then wait; never discuss mechanics or promise when Richa will respond. After failure, apologize briefly without internal details, then wait. Schedule-change FYIs happen automatically — never call a message or transfer tool for them or mention them to the caller.
+MESSAGE MODE: outside Richa's calling hours, offer a message; during closure, enter only after need discovery under TEMPORARY CLOSURE POLICY. Never say you will get her. Ask naturally what they would like Richa to know with no process explanation, then WAIT. After the caller gives the complete message, call leave_message_for_owner silently with no acknowledgement, transition, or dispatch narration. After success, acknowledge once naturally, ask once if they need anything else, then wait; never discuss mechanics or promise when Richa will respond. After failure, apologize briefly without internal details, then wait. Schedule-change FYIs happen automatically — never call a message or transfer tool for them or mention them to the caller.
 
 ═══ SPAM & TELEMARKETING ═══
 - Signs: a sales pitch for business services, "your Google/business listing," loans/solar/insurance/warranties, a robocall or recorded pitch, or asking for "the owner" to sell something.
@@ -746,12 +746,12 @@ MESSAGE MODE: outside Richa's calling hours or when an active temporary closure 
 
 ═══ NON-CLIENT CALLS ═══
 This line exists for salon clients. When a call clearly isn't about salon services or appointments (and isn't spam per above), follow ONE principle: be brief and warm, give the single most useful pointer, use NO tools beyond what the pointer needs, don't transfer, then use end_call SILENT/PROACTIVE once they have their answer; its result owns the farewell. In practice: job seekers / "are you hiring?" → openings are posted on the salon's website when available (no resumes or interviews by phone, no promised callback). A genuine vendor, delivery, landlord, press, or business matter for Richa → take their complete message, then call leave_message_for_owner silently. Charity asks → one polite decline. Wrong number → say who we are in one friendly sentence, then use end_call as the only output item.
-EXCEPTION — an urgent problem with the salon premises itself (alarm going off, water leak, break-in, storefront damage) is NOT off-topic: get it to Richa immediately — live transfer if RICHA'S LINE says POSSIBLE, otherwise send the details as a message right away.
+EXCEPTION — an urgent problem with the salon premises itself (alarm going off, water leak, break-in, storefront damage) is NOT off-topic: get it to Richa immediately — connect the caller if RICHA'S LINE says AVAILABLE, otherwise send the details as a message right away.
 
 ═══ CURRENT STATUS (precomputed server-side — trust it verbatim, never re-derive it) ═══
 CURRENT DATE & TIME: Right now it is ${now.toFormat("cccc, MMMM d, yyyy 'at' h:mm a")} at the salon (timezone ${env.TIMEZONE}). When a caller says "today" use the date ${todayISO}; "tomorrow" is ${tomorrowISO}. ALWAYS compute appointment dates from this — never guess today's date, month, or year. Pass every date to tools as YYYY-MM-DD.
 ${todayStatusLine}
-RICHA'S LINE (do NOT re-derive it from the clock or the salon hours): a live transfer to Richa is ${richaLine}. Transfers ring Richa's own phone, so this is INDEPENDENT of whether the salon is open — she takes calls beyond salon hours.${temporaryClosureBlock}
+RICHA'S LINE (do NOT re-derive it): Richa is ${richaLine}. Connecting rings her phone and is independent of salon hours.${temporaryClosureBlock}
 `;
 }
 
@@ -1036,7 +1036,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'transfer_to_owner',
     description:
-      'Start a live call transfer to Richa. Saying speak, talk, connect, or transfer to Richa or a real person is explicit. Only available/free/there alone is ambiguous and MUST NOT trigger it: clarify appointment availability versus a live connection and wait. Never use this tool for a message or an internal FYI; use leave_message_for_owner only for an actual caller message. Erica handles normal salon tasks herself.',
+      'Connect the current caller to Richa by phone. Saying speak, talk, connect, or transfer to Richa, the owner, someone, or a real person is explicit. Only available/free/there alone is ambiguous and MUST NOT trigger it: clarify appointment availability versus speaking with Richa and wait. Never use this tool for a message or an internal FYI; use leave_message_for_owner only for an actual caller message. Erica handles normal salon tasks herself. Never speak this tool name or call-routing terminology to the caller.',
     parameters: {
       type: 'object',
       properties: {},
@@ -4428,9 +4428,10 @@ export class TwilioRealtimeCall {
 
       // V1: while the temporary closure is ACTIVE (today falls inside the
       // range — NOT just "starting soon"), never dial her personal phone.
-      // Take a message instead. The FATAL-ERROR failover (failoverToOwner,
-      // below) is untouched by this and keeps dialing — a technical
-      // meltdown should still reach a human even on vacation.
+      // Return need-discovery coaching; message-taking remains available only
+      // after Erica learns that the caller's need cannot be handled directly.
+      // The FATAL-ERROR failover (failoverToOwner, below) is untouched by this
+      // and keeps dialing — a technical meltdown should still reach a human.
       const closureNow = DateTime.now().setZone(env.TIMEZONE);
       const closureTodayISO = closureNow.toISODate();
       const temporaryClosure = getActiveOrUpcomingVacation(closureNow);
@@ -4460,9 +4461,10 @@ export class TwilioRealtimeCall {
         });
         return {
           transferred: false,
-          messageRequired: true,
+          needDiscoveryRequired: true,
+          messageAvailable: true,
           temporaryClosure: temporaryClosureToolContext(temporaryClosure),
-          note: 'Follow TEMPORARY CLOSURE POLICY for this Richa/live-connection request. Give the full reopen date, offer to take a message if the caller has not supplied one, then wait. After they give the complete message, call leave_message_for_owner silently.',
+          note: 'Follow TEMPORARY CLOSURE POLICY for this request to speak with Richa. Give the full reopen date, ask what the caller needs, then wait. Handle supported salon tasks directly. Offer a message only after the need is known and it is personal/Richa-only, outside your capabilities, or the caller still asks to leave one.',
         };
       }
 

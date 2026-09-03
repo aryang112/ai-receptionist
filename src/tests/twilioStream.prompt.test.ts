@@ -64,18 +64,21 @@ describe('buildInstructions — TEMPORARY CLOSURE POLICY', () => {
   it("RICHA'S LINE agrees with the active closure even inside her calling hours", () => {
     const instructions = buildInstructions(at('2026-09-05T12:00')); // Sat noon, inside 09:00–21:00
     expect(instructions).toMatch(
-      /live transfer to Richa is NOT possible — Richa is away until Thursday, September 10/
+      /RICHA'S LINE.*Richa is UNAVAILABLE — Richa is away until Thursday, September 10/
     );
-    expect(instructions).not.toMatch(/live transfer to Richa is POSSIBLE/);
+    expect(instructions).not.toMatch(/Richa is AVAILABLE to take a call/);
   });
 
-  it('matches the closure explanation to the subject without inventing another provider whereabouts', () => {
+  it('asks what Richa callers need before message-taking while preserving the other subject branches', () => {
     const instructions = buildInstructions(at('2026-09-05T12:00'));
     const policy = instructions.slice(
       instructions.indexOf('TEMPORARY CLOSURE POLICY')
     );
     expect(policy).toMatch(
-      /Person named in the public reason.*MUST say unavailable.*full reopen date before any message offer.*explicit SPEAK, TALK, CONNECT, or TRANSFER.*never clarify/i
+      /Richa\/the owner\/someone\/a person.*all mean Richa.*First reply.*Richa is away.*Thursday, September 10.*what do you need.*WAIT/i
+    );
+    expect(policy).toMatch(
+      /Do not mention messages yet.*After their answer.*handle salon tasks.*offer one only if personal\/Richa-only, unsupported, or requested/i
     );
     expect(policy).toMatch(/Salon or hours.*temporary closure.*public reason/i);
     expect(policy).toMatch(
@@ -93,9 +96,8 @@ describe('buildInstructions — TEMPORARY CLOSURE POLICY', () => {
     expect(instructions).toContain('TEMPORARY CLOSURE POLICY');
     expect(instructions).toMatch(/UPCOMING salon-wide/);
     // Transfers still work until she leaves.
-    expect(instructions).toMatch(
-      /live transfer to Richa is POSSIBLE right now/
-    );
+    expect(instructions).toMatch(/Richa is AVAILABLE to take a call right now/);
+    expect(instructions).toMatch(/do not say she is already away/i);
   });
 
   it('omits the away block entirely when no closure is active or upcoming', () => {
@@ -239,7 +241,7 @@ describe('buildInstructions — TRANSFER self-service + closed-hours rules', () 
   it('gates the scripted handoff sentence to live-transfer-actually-possible', () => {
     const instructions = buildInstructions();
     expect(instructions).toMatch(
-      /LIVE TRANSFER: only when RICHA'S LINE says POSSIBLE/i
+      /CONNECTING TO RICHA: only if RICHA'S LINE says AVAILABLE/i
     );
   });
 
@@ -301,17 +303,15 @@ describe("buildInstructions — transfer window (RICHA'S LINE)", () => {
   it('inside the window (Mon 11:46am, salon still closed): line says POSSIBLE', () => {
     const instructions = buildInstructions(at('2026-08-24T11:46'));
     expect(instructions).toMatch(/RICHA'S LINE/);
-    expect(instructions).toMatch(
-      /live transfer to Richa is POSSIBLE right now/
-    );
+    expect(instructions).toMatch(/Richa is AVAILABLE to take a call right now/);
     // ...even though the salon itself is CLOSED at that moment
     expect(instructions).toMatch(/At this moment we are CLOSED/);
   });
 
-  it('outside the window (Tue 10pm): line says NOT possible', () => {
+  it('outside the window (Tue 10pm): line says UNAVAILABLE', () => {
     const instructions = buildInstructions(at('2026-08-25T22:00'));
     expect(instructions).toMatch(
-      /live transfer to Richa is NOT possible right now/
+      /Richa is UNAVAILABLE to take a call right now/
     );
   });
 
@@ -323,19 +323,14 @@ describe("buildInstructions — transfer window (RICHA'S LINE)", () => {
     );
     expect(askedForRicha).toMatch(/ASKED FOR RICHA/);
     expect(askedForRicha).toMatch(
-      /SPEAK, TALK, CONNECT, or TRANSFER.*is an explicit live connection/i
+      /SPEAK\/TALK\/CONNECT\/TRANSFER.*means speak with Richa now/i
+    );
+    expect(askedForRicha).toMatch(/"with her" does too/i);
+    expect(askedForRicha).toMatch(
+      /Never ask whom.*Richa is away.*give her return date.*ask their need.*WAIT.*no message offer yet/i
     );
     expect(askedForRicha).toMatch(
-      /Never clarify those words as appointment availability/i
-    );
-    expect(askedForRicha).toMatch(
-      /follow-up choosing to speak\/connect "with her" is too/i
-    );
-    expect(askedForRicha).toMatch(
-      /temporary closure.*follow TEMPORARY CLOSURE POLICY.*offer a message/i
-    );
-    expect(askedForRicha).toMatch(
-      /ONLY "Is Richa available, free, or there\?".*AMBIGUOUS while RICHA'S LINE says POSSIBLE/i
+      /ONLY "Is Richa available, free, or there\?".*AMBIGUOUS while RICHA'S LINE says AVAILABLE/i
     );
     expect(askedForRicha).toContain(
       "Are you checking Richa's availability for an appointment, or would you like me to connect you with her?"
@@ -351,7 +346,19 @@ describe("buildInstructions — transfer window (RICHA'S LINE)", () => {
     ).toBeLessThan(
       askedForRicha.indexOf('ONLY "Is Richa available, free, or there?"')
     );
-    expect(askedForRicha).toMatch(/Never promise a transfer and retract it/);
+    expect(askedForRicha).toMatch(/Never promise and retract/);
+  });
+
+  it('keeps implementation language out of the model-facing prompt', () => {
+    for (const when of [
+      '2026-09-05T12:00',
+      '2026-08-22T09:00',
+      '2026-10-01T09:00',
+    ]) {
+      expect(buildInstructions(at(when)).toLowerCase()).not.toContain(
+        'live transfer'
+      );
+    }
   });
 });
 
@@ -792,17 +799,18 @@ describe('high-salience write tool descriptions', () => {
       /available\/free\/there.*MUST NOT trigger/i
     );
     expect(tool!.description).toMatch(
-      /appointment availability versus a live connection/i
+      /appointment availability versus speaking with Richa/i
     );
     expect(tool!.description).toMatch(/Never use this tool.*internal FYI/i);
-    expect(tool!.description).toMatch(/live call transfer/i);
+    expect(tool!.description).toMatch(/Connect the current caller.*by phone/i);
     expect(tool!.description).toMatch(/leave_message_for_owner/i);
     expect(tool!.description).toMatch(
-      /speak, talk, connect, or transfer.*explicit/i
+      /speak, talk, connect, or transfer.*someone.*explicit/i
     );
     expect(tool!.description).toMatch(
       /only available\/free\/there.*ambiguous/i
     );
+    expect(tool!.description.toLowerCase()).not.toContain('live transfer');
   });
 
   it('keeps caller messages argument-free and separate from live transfer', () => {

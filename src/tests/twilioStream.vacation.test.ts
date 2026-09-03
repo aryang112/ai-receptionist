@@ -73,7 +73,8 @@ describe('V1 — live transfer during away closure', () => {
 
     expect(result).toEqual({
       transferred: false,
-      messageRequired: true,
+      needDiscoveryRequired: true,
+      messageAvailable: true,
       temporaryClosure: {
         from: '2026-09-01',
         through: '2026-09-09',
@@ -82,7 +83,12 @@ describe('V1 — live transfer during away closure', () => {
       },
       note: expect.stringContaining('TEMPORARY CLOSURE POLICY'),
     });
-    expect(result.note).toMatch(/leave_message_for_owner/);
+    expect(result.note).toMatch(/ask what the caller needs, then wait/i);
+    expect(result.note).toMatch(/Handle supported salon tasks directly/i);
+    expect(result.note).toMatch(
+      /Offer a message only after the need is known/i
+    );
+    expect(result).not.toHaveProperty('messageRequired');
     expect(notifyOwnerSms).not.toHaveBeenCalled();
     // No dial attempted: the drain-before-dial helper (only used by the real
     // dial path) never ran, and `transferring` (only set by the real dial
@@ -114,7 +120,8 @@ describe('V1 — live transfer during away closure', () => {
 
     expect(result).toMatchObject({
       transferred: false,
-      messageRequired: true,
+      needDiscoveryRequired: true,
+      messageAvailable: true,
     });
     expect(notifyOwnerSms).not.toHaveBeenCalled();
   });
@@ -132,7 +139,8 @@ describe('V1 — live transfer during away closure', () => {
 
     expect(result).toMatchObject({
       transferred: false,
-      messageRequired: true,
+      needDiscoveryRequired: true,
+      messageAvailable: true,
     });
     expect(call.notifyOwnerSms).not.toHaveBeenCalled();
     expect(result.note).not.toMatch(/passed it along/i);
