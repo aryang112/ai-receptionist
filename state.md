@@ -1,7 +1,46 @@
 # STATE — AI Receptionist (Erica)
 
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
-> Last major work: 2026-09-02 — after-hours vacation reliability release deployed.
+> Last major work: 2026-09-02 — subject-aware closure + no-placeholder-email release deployed.
+
+## ✅ DEPLOYED 2026-09-02 ~9:50 PM ET: subject-aware closure + real-email-only clients
+
+- Production behavior is commit `eca23f1` (including `40b2f95` and `e1e5268`).
+  Railway deployment `de80d873-ce67-4f6d-a892-30e8ee53b663` is `SUCCESS`,
+  image digest
+  `sha256:fa00a874bd60015a7fcc7592e9b523b4bbf7e9062b719059b15a3006467e718c`.
+  The immediate rollback baseline is commit `e1e5268` (formerly deployment
+  `2c36ab19-7ef6-41e2-b194-413416678940`); Railway now marks that superseded
+  deployment as removed, so rollback means redeploying the commit. The earlier
+  known-good reliability baseline is commit `2d24cfe` (formerly deployment
+  `512b3bc5-9269-43bc-a1a6-da1e103fa1fc`). Forwarding remained ON, with zero
+  queued/ringing/in-progress calls at both deployments.
+- One global, config-driven TEMPORARY CLOSURE POLICY now adapts the first
+  relevant explanation to the caller's subject: Richa questions lead with her
+  unavailability and the full reopen date; hours lead with the temporary salon
+  closure and configured public reason; affected bookings offer to check from
+  reopening onward without promising an unchecked slot; another provider's
+  whereabouts are never invented. Full context is stated once, then not
+  needlessly recited.
+- The server still deterministically rejects availability and writes on closed
+  dates and suppresses owner transfer during an active closure. Tool results
+  now carry structured closure dates plus the salon-approved public explanation
+  from `business.json`, rather than duplicating Richa-specific scripts.
+- New Phorest client creation no longer manufactures
+  `@placeholder.richasthreading.com` addresses. A real supplied email is
+  trimmed and sent; absent/blank email is omitted from both the POST and the
+  in-memory index. Phone normalization was intentionally unchanged. Tony
+  Stark's already-existing placeholder was not altered; cleanup is separate.
+- Verification: 44 files / 512 tests in local and `TZ=UTC`, TypeScript build,
+  Prettier, `git diff --check`, and a <4,200-token fallback prompt estimate.
+  Live `gpt-realtime-2.1` text-to-audio-transcript probes covered today/tomorrow
+  hours, explicit and ambiguous Richa wording, affected booking, unrelated
+  stylist, and a three-turn hours conversation. Production `/health` returned
+  200; PID 1 warmed 63 services and a complete 4,188-client / 28-page index.
+- Architecture boundary: `business.json.vacations` is a SALON-WIDE closure.
+  In a future multi-stylist tenant, one provider being away while the salon is
+  open requires provider-availability data and must not be put into this
+  salon-closure mechanism.
 
 ## ✅ DEPLOYED 2026-09-02 ~7:46 PM ET: exact messages + vacation safeguards
 

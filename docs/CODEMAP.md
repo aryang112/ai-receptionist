@@ -37,10 +37,13 @@ Caller dials Twilio number
   `REALTIME_CONTEXT_NOTES` owns unscripted silence/duration/goodbye coaching.
   Section order, one-question identity, write boundaries, a <4.2k fallback
   budget, and a <5k stressed 63-service path are locked by
-  twilioStream.prompt.test.ts. 2026-09-01: RICHA'S LINE folds an active away
-  closure in (NOT possible + reopen date); the away block is titled RICHA IS
-  AWAY FROM THE SALON and the word "vacation" is test-locked out of the
-  rendered prompt (owner wording). See docs/PROMPT_AUDIT_2026-09-01.md. See
+  twilioStream.prompt.test.ts. 2026-09-02: one global TEMPORARY CLOSURE POLICY
+  folds in the salon-configured public reason, dates, and current status; it
+  adapts named-person, salon-hours, affected-booking, and unrelated-provider
+  wording without duplicating scenario scripts. RICHA'S LINE carries the
+  precomputed public reason + full reopen date when transfer is unavailable,
+  and the word "vacation" is test-locked out of the rendered prompt except the
+  explicit ban clause. See docs/PROMPT_AUDIT_2026-09-01.md. See
   [`GPT-SOL/PROMPT_ARCHITECTURE.md`](GPT-SOL/PROMPT_ARCHITECTURE.md) and the fix
   ladder in tasks/lessons.md. State-specific coaching still lives in tool-result
   `note` fields. `matchStaffName()` +
@@ -80,10 +83,11 @@ Caller dials Twilio number
   extracted fetch→snap→hours-filter "which times are genuinely open" truth;
   used by suggest_availability AND re-run fresh immediately before every
   booking/reschedule WRITE (A1 — rejects a stale time with the current list,
-  fail-open on Phorest errors). **Vacation gate** in `handleTransferToOwner`
-  (active away closure → no dial and no synthesized message; returns
-  `{transferred:false,messageRequired:true}`); the away prompt block auto-injected when a
-  business.json vacation is active/≤14 days out. **Spam**: SPAM &
+  fail-open on Phorest errors). **Temporary-closure gate** in
+  `handleTransferToOwner` (active salon closure → no dial and no synthesized
+  message; returns `{transferred:false,messageRequired:true}`); the global
+  closure policy is auto-injected when a business.json range is active/≤14
+  days out. **Spam**: SPAM &
   TELEMARKETING prompt section; `end_call` takes optional `reason`
   ('done'|'spam') → outcome 'spam' → `recordSpamOutcomeIfNotClient` on
   cleanup (NEVER for numbers in the Phorest client index). LOCATION prompt
@@ -121,7 +125,8 @@ Caller dials Twilio number
   candidates are ranked by matching supplied contacts and tied best matches
   fail closed. A possibly committed create is latched in-process and can only
   run bounded read-only reconciliation—never another create POST. The latch is
-  not restart-durable.
+  not restart-durable. New-client POSTs omit email when none was genuinely
+  supplied; blank email is never replaced with a synthetic placeholder.
 - **blocklist.ts** — repeat-spam blocklist (S2). `recordSpamOutcome(phone)` /
   `isBlocked(phone)` (count ≥ `SPAM_BLOCK_THRESHOLD`, default 2). In-memory
   cache + write-through `data/blocklist.json` (human-editable = the unblock
@@ -204,11 +209,13 @@ Caller dials Twilio number
   hands back to /twilio/dial-status; deliberately under the ~20–25s carrier
   voicemail pickup)). Defaults are sensible.
 - **business.json** — salon hours per weekday + closedDates + `vacations`
-  (`[{from,to,note}]` — ONE entry closes booking those dates, reroutes transfer
-  to SMS message-taking, injects the prompt block; edit this for future
-  vacations) + `location` (address for the prompt/hours tool). **Do not change casually.**
+  (`[{from,to,note}]` — ONE entry creates a SALON-WIDE closure, closes booking
+  on those dates, reroutes transfer to message-taking, and supplies the public
+  reason to the global closure policy) + `location` (address for the
+  prompt/hours tool). One provider's absence in a multi-stylist salon is not a
+  salon closure. **Do not change casually.**
 
-## src/tests/  (vitest, 44 files / 510 tests as of 2026-09-02)
+## src/tests/  (vitest, 44 files / 512 tests as of 2026-09-02)
 phorest.client.test.ts (URL/range/client_id/timezone/retry regressions),
 hours.test.ts, booking.alias/match.test.ts, slots.test.ts (clean-grid snapping),
 wsAuth, middleware, twilioStream.bargein/contracts, phorest.mock/selector,
@@ -265,5 +272,6 @@ barges in mid-goodbye).
 / retry budget exhausted · `🗣️ ERICA SAID` / caller transcript completion metadata · `🗓️ Booking state
 after create` · `📞`/`☎️` call start/end · `🤫` silence check-in/hangup · `⏳` duration
 warning/cap hangup · `📨` owner SMS accepted (warn lines: skipped/failed/uncertain) ·
-`🚫` blocked spam caller (webhook reject) · "Transfer suppressed — Richa is away
-from the salon" · "rejected — time no longer available on fresh re-check" (A1).
+`🚫` blocked spam caller (webhook reject) · "Transfer suppressed — temporary
+salon closure is active" · "rejected — time no longer available on fresh
+re-check" (A1).
