@@ -17,9 +17,14 @@ import {
 } from '../services/booking.js';
 import type { Service } from '../services/phorest.types.js';
 import { phorest } from '../services/phorest.js';
-import { CallStore } from '../services/callStore.js';
+import {
+  CallStore,
+  type OwnerNotificationEntry,
+  type TranscriptEntry,
+} from '../services/callStore.js';
 import { recordSpamOutcome } from '../services/blocklist.js';
 import { sendOwnerSms, type OwnerSmsResult } from '../services/ownerSms.js';
+import { maybeSendPostCallSummary } from '../services/postCallSummary.js';
 import type {
   CustomerResult,
   AppointmentSummary,
@@ -122,6 +127,7 @@ const GENERIC_OWNER_MESSAGE_TURNS = new Set([
   'sure',
   'okay',
   'ok',
+  'ja',
   'please',
   'no',
   'nope',
@@ -1308,11 +1314,7 @@ export class TwilioRealtimeCall {
   // entries only ever appear when OPENAI_INPUT_TRANSCRIPTION is enabled
   // (env-gated OFF by default). Capped so a very long call can't grow this
   // unbounded — see pushTranscriptEntry.
-  private transcript: Array<{
-    role: 'caller' | 'erica';
-    text: string;
-    ts: number;
-  }> = [];
+  private transcript: TranscriptEntry[] = [];
   private static readonly TRANSCRIPT_MAX_ENTRIES = 200;
   private static readonly TRANSCRIPT_MAX_BYTES = 16 * 1024;
   // Message fidelity is keyed to OpenAI's caller conversation item, not to a
@@ -1348,6 +1350,11 @@ export class TwilioRealtimeCall {
   // for the same caller-authored message. The original text remains untouched
   // in the one outbound notification; only its normalized key is compared.
   private ownerMessageDeliveries = new Map<string, Promise<OwnerSmsResult>>();
+  // Every call-specific owner SMS registers its delivery promise here. At
+  // teardown, the generic post-call recap waits for these bounded attempts and
+  // sends only if none succeeded, preventing duplicate texts for calls that
+  // already produced an exact message, transfer, running-late, or schedule FYI.
+  private ownerNotificationAttempts: Promise<OwnerSmsResult>[] = [];
   // M1: per-call token usage, summed across every turn that reported one
   // (openaiSession's onUsage, fired alongside the existing 📊 turn tokens
   // log). Feeds estimateCostUsd() and the dashboard's per-call cost column.
@@ -3457,7 +3464,8 @@ export class TwilioRealtimeCall {
           : 'its previous date';
         const to = `${this.formatScheduleDate(payload.date)} at ${this.formatScheduleTime(payload.time)}`;
         void this.notifyOwnerSms(
-          `Hi Richa, it's Erica. FYI — ${this.callerDisplayName()} rescheduled their ${service} from ${from} to ${to}.`
+          `Hi Richa — ${this.ownerSmsCallerName()} called and rescheduled their ${service} from ${from} to ${to}.`,
+          'schedule_change'
         );
       }
       this.servedAppointmentDates.set(payload.appointmentId, payload.date);
@@ -3542,7 +3550,8 @@ export class TwilioRealtimeCall {
           ? this.formatScheduleDate(appointmentDate)
           : 'the upcoming date';
         void this.notifyOwnerSms(
-          `Hi Richa, it's Erica. FYI — ${this.callerDisplayName()} cancelled their ${service} on ${date}.`
+          `Hi Richa — ${this.ownerSmsCallerName()} called and cancelled their ${service} on ${date}.`,
+          'schedule_change'
         );
       }
       this.cancelledAppointmentIds.add(payload.appointmentId);
@@ -4116,9 +4125,10 @@ export class TwilioRealtimeCall {
         ? ` for their ${callerAppt.serviceName} at ${callerAppt.timeDisplay}`
         : ' for their upcoming appointment';
       void this.notifyOwnerSms(
-        `Hi Richa, it's Erica. ${callerName} just called — ${
+        `Hi Richa — ${callerName} called to say they are ${
           detail ?? 'running late'
-        }${apptDesc}. FYI!`
+        }${apptDesc}.`,
+        'running_late'
       );
 
       this.markInfoOutcome();
@@ -4158,6 +4168,12 @@ export class TwilioRealtimeCall {
     );
   }
 
+  /** Sentence-start variant of callerDisplayName for owner-facing texts. */
+  private ownerSmsCallerName(): string {
+    const name = this.callerDisplayName();
+    return name === 'a caller' ? 'A caller' : name;
+  }
+
   private ownerMessageContentRequired(note: string): Record<string, unknown> {
     CallStore.recordToolCall(this.callSid, {
       name: 'leave_message_for_owner',
@@ -4177,7 +4193,8 @@ export class TwilioRealtimeCall {
     sourceItemId: string
   ): Promise<OwnerSmsResult> {
     const result = await this.notifyOwnerSms(
-      `Hi Richa, it's Erica. ${this.callerDisplayName()} left this message:\n\nCaller said: “${message}”`
+      `Hi Richa — ${this.ownerSmsCallerName()} called and left this message:\n\n“${message}”`,
+      'caller_message'
     );
     this.markInfoOutcome();
     CallStore.recordToolCall(this.callSid, {
@@ -4553,7 +4570,8 @@ export class TwilioRealtimeCall {
       // is the salon-side trail for every live handoff, whether or not she
       // actually picked up. No model-authored reason is copied into it.
       void this.notifyOwnerSms(
-        `Hi Richa, it's Erica. FYI — I just transferred a call to your phone from ${this.callerDisplayName()}.`
+        `Hi Richa — ${this.ownerSmsCallerName()} called and was transferred to your phone.`,
+        'transfer'
       );
       // Set the outcome + record the tool call BEFORE cleanup() — cleanup writes
       // the endCall record using this.outcome.
@@ -4974,8 +4992,46 @@ export class TwilioRealtimeCall {
    * (sendOwnerSms) so the daily/weekly digest can reuse it too. Behavior is
    * The shared sender returns an explicit accepted/failure result.
    */
-  private async notifyOwnerSms(body: string): Promise<OwnerSmsResult> {
-    return sendOwnerSms(body);
+  private notifyOwnerSms(
+    body: string,
+    kind: OwnerNotificationEntry['kind']
+  ): Promise<OwnerSmsResult> {
+    const attempt = sendOwnerSms(body).then((result) => {
+      CallStore.recordOwnerNotification(this.callSid, {
+        kind,
+        ok: result.queued,
+        ...(result.queued ? {} : { error: result.reason }),
+      });
+      return result;
+    });
+    this.ownerNotificationAttempts.push(attempt);
+    return attempt;
+  }
+
+  /**
+   * Run after the final transcript snapshot is available. This work is fully
+   * detached from the caller's media path: existing bounded SMS attempts settle
+   * first, then the post-call service checks the durable notification ledger so
+   * a call that already generated a useful text does not produce a duplicate.
+   */
+  private schedulePostCallSummary(transcript: TranscriptEntry[]): void {
+    const input = {
+      callSid: this.callSid,
+      ...(this.callerFrom ? { callerPhone: this.callerFrom } : {}),
+      callerName: this.callerDisplayName(),
+      transcript: transcript.map((entry) => ({ ...entry })),
+      outcome: this.outcome,
+      ...(this.endReason ? { endReason: this.endReason } : {}),
+    };
+    const priorAttempts = [...this.ownerNotificationAttempts];
+    void Promise.allSettled(priorAttempts)
+      .then(() => maybeSendPostCallSummary(input))
+      .catch((error) => {
+        logger.warn(
+          { callSid: this.callSid, error: this.formatError(error) },
+          'Post-call owner summary failed — call teardown unaffected'
+        );
+      });
   }
 
   /**
@@ -5265,6 +5321,9 @@ export class TwilioRealtimeCall {
       if (!transcriptionInFlight && this.transcript.length > 0) {
         CallStore.recordTranscript(this.callSid, this.transcript);
       }
+      if (!transcriptionInFlight) {
+        this.schedulePostCallSummary(this.transcript);
+      }
       // S2: a spam-tagged call whose caller-ID number we know gets counted
       // toward the repeat-offender blocklist. Fire-and-forget (void) — the
       // guard above never throws and must never delay call teardown.
@@ -5288,6 +5347,9 @@ export class TwilioRealtimeCall {
         try {
           if (endRecordWritten && this.transcript.length > 0) {
             CallStore.recordTranscript(this.callSid, this.transcript);
+          }
+          if (endRecordWritten) {
+            this.schedulePostCallSummary(this.transcript);
           }
         } catch (error) {
           logger.error(

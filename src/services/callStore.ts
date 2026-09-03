@@ -61,6 +61,17 @@ export type TranscriptEntry = {
   ts: number;
 };
 
+export type OwnerNotificationEntry = {
+  kind:
+    | 'caller_message'
+    | 'transfer'
+    | 'running_late'
+    | 'schedule_change'
+    | 'post_call_summary';
+  ok: boolean;
+  error?: string;
+};
+
 type EndEntry = {
   endedAt: number;
   durationMs: number;
@@ -208,6 +219,23 @@ export const CallStore = {
       callSid,
       ts: Date.now(),
       entries,
+    });
+  },
+
+  // Delivery audit/deduplication only. Never persist the SMS body here: exact
+  // caller messages already live in the protected transcript record, and the
+  // notification ledger needs only outcome metadata.
+  recordOwnerNotification(
+    callSid: string,
+    entry: OwnerNotificationEntry
+  ): void {
+    append({
+      type: 'owner_notification',
+      callSid,
+      ts: Date.now(),
+      kind: entry.kind,
+      ok: entry.ok,
+      ...(entry.error ? { error: entry.error } : {}),
     });
   },
 };

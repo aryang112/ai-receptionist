@@ -327,6 +327,27 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
     expect(call.notifyOwnerSms).not.toHaveBeenCalled();
   });
 
+  it('filters a transcribed "Ja" consent from the later exact caller message', async () => {
+    const call = buildCall();
+    call.notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_ja', status: 'queued' });
+    call.handleAssistantTranscript(
+      'Would you like me to take a message for Richa?'
+    );
+    finalCallerTurn(call, 'item_ja_consent', 'Ja.');
+    call.handleAssistantTranscript('What would you like Richa to know?');
+    const message = 'Please ask Richa to return my call tomorrow.';
+    finalCallerTurn(call, 'item_ja_message', message);
+
+    await expect(call.handleLeaveMessageForOwner({})).resolves.toMatchObject({
+      messageAccepted: true,
+    });
+    const body = call.notifyOwnerSms.mock.calls[0]?.[0] as string;
+    expect(body).toContain(`“${message}”`);
+    expect(body).not.toContain('Ja.');
+  });
+
   it('starts capture from explicit caller message intent before an assistant solicitation', async () => {
     const call = buildCall();
     call.notifyOwnerSms = vi
@@ -371,7 +392,9 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
     await call.handleLeaveMessageForOwner({});
 
     const body = call.notifyOwnerSms.mock.calls[0]?.[0] as string;
-    expect(body).toContain(`Caller said: “${finalMessage}”`);
+    expect(body).toContain(
+      `called and left this message:\n\n“${finalMessage}”`
+    );
     expect(body).not.toMatch(/speak with Richa|brow appointment|can I leave/i);
   });
 
@@ -407,7 +430,9 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
     });
 
     const body = call.notifyOwnerSms.mock.calls[0]?.[0] as string;
-    expect(body).toContain(`Caller said: “${freshMessage}”`);
+    expect(body).toContain(
+      `called and left this message:\n\n“${freshMessage}”`
+    );
     expect(body).not.toContain(staleIdentity);
     expect(body).not.toContain(staleMessage);
     expect(body).not.toContain(pivot);

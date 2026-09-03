@@ -330,3 +330,14 @@ polluted the customer record and could feed downstream marketing campaigns.
 email-less client, omit the field entirely. Trim and preserve a real supplied
 email; do not manufacture one. Fix future writes in the adapter and treat old
 placeholder-record cleanup as a separate, explicit data operation.
+
+## 2026-09-03 — Separate exact caller messages from generated call recaps
+An explicit message for the owner is user-authored content; a post-call recap is
+an assistant-authored operational summary. Do not merge the two. Preserve the
+caller's exact final transcript for a requested message, but generate the general
+recap only after the final transcript grace period and from an immutable snapshot.
+Record delivery metadata—not private SMS content—against the call SID so transfer
+failback segments and teardown cannot send duplicates. Summary generation must be
+background-only and failure-isolated: a model or SMS timeout must never delay,
+change, or revive the completed phone call. Keep automatic delivery opt-in and
+exclude internal/test numbers through normalized runtime configuration.

@@ -79,7 +79,7 @@ describe('schedule-change owner FYIs', () => {
     expect(result.note).toBeUndefined();
     expect(call.notifyOwnerSms).toHaveBeenCalledTimes(1);
     expect(call.notifyOwnerSms.mock.calls[0]?.[0]).toMatch(
-      /Priya Shah cancelled their Eyebrow Threading on Thursday, September 10/
+      /Priya Shah called and cancelled their Eyebrow Threading on Thursday, September 10/
     );
   });
 

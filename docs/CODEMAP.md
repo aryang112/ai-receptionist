@@ -136,12 +136,23 @@ Caller dials Twilio number
   Record types: start (from, recognizedClientId, stirVerstat) · tool · booking ·
   end (outcome, endReason, usage, estCostUsd, assistantTranscript) · transcript
   (interleaved both-side entries, M1) · recording (recordingSid, M2) · blocked
-  (S2). `readCalls()` is the one sanctioned reader (dashboard + digest).
+  (S2) · owner_notification (delivery metadata only; never the SMS body).
+  `readCalls()` is the one sanctioned reader (dashboard + digest). The
+  owner-notification ledger prevents duplicate post-call recaps when the same
+  call already delivered a caller message, transfer FYI, running-late notice,
+  or schedule-change notice.
 - **ownerSms.ts** — `sendOwnerSms(body, to?)` — the extracted owner-SMS core,
   used by running-late FYI, exact caller message-taking, and the digest. It
   never throws; the SDK and outer promise are capped at five seconds, a SID
   plus an accepted status is required for `queued:true`, terminal failures are
   rejected, and missing/unknown/timed-out outcomes are explicitly uncertain.
+- **postCallSummary.ts** — opt-in, asynchronous owner recap after call teardown.
+  It gives `gpt-4.1-mini` the immutable final transcript and outcome under a
+  strict JSON schema, prefers a Phorest-confirmed client name, rejects invented
+  self-stated names, and sends one concise `Hi Richa — …` SMS. Generation
+  failure falls back to bounded transcript excerpts; delivery never delays or
+  changes the live call. Explicit caller messages remain exact text rather than
+  generated summaries.
 - **digest.ts** — `buildDailyDigest`/`buildWeeklyDigest` (calls, bookings +
   $revenue, spam, after-hours captured, est cost — salon-TZ day buckets; null
   on quiet days) + `maybeSendDigest(now?)` (once-daily send at `DIGEST_TIME`,
@@ -204,6 +215,10 @@ Caller dials Twilio number
   (⚠️ default 'off' — session-shape change, flip only after a live call
   validates it), `RECORD_CALLS` ('true'), `ADMIN_TOKEN` (set in prod!),
   `DIGEST_ENABLED`/`DIGEST_TIME` ('08:30')/`DIGEST_TO`,
+  `OWNER_CALL_SUMMARY_ENABLED` ('false' — opt-in release gate),
+  `OWNER_CALL_SUMMARY_EXCLUDE_PHONES` (comma-separated normalized caller
+  numbers, used to suppress test/internal calls), `OPENAI_CALL_SUMMARY_MODEL`
+  (`gpt-4.1-mini`),
   `TRANSFER_WINDOW_START`/`TRANSFER_WINDOW_END` ('09:00'/'21:00' — Richa's
   live-transfer calling hours, decoupled from salon hours),
   `TRANSFER_DIAL_TIMEOUT_S` (15 — how long her phone rings before the dial
@@ -216,7 +231,7 @@ Caller dials Twilio number
   prompt/hours tool). One provider's absence in a multi-stylist salon is not a
   salon closure. **Do not change casually.**
 
-## src/tests/  (vitest, 44 files / 512 tests as of 2026-09-02)
+## src/tests/  (vitest, 46 files / 526 tests as of 2026-09-03)
 phorest.client.test.ts (URL/range/client_id/timezone/retry regressions),
 hours.test.ts, booking.alias/match.test.ts, slots.test.ts (clean-grid snapping),
 wsAuth, middleware, twilioStream.bargein/contracts, phorest.mock/selector,
@@ -243,6 +258,11 @@ dedupe, premature/stale calls, abandonment, and correction races;
 contact matches, committed-timeout reconciliation, delayed visibility, and
 reconcile-only retries; prompt/vacation suites lock explicit versus ambiguous
 Richa requests and the September 10 return date.
+2026-09-03 owner recaps: `postCallSummary.test.ts` covers format, trusted and
+self-stated names, invented-name rejection, opt-in/exclusion/deduplication,
+fallback, delivery failure, and empty calls;
+`twilioStream.postCallSummary.test.ts` locks the one-shot immutable teardown
+snapshot. Owner-message tests also reject short consent noise such as “Ja.”
 
 ## scripts/  (read-only diagnostics + ops)
 inspect-appointment.ts, list-services.ts, check-availability.ts, test-appt-filter.ts,

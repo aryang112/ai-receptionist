@@ -150,6 +150,25 @@ export const env = {
   DIGEST_STATE_PATH:
     process.env.DIGEST_STATE_PATH || './data/digest-state.json',
 
+  // One concise owner-facing SMS after each handled call that did not already
+  // produce a call-specific notification (caller message, transfer, urgent
+  // schedule change, or running-late FYI). Kept opt-in so a code deploy cannot
+  // unexpectedly begin texting; enable only with the owner's approval.
+  OWNER_CALL_SUMMARY_ENABLED: process.env.OWNER_CALL_SUMMARY_ENABLED || 'false',
+  // Internal/test callers that must not generate owner summaries. Numbers are
+  // normalized before comparison; never hard-code a personal number in source.
+  OWNER_CALL_SUMMARY_EXCLUDE_PHONES: (
+    process.env.OWNER_CALL_SUMMARY_EXCLUDE_PHONES || ''
+  )
+    .split(',')
+    .map((n) => n.trim())
+    .filter(Boolean),
+  // Post-call text summarization is isolated from the live Realtime session.
+  // A failure falls back to a bounded transcript excerpt and never affects the
+  // phone call. OPENAI_REALTIME_API_KEY remains the credential fallback.
+  OPENAI_CALL_SUMMARY_MODEL:
+    process.env.OPENAI_CALL_SUMMARY_MODEL || 'gpt-4.1-mini',
+
   // Human transfer window (2026-08-24, Aryan-decided after the Holly call):
   // live transfers ring Richa's PERSONAL cell, so the right clock is her
   // waking hours, not the salon's opening hours — a Sunday-morning caller who

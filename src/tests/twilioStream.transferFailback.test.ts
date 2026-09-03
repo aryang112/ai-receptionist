@@ -146,9 +146,10 @@ describe('handleTransferToOwner — timed dial with a dial-status action', () =>
 
     expect(result).toEqual({ transferred: true });
     expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
-    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/transferred a call/);
+    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(
+      /A caller called and was transferred to your phone/
+    );
     expect(notifyOwnerSms.mock.calls[0]?.[0]).not.toMatch(/bridal party/);
-    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/from a caller/);
   });
 
   it('with NO public host (old/edge session): byte-identical to the original bare <Dial>', async () => {

@@ -1,7 +1,40 @@
 # STATE — AI Receptionist (Erica)
 
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
-> Last major work: 2026-09-02 — agent handoff synchronized after the subject-aware closure release.
+> Last major work: 2026-09-03 — local-only post-call owner recap implementation.
+
+## 2026-09-03 — LOCAL ONLY: concise owner recap after every external call
+
+- The existing production build does **not** send a general summary after every
+  call. It sends only event-specific notices (exact caller message, successful
+  transfer, running late, and urgent schedule changes); the daily digest is
+  present but production `DIGEST_ENABLED=false`.
+- Locally, call teardown can now generate one concise owner SMS in the requested
+  format: `Hi Richa — [client] called and [purpose]. I [handling]. [ending].`
+  It runs asynchronously after the transcript grace period, uses a
+  Phorest-confirmed name when available, and cannot affect or delay the call.
+- Explicit messages for Richa stay on the deterministic message-taking path and
+  send the caller's exact captured words. Audio/MMS was deliberately deferred:
+  it requires protected recording hosting or signed URLs and creates additional
+  privacy and delivery complexity. The exact captured text is the MVP.
+- A durable, body-free `owner_notification` ledger prevents a generic recap when
+  that call already delivered an event-specific SMS. Failed notification
+  attempts do not suppress the fallback recap. Test/internal numbers can be
+  excluded through `OWNER_CALL_SUMMARY_EXCLUDE_PHONES`; no full phone number is
+  stored in source or documentation.
+- Release is opt-in: `OWNER_CALL_SUMMARY_ENABLED` defaults to `false`, and the
+  summary model defaults to `gpt-4.1-mini`. A deployment cannot start these SMS
+  messages unless the owner explicitly enables the environment flag.
+- Today's six-call report was sent once to Richa and Twilio later reported it
+  `delivered`. This was a one-time approved report, not the new automatic path.
+- Verification: 46 files / 526 tests locally and under `TZ=UTC`; TypeScript
+  build; Prettier; `git diff --check`. Two live `gpt-4.1-mini` structured-output
+  probes used real call-shaped transcripts and produced detailed Sneha and Toya
+  recaps; SMS delivery was stubbed, so the probes sent no texts.
+- **NOT DEPLOYED.** Production remains behavior commit `eca23f1` / Railway
+  deployment `de80d873-ce67-4f6d-a892-30e8ee53b663`. Rollout requires explicit
+  approval, a quiet-window active-call check, the test-number exclusion env,
+  and `OWNER_CALL_SUMMARY_ENABLED=true`.
 
 ## 2026-09-03 — LOCAL ONLY: closure contact requests ask the need first
 

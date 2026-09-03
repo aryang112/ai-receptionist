@@ -154,4 +154,21 @@ describe('CallStore (append-only JSONL)', () => {
       env.CALL_STORE_PATH = prev;
     }
   });
+
+  it('records owner-notification outcome metadata without an SMS body', () => {
+    CallStore.recordOwnerNotification(callSid, {
+      kind: 'post_call_summary',
+      ok: true,
+    });
+
+    const rows = readCalls();
+    const row = rows[rows.length - 1];
+    expect(row).toMatchObject({
+      type: 'owner_notification',
+      callSid,
+      kind: 'post_call_summary',
+      ok: true,
+    });
+    expect(row).not.toHaveProperty('body');
+  });
 });
