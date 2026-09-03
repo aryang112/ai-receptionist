@@ -149,7 +149,9 @@ Caller dials Twilio number
 - **postCallSummary.ts** — opt-in, asynchronous owner recap after call teardown.
   It gives `gpt-4.1-mini` the immutable final transcript and outcome under a
   strict JSON schema, prefers a Phorest-confirmed client name, rejects invented
-  self-stated names, and sends one concise `Hi Richa — …` SMS. Generation
+  self-stated names/affiliations, distinguishes stated company representatives
+  from salon clients, adds `No action needed` to resolved or routine non-client
+  calls, and sends one concise `Hi Richa — …` SMS. Generation
   failure falls back to bounded transcript excerpts; delivery never delays or
   changes the live call. Explicit caller messages remain exact text rather than
   generated summaries.
@@ -231,7 +233,7 @@ Caller dials Twilio number
   prompt/hours tool). One provider's absence in a multi-stylist salon is not a
   salon closure. **Do not change casually.**
 
-## src/tests/  (vitest, 46 files / 526 tests as of 2026-09-03)
+## src/tests/  (vitest, 46 files / 528 tests as of 2026-09-03)
 phorest.client.test.ts (URL/range/client_id/timezone/retry regressions),
 hours.test.ts, booking.alias/match.test.ts, slots.test.ts (clean-grid snapping),
 wsAuth, middleware, twilioStream.bargein/contracts, phorest.mock/selector,

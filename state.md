@@ -13,6 +13,12 @@
   format: `Hi Richa — [client] called and [purpose]. I [handling]. [ending].`
   It runs asynchronously after the transcript grace period, uses a
   Phorest-confirmed name when available, and cannot affect or delay the call.
+- Caller identity preserves an explicitly stated company or role, so a summary
+  says `Ashley Colby from Bank of America` rather than implying Ashley is a salon
+  client. Resolved calls and routine sales/vendor, spam, or job inquiries say
+  `No action needed`; an actual message, callback request, or unresolved client
+  issue is not dismissed. Generated names and affiliations must appear in the
+  caller's own transcript.
 - Explicit messages for Richa stay on the deterministic message-taking path and
   send the caller's exact captured words. Audio/MMS was deliberately deferred:
   it requires protected recording hosting or signed URLs and creates additional
@@ -27,10 +33,12 @@
   messages unless the owner explicitly enables the environment flag.
 - Today's six-call report was sent once to Richa and Twilio later reported it
   `delivered`. This was a one-time approved report, not the new automatic path.
-- Verification: 46 files / 526 tests locally and under `TZ=UTC`; TypeScript
+- Verification: 46 files / 528 tests locally and under `TZ=UTC`; TypeScript
   build; Prettier; `git diff --check`. Two live `gpt-4.1-mini` structured-output
   probes used real call-shaped transcripts and produced detailed Sneha and Toya
-  recaps; SMS delivery was stubbed, so the probes sent no texts.
+  recaps. A third synthetic Bank of America sales probe preserved Ashley's
+  company and ended `No action needed`. SMS delivery was stubbed, so the probes
+  sent no texts.
 - **NOT DEPLOYED.** Production remains behavior commit `eca23f1` / Railway
   deployment `de80d873-ce67-4f6d-a892-30e8ee53b663`. Rollout requires explicit
   approval, a quiet-window active-call check, the test-number exclusion env,

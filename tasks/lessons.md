@@ -341,3 +341,12 @@ failback segments and teardown cannot send duplicates. Summary generation must b
 background-only and failure-isolated: a model or SMS timeout must never delay,
 change, or revive the completed phone call. Keep automatic delivery opt-in and
 exclude internal/test numbers through normalized runtime configuration.
+
+## 2026-09-03 — A caller's name does not make them a salon client
+A bank representative, vendor, salesperson, or job seeker can state a real name
+without being a Phorest client. Owner recaps must preserve any explicitly stated
+company or role alongside the name and distinguish attention from identity. Mark
+resolved calls and routine non-client solicitations `No action needed`, but do
+not suppress a genuine message, callback request, or unresolved client issue.
+Accept generated identity/affiliation text only when it is literally grounded in
+the caller transcript.

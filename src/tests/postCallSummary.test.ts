@@ -31,10 +31,12 @@ const input: PostCallSummaryInput = {
 
 const generated = {
   callerName: 'Wrong Generated Name',
+  affiliation: null,
   purpose: 'Asked about walk-in availability.',
   handling:
     'I explained the closure and offered to check availability from September 10 onward.',
   ending: 'No appointment was booked.',
+  needsOwnerAttention: false,
 };
 
 describe('post-call owner summaries', () => {
@@ -55,8 +57,53 @@ describe('post-call owner summaries', () => {
 
   it('formats the requested natural owner-facing structure and trusts the Phorest name', () => {
     expect(formatGeneratedCallSummary(input, generated)).toBe(
-      'Hi Richa — Sneha A called and asked about walk-in availability. I explained the closure and offered to check availability from September 10 onward. No appointment was booked.'
+      'Hi Richa — Sneha A called and asked about walk-in availability. I explained the closure and offered to check availability from September 10 onward. No appointment was booked. No action needed.'
     );
+  });
+
+  it('identifies a stated business representative and marks a routine solicitation as no-action', () => {
+    const businessInput: PostCallSummaryInput = {
+      ...input,
+      callerName: 'a caller',
+      transcript: [
+        {
+          role: 'caller',
+          text: 'My name is Ashley Colby and I am calling from Bank of America about our merchant services.',
+          ts: 1,
+        },
+        {
+          role: 'erica',
+          text: 'We are not interested, but thank you for calling.',
+          ts: 2,
+        },
+      ],
+    };
+
+    expect(
+      formatGeneratedCallSummary(businessInput, {
+        callerName: 'Ashley Colby',
+        affiliation: 'Bank of America',
+        purpose: 'offered merchant services',
+        handling: 'declined the offer',
+        ending: 'The call ended without a message or callback request',
+        needsOwnerAttention: false,
+      })
+    ).toBe(
+      'Hi Richa — Ashley Colby from Bank of America called and offered merchant services. I declined the offer. The call ended without a message or callback request. No action needed.'
+    );
+  });
+
+  it('rejects an invented business affiliation', () => {
+    expect(
+      formatGeneratedCallSummary(
+        { ...input, callerName: 'a caller' },
+        {
+          ...generated,
+          callerName: null,
+          affiliation: 'Bank of America',
+        }
+      )
+    ).not.toContain('Bank of America');
   });
 
   it('uses a caller-stated name only when no trusted caller name exists', () => {
@@ -84,7 +131,7 @@ describe('post-call owner summaries', () => {
         { ...input, callerName: 'a caller' },
         { ...generated, callerName: 'Invented Person' }
       )
-    ).toMatch(/^Hi Richa — A caller asked about/);
+    ).toMatch(/^Hi Richa — A caller called and asked about/);
   });
 
   it('does nothing when disabled', async () => {
@@ -141,7 +188,7 @@ describe('post-call owner summaries', () => {
 
     expect(result).toMatchObject({ sent: true });
     expect(send).toHaveBeenCalledWith(
-      'Hi Richa — Sneha A called and asked about walk-in availability. I explained the closure and offered to check availability from September 10 onward. No appointment was booked.'
+      'Hi Richa — Sneha A called and asked about walk-in availability. I explained the closure and offered to check availability from September 10 onward. No appointment was booked. No action needed.'
     );
     expect(CallStore.recordOwnerNotification).toHaveBeenCalledWith(
       input.callSid,
