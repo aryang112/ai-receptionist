@@ -350,3 +350,12 @@ resolved calls and routine non-client solicitations `No action needed`, but do
 not suppress a genuine message, callback request, or unresolved client issue.
 Accept generated identity/affiliation text only when it is literally grounded in
 the caller transcript.
+
+## 2026-09-03 — Deploy Railway from a tracked snapshot when the workspace is dirty
+`railway up` respects `.gitignore`, but it can upload untracked files that are not
+ignored. This workspace had an untracked `AGENTS.md` and 4.4 MB `outputs/` folder;
+deploying the current directory would have put unrelated local artifacts into the
+build context. For production, create a temporary directory with `mktemp -d`,
+extract `git archive <exact-commit>` into it, and pass that directory to
+`railway up --path-as-root`. Record the exact commit, deployment ID, and image
+digest so rollback does not depend on the mutable IDE working tree.

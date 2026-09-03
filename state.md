@@ -1,9 +1,37 @@
 # STATE — AI Receptionist (Erica)
 
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
-> Last major work: 2026-09-03 — local-only post-call owner recap implementation.
+> Last major work: 2026-09-03 — closure need-discovery and post-call owner recaps deployed.
 
-## 2026-09-03 — LOCAL ONLY: concise owner recap after every external call
+## ✅ DEPLOYED 2026-09-03 ~7:36 PM ET: closure need-discovery + owner recaps
+
+- Production behavior is commit `117ada0`. Railway deployment
+  `981138c1-6e73-4952-9daa-1087109f1647` is `SUCCESS`, image digest
+  `sha256:bb30e911a06a10c6076d90b6dae9c728ab1ced48dc7478d9e7a6173626fd033a`.
+  Immediate rollback is behavior commit `eca23f1`; its former Railway deployment
+  was `de80d873-ce67-4f6d-a892-30e8ee53b663` and may need commit redeployment if
+  Railway no longer retains it as active.
+- The release was uploaded from a clean `git archive` of `117ada0`, so untracked
+  local `AGENTS.md` and `outputs/` content was not included. The first code-only
+  deployment (`82755ef4-31e8-4530-926e-95553c9c5b78`) passed health/warm-up with
+  summaries off before the configuration redeploy enabled them.
+- `OWNER_CALL_SUMMARY_ENABLED=true`, `OPENAI_CALL_SUMMARY_MODEL=gpt-4.1-mini`,
+  and two internal/test caller numbers are configured in
+  `OWNER_CALL_SUMMARY_EXCLUDE_PHONES`. Full phone numbers remain only in Railway
+  secrets, not source, docs, or deployment output.
+- Post-deploy boot: `/health` 200; 63 services warmed; complete 4,187-client / 28-page
+  Phorest index (`incomplete=false`); zero queued/ringing/in-progress calls.
+  A 15-minute observation window returned HTTP 200 on every probe and produced
+  zero warning/error logs. No calls arrived after enablement, so the first real
+  external call remains the production end-to-end confirmation of summary SMS
+  delivery; live structured-output probes and all automated tests passed before
+  release.
+- No dependency, `business.json`, Phorest write, Realtime model/voice, or
+  `session.update` field changed. Railway's build repeated the existing npm
+  audit result (21 advisories: 1 low, 5 moderate, 14 high, 1 critical); dependency
+  remediation is separate and was not mixed into this live behavior rollout.
+
+## 2026-09-03 — implementation history: concise owner recap after every external call
 
 - The existing production build does **not** send a general summary after every
   call. It sends only event-specific notices (exact caller message, successful
@@ -39,17 +67,17 @@
   recaps. A third synthetic Bank of America sales probe preserved Ashley's
   company and ended `No action needed`. SMS delivery was stubbed, so the probes
   sent no texts.
-- **NOT DEPLOYED.** Production remains behavior commit `eca23f1` / Railway
-  deployment `de80d873-ce67-4f6d-a892-30e8ee53b663`. Rollout requires explicit
-  approval, a quiet-window active-call check, the test-number exclusion env,
-  and `OWNER_CALL_SUMMARY_ENABLED=true`.
+- Deployed in the release recorded above after explicit owner approval, a
+  quiet-window active-call check, and internal-number exclusion configuration.
 
-## 2026-09-03 — LOCAL ONLY: closure contact requests ask the need first
+## 2026-09-03 — implementation history: closure contact requests ask the need first
 
 - Aryan approved the narrow prompt-consistency fix, not a new conversation state machine. During an active salon closure, requests for Richa, the owner, someone, or a person now all mean Richa: Erica gives the away/reopen context, asks what the caller needs, and waits. She handles supported salon work directly and offers a message only after the need is known and is personal, Richa-only, unsupported, or the caller then requests one.
 - The competing ASKED FOR RICHA, SELF-SERVICE FIRST, MESSAGE MODE, current-status, transfer-tool description, and active-closure tool-result guidance now agree. Model-facing prose uses natural availability language and no longer contains the customer-facing phrase "live transfer." The server still deterministically suppresses a dial during the active closure; its result now reports `needDiscoveryRequired` and `messageAvailable`, not `messageRequired`.
 - Verification: TypeScript build; 44 files / 513 tests locally and under `TZ=UTC`; Prettier; `git diff --check`; active prompt estimate 4,198/4,200. Two repeated live `gpt-realtime-2.1` text-to-audio-transcript passes covered Richa and "someone," then personal-message and reschedule follow-ups. All four opening turns gave the return date and asked the need first; personal follow-ups entered message collection, while reschedules stayed self-service. Tools were intercepted, so these were not direct-phone calls or Phorest writes.
-- **NOT DEPLOYED.** Production remains behavior commit `eca23f1` / Railway deployment `de80d873-ce67-4f6d-a892-30e8ee53b663`. Deploy only in an owner-confirmed quiet after-hours window (roughly 6–7 PM ET or later), after confirming zero queued/ringing/in-progress calls and preparing rollback. The separate 12:10 caller-cutoff / VAD investigation is unchanged.
+- Deployed in the release recorded above after explicit owner approval and an
+  after-hours zero-active-call check. The separate 12:10 caller-cutoff / VAD
+  investigation is unchanged.
 
 ## 2026-09-02 — agent handoff synchronized (documentation only)
 
