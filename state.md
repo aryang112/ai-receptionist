@@ -3,6 +3,39 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-09-03 — closure need-discovery and post-call owner recaps deployed.
 
+## 2026-09-03 — Claude cloud QA routine audit
+
+- Audited the existing `erica-call-qa` routine definition, its historical run
+  record, the protected admin endpoints it reads, and the local `/call-review`
+  workflow. The scheduler is proven to have run and emailed autonomously in the
+  past, but current enabled/last-run/next-run status could not be re-verified
+  today because the available Claude browser session is signed out.
+- The cron is fixed at `37 2,12 * * *` UTC. It runs at 8:37 AM and 10:37 PM
+  during EDT, but 7:37 AM and 9:37 PM during EST. Its 13-hour lookback leaves a
+  one-hour coverage gap across the 14-hour interval and overlaps three hours
+  across the 10-hour interval. Isolated sessions have no durable review cursor,
+  so the current design can both miss calls and review others twice.
+- The embedded cloud rubric is stale: it ties transfer behavior to salon hours,
+  while production uses Richa's independent 9 AM–9 PM ET transfer window plus
+  a stronger active-closure gate. It also overclaims from generated transcripts,
+  coarse `{name, ok}` tool summaries, `outcome: none`, and WARN/ERROR lines.
+  Audio-only questions such as clipping, interruptions, exact spoken times, and
+  who hung up cannot be confirmed by that routine because it cannot hear the
+  recording.
+- Security/operations caveat: the read-only admin credential is embedded in the
+  routine because the routine has no secrets store. Do not print it. Rotation
+  requires synchronized Railway, local environment, and routine updates.
+- The local `AGENTS.md`, `/call-review` checklist, and `tasks/lessons.md` now
+  require every daily review to inspect the latest available cloud QA report
+  and independently classify each claim as VERIFIED, LIKELY, NEEDS LISTEN, or
+  FALSE POSITIVE. Automated findings are never sufficient by themselves to
+  justify a production fix.
+- Pending live-routine work: verify its current status after signing into
+  `claude.ai/code/routines`, then update the existing routine (never create a
+  duplicate) to close the coverage gap and replace the stale evidence/transfer
+  rubric. Editing it transmits the embedded admin credential and changes a live
+  cloud automation, so do that only with explicit action-time approval.
+
 ## ✅ DEPLOYED 2026-09-03 ~7:36 PM ET: closure need-discovery + owner recaps
 
 - Production behavior is commit `117ada0`. Railway deployment

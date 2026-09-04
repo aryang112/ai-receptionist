@@ -359,3 +359,21 @@ build context. For production, create a temporary directory with `mktemp -d`,
 extract `git archive <exact-commit>` into it, and pass that directory to
 `railway up --path-as-root`. Record the exact commit, deployment ID, and image
 digest so rollback does not depend on the mutable IDE working tree.
+
+## 2026-09-03 — Automated call QA is a lead generator, not an oracle
+The cloud reviewer can see call metadata, generated transcripts, coarse tool
+status, and a restart-local warning ring. It cannot hear recordings, and the
+call-list API intentionally omits tool arguments/results. Therefore it cannot
+confirm interruption, clipping, exact spoken times/names, who hung up, or the
+reason a tool returned `ok: false`. A caller asking about booking without a
+booking outcome is also not automatically a failure—they may decline, change
+their mind, or disconnect before confirming.
+
+**Rule:** every daily call review must also inspect the latest available
+`erica-call-qa` report and independently disposition each claim as VERIFIED,
+LIKELY, NEEDS LISTEN, or FALSE POSITIVE. Audio-dependent claims stay NEEDS
+LISTEN until the recording is heard. Treat precomputed flags and server logs as
+leads, correlate them to caller impact and expected fallback behavior, and never
+ship a fix from the automated email alone. Keep the reviewer's operational
+rubric synchronized with current code/config—especially the independent
+9 AM–9 PM transfer window and the stronger active-closure gate.
