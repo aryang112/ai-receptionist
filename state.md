@@ -3,6 +3,34 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-09-03 — closure need-discovery and post-call owner recaps deployed.
 
+## 2026-09-03 (evening) — erica-call-qa live routine prompt updated in place
+
+- Updated the EXISTING routine `erica-call-qa` (trig_01Cd5z1eA3HHTk1ZJbBgTMBm)
+  through the routines API; no duplicate was created. Preserved unchanged:
+  name, cron `37 2,12 * * *` UTC, enabled, Gmail connector, allowed tools
+  (Bash/Read/Write/Grep/Glob), persist_session=false, model claude-sonnet-5,
+  environment, and the embedded read-only admin credential (never printed).
+  Only the prompt changed. Verified by re-retrieving the routine afterward.
+- New prompt contract (policy version 2026-09-03 / commit a9a85af): 15-hour
+  lookback, callSid dedup within a run, overlap explicitly expected (calls
+  older than 10h labelled "overlap"); INTERNAL TEST / CLIENT / NON-CLIENT
+  separation (last-4 5169 = Aryan, 6471 = Richa) with damage totals limited to
+  CLIENT calls; independent 9 AM–9 PM ET transfer window plus active-closure
+  need-discovery behavior (Sept 1–9 closure, reopen Sept 10); tools ok=false,
+  flags, outcome none, and log lines are leads only; every claim gets
+  VERIFIED / LIKELY / NEEDS LISTEN / FALSE POSITIVE; clipping, interruption,
+  exact spoken numbers/times, and who hung up are never confirmed from the
+  transcript; audio-dependent claims are NEEDS LISTEN with a time+last-4
+  recording reference (no IDs/URLs) and no pretend listening; accepted
+  bookings are cross-checked against tools[] ok + bookings[] rows; one email
+  per run including all-clear; API unreachable/401/403/5xx is the only
+  automatic CRITICAL; the email never carries secrets, full numbers, IDs,
+  URLs, or transcript bodies.
+- Next run: 2026-09-04 02:37 UTC (Sept 3, 10:37 PM ET). Reconcile its first
+  email against this contract during the next local `/call-review`. Embedded
+  facts (hours, closure dates, transfer window) still need a manual re-sync
+  whenever `business.json` or runtime config changes.
+
 ## 2026-09-03 — Claude cloud QA routine audit
 
 - Audited the existing `erica-call-qa` routine definition, its historical run

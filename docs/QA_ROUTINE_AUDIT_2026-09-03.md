@@ -120,3 +120,13 @@ should be made from the automated report alone.
 Updating the existing live routine requires signing into the Claude Code
 routines page and explicit approval at the moment of the change because the
 routine contains a sensitive credential and controls an external automation.
+
+## Status — applied 2026-09-03 (evening)
+
+Items 1–7 above were applied to the existing routine in place through the
+routines API with explicit approval; only the prompt changed, and every other
+setting (name, cron, enabled, Gmail connector, allowed tools, persist-session,
+embedded credential) was preserved and re-verified afterward. Item 6 is met by
+a stated policy version (2026-09-03 / commit a9a85af) inside the prompt; no
+sanitized QA-context endpoint exists yet, so embedded hours, closure dates, and
+transfer-window facts still require a manual re-sync when config changes.
