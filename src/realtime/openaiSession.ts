@@ -127,6 +127,8 @@ export class OpenAIRealtimeSession {
   private readonly model: string;
   private readonly voice: string;
   private readonly toolHandlers = new Map<string, ToolHandler>();
+  /** Tools whose result must NOT start a response (wait_for_user). */
+  private readonly silentTools = new Set<string>();
   private readonly toolBuffers = new Map<
     string,
     { name: string; args: string }
@@ -291,8 +293,14 @@ export class OpenAIRealtimeSession {
     return descriptions[code] || `Unknown code ${code}`;
   }
 
-  registerTool(name: string, handler: ToolHandler) {
+  registerTool(
+    name: string,
+    handler: ToolHandler,
+    opts: { silent?: boolean } = {}
+  ) {
     this.toolHandlers.set(name, handler);
+    if (opts.silent) this.silentTools.add(name);
+    else this.silentTools.delete(name);
   }
 
   async configureSession({
@@ -977,7 +985,11 @@ export class OpenAIRealtimeSession {
         { tool: name, ms: Date.now() - startedAt },
         `⏱  tool ${name} ${Date.now() - startedAt}ms`
       );
-      this.sendToolResult(callId, result ?? { ok: true });
+      this.sendToolResult(
+        callId,
+        result ?? { ok: true },
+        this.silentTools.has(name)
+      );
     } catch (error) {
       this.log.warn(
         { tool: name, ms: Date.now() - startedAt },
@@ -991,7 +1003,7 @@ export class OpenAIRealtimeSession {
     }
   }
 
-  private sendToolResult(callId: string, result: unknown) {
+  private sendToolResult(callId: string, result: unknown, silent = false) {
     // The session may have been closed by the tool itself (e.g. transfer_to_owner
     // redirecting the call). Dropping the result is correct here — never throw.
     if (!this.isOpen()) {
@@ -1004,6 +1016,15 @@ export class OpenAIRealtimeSession {
       type: 'conversation.item.create',
       item: { type: 'function_call_output', call_id: callId, output },
     });
+    // A silent tool (wait_for_user) exists so the model can decline to speak
+    // on a non-addressed turn. Deliver the output so the conversation stays
+    // consistent, but never start a response for it — that would force the
+    // very speech the tool was chosen to avoid. The caller's next real turn
+    // creates a response through VAD as usual.
+    if (silent) {
+      this.log.debug({ callId }, '🤫 Silent tool result — no response.create');
+      return;
+    }
     // Mark the start of the post-tool turn so first-audio latency is attributed
     // to "after-tool" rather than the (older) caller-turn timestamp.
     this.tToolResultSent = Date.now();

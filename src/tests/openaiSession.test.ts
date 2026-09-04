@@ -728,3 +728,41 @@ describe('VAD turn boundaries — onSpeechStarted / onSpeechStopped wiring', () 
     expect(onSpeechStarted).toHaveBeenCalledTimes(1);
   });
 });
+
+// wait_for_user (2026-09-03): the model's only way to stay silent on a
+// non-addressed turn. Its result must reach the conversation but must never
+// start a response — a response.create here would force the speech the tool
+// exists to avoid.
+describe('silent tools (wait_for_user)', () => {
+  it('delivers the function output but never starts a response for a silent tool', async () => {
+    const { session, sent } = buildSession();
+    session.registerTool('wait_for_user', async () => ({ ok: true }), {
+      silent: true,
+    });
+    await session.handleToolCompleted({
+      call_id: 'c_wait',
+      name: 'wait_for_user',
+      arguments: '{}',
+    });
+    expect(types(sent)).toEqual(['conversation.item.create']);
+    expect(sent[0].item).toMatchObject({
+      type: 'function_call_output',
+      call_id: 'c_wait',
+    });
+    expect(session.pendingResponseCreate).toBe(false);
+  });
+
+  it('a normal tool still gets its response.create', async () => {
+    const { session, sent } = buildSession();
+    session.registerTool('get_prices', async () => ({ ok: true }));
+    await session.handleToolCompleted({
+      call_id: 'c_1',
+      name: 'get_prices',
+      arguments: '{}',
+    });
+    expect(types(sent)).toEqual([
+      'conversation.item.create',
+      'response.create',
+    ]);
+  });
+});

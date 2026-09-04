@@ -7,6 +7,7 @@ import {
   REALTIME_CONTEXT_NOTES,
   TOOL_DEFINITIONS,
 } from '../realtime/twilioStream.js';
+import { parseToolArgs } from '../realtime/toolSchemas.js';
 import businessHours from '../config/business.json';
 import type { Service } from '../services/phorest.types.js';
 
@@ -41,12 +42,12 @@ describe('buildInstructions — TEMPORARY CLOSURE POLICY', () => {
   it('injects an ACTIVE away block when "now" falls inside the range', () => {
     const instructions = buildInstructions(at('2026-09-05T12:00'));
     expect(instructions).toContain('TEMPORARY CLOSURE POLICY');
-    expect(instructions).toMatch(/ACTIVE NOW salon-wide/);
+    expect(instructions).toMatch(/ACTIVE NOW: the whole salon is closed/);
     expect(instructions).toMatch(/Public reason.*Richa is away/);
     expect(instructions).toMatch(/transfer_to_owner/);
     // Reopen day carries its full date, never a bare weekday.
     expect(instructions).toMatch(/Thursday, September 10/);
-    expect(instructions).toMatch(/Never say vacation, holiday, or trip/);
+    expect(instructions).toMatch(/never say vacation, holiday, or trip/i);
   });
 
   it('the word "vacation" appears ONLY inside the explicit ban clause, in every variant', () => {
@@ -75,7 +76,7 @@ describe('buildInstructions — TEMPORARY CLOSURE POLICY', () => {
       instructions.indexOf('TEMPORARY CLOSURE POLICY')
     );
     expect(policy).toMatch(
-      /Richa\/the owner\/someone\/a person.*all mean Richa.*First reply.*Richa is away.*Thursday, September 10.*what do you need.*WAIT/i
+      /Richa\/the owner\/someone\/a person.*all mean Richa.*First reply.*Richa is away.*Thursday, September 10.*what they need.*WAIT/i
     );
     expect(policy).toMatch(
       /Do not mention messages yet.*After their answer.*handle salon tasks.*offer one only if personal\/Richa-only, unsupported, or requested/i
@@ -88,13 +89,15 @@ describe('buildInstructions — TEMPORARY CLOSURE POLICY', () => {
       /Different provider.*never say they are away.*salon closure.*full reopen date.*Do not offer the owner a message unless asked/i
     );
     expect(policy).toMatch(/full context once.*repeat only if asked/i);
-    expect(policy).toMatch(/sole whereabouts exception/i);
+    expect(policy).toMatch(/one whereabouts detail you may share/i);
+    // The quoted first-reply line is gone: the model gets a description, not a script to parrot.
+    expect(policy).not.toMatch(/what do you need\?"/);
   });
 
   it('injects an UPCOMING away block when "now" is within 14 days of the start', () => {
     const instructions = buildInstructions(at('2026-08-22T09:00'));
     expect(instructions).toContain('TEMPORARY CLOSURE POLICY');
-    expect(instructions).toMatch(/UPCOMING salon-wide/);
+    expect(instructions).toMatch(/UPCOMING: the whole salon is closed/);
     // Transfers still work until she leaves.
     expect(instructions).toMatch(/Richa is AVAILABLE to take a call right now/);
     expect(instructions).toMatch(/do not say she is already away/i);
@@ -549,7 +552,8 @@ describe('buildInstructions — production prompt architecture (2026-08-28)', ()
     expect(p).toMatch(/ask one brief clarification/);
     expect(p).toMatch(/do not infer, preamble, or call a tool/);
     expect(p).toMatch(/REE-cha/);
-    expect(p).toMatch(/MORE THAN 2 tool failures/);
+    expect(p).toMatch(/on a second failure, stop and offer Richa/);
+    expect(p).not.toMatch(/MORE THAN 2 tool failures/);
   });
 
   it('moved-to-tools content is GONE from the prompt (single source of truth)', () => {
@@ -779,7 +783,7 @@ describe('high-salience write tool descriptions', () => {
       instructions.indexOf('CLOSE:'),
       instructions.indexOf('═══ SAFETY & ESCALATION ═══')
     );
-    expect(close).toMatch(/end_call is SILENT\/PROACTIVE/i);
+    expect(close).toMatch(/end_call — SILENT\/PROACTIVE/i);
     expect(close).toMatch(/function item is the entire response/i);
     expect(close).toMatch(/separate result response owns/i);
     expect(close).toMatch(/ordinary farewell addressed to them/i);
@@ -838,5 +842,32 @@ describe('high-salience write tool descriptions', () => {
     );
     expect(clientId?.description).toMatch(/Never pass an appointmentId/i);
     expect(clientId?.description).toMatch(/directly.*explicit confirmation/i);
+  });
+});
+
+// 2026-09-03 prompt audit: the "empty/noise turn gets silence" rule was
+// unfulfillable — every VAD-created response forces speech, and production
+// calls showed unprompted prompts and intent menus on noise turns. The
+// OpenAI-recommended fix is a no-op tool the model can choose instead.
+describe('wait_for_user — the no-op the model uses to stay silent', () => {
+  it('is defined, argument-free, and scoped to non-addressed audio', () => {
+    const tool = TOOL_DEFINITIONS.find((c) => c.name === 'wait_for_user');
+    expect(tool).toBeDefined();
+    expect((tool!.parameters as any).properties).toEqual({});
+    expect(tool!.description).toMatch(/not addressed to you/i);
+    expect(tool!.description).toMatch(/never .*to end a call/i);
+    expect(tool!.description).not.toMatch(/"/);
+  });
+
+  it('is the prompt-level answer for empty/noise turns and mirrors the zod schema', () => {
+    const p = buildInstructions();
+    expect(p).toMatch(/noise-only turn gets silence — call wait_for_user/);
+    expect(p).toMatch(/get no response: call wait_for_user and say nothing/);
+    expect(parseToolArgs('wait_for_user', {}).success).toBe(true);
+    // Every model-facing tool has a zod mirror (lessons.md F1).
+    for (const t of TOOL_DEFINITIONS) {
+      const r = parseToolArgs(t.name, {});
+      if (!r.success) expect(r.error).not.toMatch(/Unknown tool/);
+    }
   });
 });

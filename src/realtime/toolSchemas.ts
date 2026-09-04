@@ -56,6 +56,9 @@ export const TOOL_SCHEMAS = {
   }),
   transfer_to_owner: z.object({}),
   leave_message_for_owner: z.object({}),
+  // No-op the model calls to stay silent on a non-addressed turn (silence,
+  // noise, side conversation). MUST mirror TOOL_DEFINITIONS (lessons.md F1).
+  wait_for_user: z.object({}),
   // S1: optional `reason` tags WHY the call ended ('spam' decline vs the
   // default 'done' caller-confirmed hangup) — MUST mirror TOOL_DEFINITIONS
   // (lessons.md F1: a one-sided add gets silently stripped by zod
