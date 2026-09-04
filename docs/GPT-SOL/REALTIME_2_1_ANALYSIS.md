@@ -1,6 +1,6 @@
 # OpenAI Realtime 2.1 analysis
 
-Last evidence refresh: 2026-09-02
+Last evidence refresh: 2026-09-03
 
 ## Model and current controls
 
@@ -29,6 +29,7 @@ prosody and avoids a separate STT → text model → TTS latency chain.
 | Input transcription          | `gpt-4o-mini-transcribe` in production after live schema validation               | Transcript is asynchronous and advisory                             |
 | Reasoning effort             | Omitted                                                                           | Provider/default behavior; no reasoning change was made             |
 | Parallel tool calls          | Not explicitly configured                                                         | Do not assume parallel execution semantics                          |
+| Silence / non-addressed audio | `wait_for_user` no-op tool (2026-09-03, local); result delivered with no `response.create` | The model can decline to speak instead of reciting a menu       |
 | Response phase handling      | All emitted audio/text is streamed; phase is not persisted                        | Native preambles can become audible duplicates                      |
 
 Official documentation exposes `reasoning.effort` values from `minimal` through
@@ -36,6 +37,17 @@ Official documentation exposes `reasoning.effort` values from `minimal` through
 effort can increase latency and output tokens. For this receptionist, effort
 should be treated as an A/B-tested operating point—not assumed to be “better”
 because it is higher. No such experiment is authorized or implemented now.
+
+## 2026-09-03 field probe
+
+`scripts/validate-session-fields.ts` against `gpt-realtime-2.1` today: the
+production shape plus each of `reasoning.effort` (`low`, `minimal`),
+`audio.output.speed`, `semantic_vad` (+ `eagerness`), server-VAD
+`idle_timeout_ms`, `parallel_tool_calls`, `tool_choice`, and
+`max_output_tokens` were all ACCEPTED and echoed back. The echoed baseline
+shows `reasoning: undefined`, so the effective default is the provider's, not
+an explicit `low`. Nothing here is enabled yet; each is a staged experiment
+in `tasks/todo.md`.
 
 ## Model-specific operating lessons
 

@@ -1,3 +1,46 @@
+# PLAN — Prompt + architecture audit follow-ups (2026-09-03) — from docs/PROMPT_AUDIT_2026-09-03.md
+
+## ✅ Done locally in the audit pass (NOT deployed)
+- [x] One-home-per-rule prompt rewrite; K1–K6 conflicts resolved; variety /
+      no-menu / no-repeat-clarification / never-invent-reasons added; BOOK
+      read-back → explicit yes made explicit; quoted closure reply → description
+- [x] Tool descriptions own contracts: suggest_availability day/time rules
+      (incl. "both dates in one turn"), book/reschedule read-back + yes
+- [x] `wait_for_user` no-op tool: definition, zod mirror, silent result path
+      (`registerTool(name, handler, {silent})`), handler + tool row, prompt clauses
+- [x] `scripts/probe-prompt-live.ts` (read-only live probe; run before any prompt deploy)
+- [x] 532 tests green (local + TZ=UTC), tsc, Prettier, diff --check, budget 3,910 < 4,200
+
+## P0 — deploy gate
+- [ ] Owner go-ahead in an after-hours window; zero active calls; deploy the
+      exact commit from a clean `git archive`; record deployment ID + digest
+- [ ] Ear test on the real number: new-caller booking (read-back heard?),
+      "is Richa there?", "talk to someone" → message, TV/noise turn → silence,
+      "check Richa's availability tomorrow"
+- [ ] Rollback point: `117ada0` / Railway `981138c1-6e73-4952-9daa-1087109f1647`
+
+## P1 — one commit + ear test each
+- [ ] `OPENAI_REASONING_EFFORT` env knob (default `low`; unset = byte-identical
+      payload, snapshot test); compare `⏱` first-audio latency; listen for fewer
+      spoken deliberations (accepted live 2026-09-03)
+- [ ] Transcription `language:'en'` + salon-vocabulary `prompt` (09-01 P0, still
+      open; 5 of 12 transcripts this week carry foreign script for English speech)
+- [ ] Log `phase` (commentary | final_answer) per output item; decide on a
+      commentary-phase guard from counts, not ear
+- [ ] Caller-context wording: replace "identity"/"identity_status" vocabulary
+      with plain "whether it's them" so "confirm your identity" stops being spoken
+- [ ] C5 (09-01): unrecognized context says the calling number was already
+      checked → existing-appointment path asks booking number or name
+
+## P2 — staged experiments
+- [ ] Semantic VAD ear test (`eagerness:'auto'`, greeting handshake preserved);
+      targets the 12:10 PM cut-off and pause-pounce
+- [ ] VAD `silence_duration_ms` 700 → ~550 A/B (latency vs pounce)
+- [ ] `gpt-realtime-2.1-mini` cost A/B only after the prompt is stable
+- [ ] SIP connector only if latency percentiles justify rebuilding call control
+
+---
+
 # RELEASE — closure/message/client basics (2026-09-02)
 
 - [x] Exact caller-message capture and truthful SMS acknowledgement deployed

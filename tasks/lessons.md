@@ -377,3 +377,23 @@ leads, correlate them to caller impact and expected fallback behavior, and never
 ship a fix from the automated email alone. Keep the reviewer's operational
 rubric synchronized with current code/config—especially the independent
 9 AM–9 PM transfer window and the stronger active-closure gate.
+
+## 2026-09-03 — Prompt vocabulary becomes speech; an unfulfillable rule is a conflict
+Real calls this week spoke the prompt's own jargon: "closed for the
+**salon-wide** closure", "unavailable for a **live call**", "I need a clear yes
+or no to **confirm your identity**". Every label the model reads is a word it
+may say. **Rule:** write model-facing prose in the words you would be happy to
+hear on the phone; grep the rendered prompt AND the caller-context notes for
+internal labels before shipping (`scripts/render-prompt.ts`).
+Second pattern: "empty/noise turns get no response" sat in the prompt for a
+week while a real caller heard three Erica lines before speaking. Under
+server VAD every detected turn creates a response, so the model *cannot* obey
+— it must emit something, and it emits a menu. A rule the runtime makes
+impossible is a conflict, not a style problem. **Rule:** when a prompt rule
+asks the model to do nothing, give it a tool that does nothing
+(`wait_for_user`, silent result path, no `response.create`). And after a
+prompt change, run `scripts/probe-prompt-live.ts` — it caught the booking
+read-back being skipped that two production test calls had already shown.
+Third: yesterday's closure commit re-introduced a quoted assistant line with a
+"varied naturally" tag. One example + "vary" is still one example. The 🦜
+lesson stands — describe, don't quote — and the prompt test now asserts it.

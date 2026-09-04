@@ -7,7 +7,9 @@ For a current architecture, Realtime 2.1, quirks, and operations handoff, start
 with [`GPT-SOL/README.md`](GPT-SOL/README.md).
 
 Forwarding is live. As of 2026-09-03, production behavior is `117ada0` with
-closure need-discovery and opt-in owner recaps enabled for external callers;
+closure need-discovery and opt-in owner recaps enabled for external callers
+(the 2026-09-03 prompt-audit rewrite + `wait_for_user` are committed locally,
+not yet deployed — see `docs/PROMPT_AUDIT_2026-09-03.md`);
 internal/test lines are excluded through Railway configuration. The categorized reliability backlog,
 prompt-versus-code decisions, acceptance tests, and after-hours-only release
 gate are in
@@ -109,7 +111,9 @@ Caller dials Twilio number
 - **openaiSession.ts** — `OpenAIRealtimeSession`: WS connect (GA, no beta header),
   `configureSession` (GA nested schema: g711_ulaw, server_vad, noise_reduction,
   truncation.retention_ratio), event loop (`handleEvent`), tool-call buffering,
-  `injectContext`, `requestGreeting`, **`requestResponse()`** (guarded response.create
+  `injectContext`, `requestGreeting`, `registerTool(name, handler, {silent})`
+  (2026-09-03: a silent tool's `function_call_output` is sent with no
+  follow-up `response.create` — the `wait_for_user` path), **`requestResponse()`** (guarded response.create
   — the ONLY safe out-of-band speech trigger; use with `injectContext`),
   `truncateActiveResponse` (barge-in), RT-5 retry (cleared on speech_started — B2;
   capped at 2 consecutive, reset on success/speech — B3), latency +
@@ -235,7 +239,7 @@ Caller dials Twilio number
   prompt/hours tool). One provider's absence in a multi-stylist salon is not a
   salon closure. **Do not change casually.**
 
-## src/tests/  (vitest, 46 files / 528 tests as of 2026-09-03)
+## src/tests/  (vitest, 46 files / 532 tests as of 2026-09-03)
 phorest.client.test.ts (URL/range/client_id/timezone/retry regressions),
 hours.test.ts, booking.alias/match.test.ts, slots.test.ts (clean-grid snapping),
 wsAuth, middleware, twilioStream.bargein/contracts, phorest.mock/selector,
@@ -267,6 +271,9 @@ self-stated names, invented-name rejection, opt-in/exclusion/deduplication,
 fallback, delivery failure, and empty calls;
 `twilioStream.postCallSummary.test.ts` locks the one-shot immutable teardown
 snapshot. Owner-message tests also reject short consent noise such as “Ja.”
+2026-09-03 prompt audit: `openaiSession.test.ts` covers the silent tool
+result path; `twilioStream.prompt.test.ts` locks `wait_for_user` (definition,
+prompt clauses, zod mirror) and the de-duplicated wording (46 files / 532).
 
 ## scripts/  (read-only diagnostics + ops)
 inspect-appointment.ts, list-services.ts, check-availability.ts, test-appt-filter.ts,
@@ -279,6 +286,9 @@ quoted candidate-reply lines), **validate-session-fields.ts** /
 against gpt-realtime-2.1 before shipping — the lessons.md rule as one command),
 **probe-client-history.ts** (raw client fields + 120 days of past appointments
 for the service-history feature).
+2026-09-03: **probe-prompt-live.ts** — the exact local prompt + tools on the
+production model/session shape, text in, audio transcript out, business tools
+intercepted with canned results. Run before any prompt deploy.
 
 ## Tools the model can call
 `suggest_availability(serviceName, date, preferredTime?)`, `book_appointment`,
@@ -287,6 +297,9 @@ for the service-history feature).
 `transfer_to_owner()` (live transfer only; during the active away closure: no
 dial, returns coaching to collect a message), `leave_message_for_owner()`
 (argument-free exact caller-transcript delivery),
+`wait_for_user()` (2026-09-03: no-op for silence/noise/side-conversation
+turns; the session delivers its result with NO `response.create`, so the model
+can stay silent instead of reciting a menu),
 `end_call(reason?: 'done'|'spam')` (graceful hangup after
 caller confirms done, or right after the one-line spam decline — 'spam' tags
 the outcome for the blocklist; drains goodbye audio, aborts if the caller

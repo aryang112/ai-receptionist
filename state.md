@@ -64,6 +64,37 @@
   rubric. Editing it transmits the embedded admin credential and changes a live
   cloud automation, so do that only with explicit action-time approval.
 
+## 2026-09-03 ~8:30 PM ET — prompt + architecture audit shipped LOCALLY (not deployed)
+
+- Full audit in [`docs/PROMPT_AUDIT_2026-09-03.md`](docs/PROMPT_AUDIT_2026-09-03.md):
+  12 production transcripts read, OpenAI guides/model pages/changelog and the
+  Vapi/Retell/ElevenLabs guides compared, session fields live-probed.
+- Verdict: architecture (Twilio Media Streams ⇄ Realtime S2S ⇄ tools),
+  `gpt-realtime-2.1`, and Marin are correct and current — no model/transport/
+  voice change. The prompt had drifted into repetition (10 rule families in
+  3–6 homes), one quoted assistant line had crept back in `1b1c534`, and the
+  failure threshold was stated three ways. Real calls showed booking writes
+  without a read-back (2 of 2 test bookings), menus on empty turns, and prompt
+  jargon spoken aloud.
+- Shipped locally: one-home-per-rule prompt rewrite (3,910 est tokens, was
+  4,198; every rule family and section order test-locked); tool descriptions
+  own the day/time and read-back-then-yes contracts; **new `wait_for_user`
+  no-op tool** with a silent result path in `OpenAIRealtimeSession` so the
+  model can obey "noise turns get no response"; permanent
+  `scripts/probe-prompt-live.ts`; 46 files / 532 tests green locally and
+  under `TZ=UTC`; tsc, Prettier, `git diff --check` clean.
+- Live probes (text in, audio transcript out, tools intercepted): the booking
+  read-back now precedes the write; "talk to someone" gets the closure answer
+  without "who?"; a non-addressed turn gets `wait_for_user` and silence; no
+  "salon-wide"/"live call" wording. Residual: Realtime 2.1 still emits a short
+  commentary line before the read-back — measure `phase` before guarding.
+- **Not deployed.** Standing rule: after-hours owner go-ahead, zero active
+  calls, clean `git archive` of the exact commit. Rollback is `117ada0`
+  (Railway `981138c1-6e73-4952-9daa-1087109f1647`).
+- Next (ranked, in `tasks/todo.md`): deploy + ear test; `reasoning.effort`
+  env knob default `low`; transcription `language:'en'`; log `phase`;
+  semantic-VAD staged ear test; caller-context "identity" wording; C5.
+
 ## ✅ DEPLOYED 2026-09-03 ~7:36 PM ET: closure need-discovery + owner recaps
 
 - Production behavior is commit `117ada0`. Railway deployment

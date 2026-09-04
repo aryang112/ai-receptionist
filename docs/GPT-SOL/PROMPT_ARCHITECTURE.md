@@ -1,11 +1,32 @@
 # Erica prompt architecture and rationale
 
-Last updated: 2026-09-02
+Last updated: 2026-09-03
 
 Implementation status: deployed in production behavior commit `eca23f1`;
 automated, UTC, build, prompt-budget, and live Realtime model probes passed.
 The latest closure probes intercepted business tools and are not a direct-phone
 ear test or a real Phorest write.
+
+## 2026-09-03 audit pass (local, not yet deployed)
+
+See [`../PROMPT_AUDIT_2026-09-03.md`](../PROMPT_AUDIT_2026-09-03.md). The
+section order below is unchanged. What moved:
+
+- **One home per rule.** Tool contracts (`end_call` silence, message-taking,
+  write confirmation, availability day/time rules) live in the tool
+  descriptions; the prompt states each family once. The failure threshold is
+  one rule (retry once; a second failure → offer Richa or a message).
+- **No quoted assistant lines** except the legal greeting and the one
+  availability-vs-speak clarifier. The closure first reply is described.
+- **`wait_for_user`** is the model's only way to stay silent: a no-op tool
+  whose result is delivered without a `response.create`. The "empty/noise turn
+  gets no response" rule names it.
+- **Additions from the guide + transcripts:** vary wording, no menus, do not
+  repeat a clarification, never invent a reason, explicit BOOK read-back →
+  WAIT → yes.
+- **Verification:** `scripts/probe-prompt-live.ts` runs the exact local prompt
+  and tools on the production model with business tools intercepted. It is a
+  text-in probe, not an ear test.
 
 ## Purpose
 
