@@ -39,3 +39,13 @@ The fake numbers are reserved fictional numbers. Existing tests mock clients but
 No live API probes, Phorest writes, calls, listening tests, or deployments were run during this reconciliation. `scripts/probe-prompt-live.ts` is provided for later explicitly authorized live-model validation; do not run live scripts as part of a routine offline review.
 
 Review this PR first, then the service-information PR stacked on its branch. Do not deploy or merge as part of review. The old private review repository is superseded.
+
+## Service-information draft (review second)
+
+The second PR ports all 3 modified and 10 new prototype files from the separate Codex worktree onto the reconciled conversation branch. It adds `get_service_information`, local service-knowledge configuration, source/benchmark/validation scripts, and unit/integration tests. See `docs/SERVICE_KNOWLEDGE_PLAN_2026-09-04.md` for the original proposed design; that document's historical findings are not a new production approval.
+
+It also changes the PRIVACY section so public provider working hours and bookable openings may be discussed, while private whereabouts/calendars/client appointments remain protected. Fable should deliberately approve or reject that functional change rather than treating it as incidental to knowledge lookup.
+
+The original prototype exceeded the existing prompt budget once combined with Fable's ask-once behavior. Only its new knowledge/privacy wording was shortened; function-call-only output, returned-fact grounding, qualifiers, verbatim high-risk responses, provider confirmation for missing facts, and private-calendar protections remain explicit. The existing budget ceilings were retained and now pass. Corresponding wording assertions were updated without removing their behavior coverage.
+
+Final service-information branch: 48 test files / 568 tests passed; TypeScript build passed, with the same dummy-only configuration above. The integration still needs live-model and listening evaluation before release. The knowledge content remains a prototype for owner review.

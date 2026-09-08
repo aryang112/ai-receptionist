@@ -480,8 +480,11 @@ describe('buildInstructions — PRIVACY (P1)', () => {
     const instructions = buildInstructions();
     expect(instructions).toContain('PRIVACY');
     expect(instructions).toMatch(/NEVER give out phone numbers/i);
-    expect(instructions).toMatch(/schedule or whereabouts/i);
-    expect(instructions).toMatch(/whether anyone is at the salon/i);
+    expect(instructions).toMatch(
+      /Provider working hours and bookable availability are public/i
+    );
+    expect(instructions).toMatch(/Never reveal personal whereabouts/i);
+    expect(instructions).toMatch(/Is anyone there.*operating availability/i);
   });
 
   it('restricts appointment details to the identified owner of the appointment', () => {

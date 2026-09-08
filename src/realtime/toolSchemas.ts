@@ -41,6 +41,27 @@ export const TOOL_SCHEMAS = {
   get_prices: z.object({
     serviceName: z.string().optional(),
   }),
+  get_service_information: z.object({
+    serviceName: z.string().trim().min(1).max(120),
+    topics: z
+      .array(
+        z.enum([
+          'overview',
+          'process',
+          'longevity',
+          'preparation',
+          'aftercare',
+          'suitability',
+          'expected_results',
+          'products',
+          'patch_test',
+          'contraindications',
+          'safety',
+        ])
+      )
+      .min(1)
+      .max(3),
+  }),
   lookup_customer: z.object({
     phone: z.string().optional(),
     firstName: z.string().optional(),
