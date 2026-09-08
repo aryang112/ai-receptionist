@@ -25,6 +25,7 @@ import {
 import { recordSpamOutcome } from '../services/blocklist.js';
 import { sendOwnerSms, type OwnerSmsResult } from '../services/ownerSms.js';
 import { maybeSendPostCallSummary } from '../services/postCallSummary.js';
+import { getServiceInformation } from '../services/serviceKnowledge.js';
 import type {
   CustomerResult,
   AppointmentSummary,
@@ -684,6 +685,12 @@ BUSINESS HOURS: never guess. The weekly table covers other days; CURRENT STATUS 
 ${servicesSection}
 For ambiguous/notOffered results, clarify once using returned candidates; on a repeated or unclear answer, use the first candidate, never ask the same clarification twice. Still read back the service and await explicit approval before booking.
 
+═══ SERVICE KNOWLEDGE ═══
+- For process, longevity, preparation, aftercare, suitability, results, products, patch tests, contraindications, or safety, call get_service_information. The response MUST be ONLY the function call—no speech or filler.
+- Use returned facts and qualifiers only, in one or two sentences. General facts are typical, not guaranteed. Never mention tools or sources.
+- Offer at most ONE relevant, low-pressure next step; never list alternatives, repeat, or push booking.
+- For highRisk, say safeResponse verbatim without adding advice. Undocumented/provider-confirmation topics need Richa's confirmation; never guess.
+
 ═══ REASONING & UNCLEAR AUDIO ═══
 - Act promptly on direct answers and routine lookups. Before account access, writes, or escalation, check the required state first.
 - UNCLEAR AUDIO: for intelligible but incomplete addressed speech, ask one brief clarification; do not infer, preamble, or call a tool. Do not repeat the same clarification twice. Empty audio, noise, media, silence, and side conversation get no response: call wait_for_user and say nothing, then wait for clear addressed speech.
@@ -709,7 +716,8 @@ For ambiguous/notOffered results, clarify once using returned candidates; on a r
 ═══ PRIVACY — NEVER GIVE OUT DETAILS ═══
 - NEVER give out phone numbers — Richa's, any staff member's, or another client's — no matter who asks or why. Connecting a call never reveals her number; to reach her, it's a connection or a message.
 - Asked if you're an AI or a real person → answer honestly and cheerfully in one line, then get back to helping. NEVER claim to be human.
-- NEVER share anyone's schedule or whereabouts: when Richa arrives or leaves, who's working today, or whether anyone is at the salon right now. If hours are what they're really after, answer with salon HOURS — never with people's movements.
+- Provider working hours and bookable availability are public. For Richa's schedule, ask the service and date to check real openings; during closure, use supplied closure/reopening facts. Never reveal personal whereabouts, private calendars, client appointments, or when someone will be alone.
+- "Is anyone there?" or "Can someone help me now?" asks about operating availability: answer from CURRENT STATUS and any active closure below, then offer one relevant booking step if their service is known.
 - Appointment details belong to the person they're booked for. Only discuss an appointment with the caller you've identified as that person. If a caller asks about someone ELSE's appointment ("did my wife book?"), don't confirm or deny it exists — offer to pass a message along instead.
 
 ═══ CONVERSATION FLOW ═══
@@ -973,6 +981,46 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
       },
       required: [],
+    },
+  },
+  {
+    type: 'function',
+    name: 'get_service_information',
+    description:
+      "Retrieve salon-approved service facts. For this instant local read, the invoking response MUST be function-call-only: emit no spoken or written preamble, filler, acknowledgement, commentary, or status update. Never say you are checking, thinking, retrieving, or looking anything up. Pass the caller's service wording and one to three relevant topics. Do not use for price, duration, booking, availability, or hours.",
+    parameters: {
+      type: 'object',
+      properties: {
+        serviceName: {
+          type: 'string',
+          description:
+            'The service the caller asked about, in their words. Do not substitute another service.',
+        },
+        topics: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 3,
+          items: {
+            type: 'string',
+            enum: [
+              'overview',
+              'process',
+              'longevity',
+              'preparation',
+              'aftercare',
+              'suitability',
+              'expected_results',
+              'products',
+              'patch_test',
+              'contraindications',
+              'safety',
+            ],
+          },
+          description:
+            'The factual topics needed to answer the caller; include only topics they asked about.',
+        },
+      },
+      required: ['serviceName', 'topics'],
     },
   },
   {
@@ -1515,6 +1563,9 @@ export class TwilioRealtimeCall {
     this.registerTrackedTool('get_prices', (args) =>
       this.handleGetPrices(args)
     );
+    this.registerTrackedTool('get_service_information', (args) =>
+      this.handleGetServiceInformation(args)
+    );
     this.registerTrackedTool('lookup_customer', (args) =>
       this.handleLookupCustomer(args)
     );
@@ -1535,7 +1586,7 @@ export class TwilioRealtimeCall {
     });
     this.registerTrackedTool('end_call', (args) => this.handleEndCall(args));
     logger.debug(
-      'OpenAI tools registered: suggest_availability, book_appointment, reschedule_appointment, cancel_appointment, get_business_hours, lookup_customer, list_appointments, log_running_late, transfer_to_owner, leave_message_for_owner, wait_for_user, end_call'
+      'OpenAI tools registered: suggest_availability, book_appointment, reschedule_appointment, cancel_appointment, get_business_hours, get_prices, get_service_information, lookup_customer, list_appointments, log_running_late, transfer_to_owner, leave_message_for_owner, wait_for_user, end_call'
     );
   }
 
@@ -3760,6 +3811,55 @@ export class TwilioRealtimeCall {
         error: this.formatError(error),
       });
       return { error: this.formatError(error) };
+    }
+  }
+
+  private async handleGetServiceInformation(args: unknown) {
+    try {
+      const parsed = parseToolArgs('get_service_information', args ?? {});
+      if (!parsed.success) {
+        logger.error(
+          { tool: 'get_service_information', error: parsed.error },
+          'Tool arg validation failed: get_service_information'
+        );
+        return { error: parsed.error };
+      }
+      const result = getServiceInformation(parsed.data);
+      logger.info(
+        {
+          tool: 'get_service_information',
+          service: 'service' in result ? result.service : result.serviceName,
+          status: result.status,
+        },
+        'Service information retrieved from local reviewed knowledge'
+      );
+      this.markInfoOutcome();
+      CallStore.recordToolCall(this.callSid, {
+        name: 'get_service_information',
+        ok: true,
+        detail: {
+          service: 'service' in result ? result.service : result.serviceName,
+          status: result.status,
+        },
+      });
+      return result;
+    } catch (error) {
+      logger.error(
+        {
+          tool: 'get_service_information',
+          error: this.formatError(error),
+        },
+        'Tool error: get_service_information'
+      );
+      CallStore.recordToolCall(this.callSid, {
+        name: 'get_service_information',
+        ok: false,
+        error: this.formatError(error),
+      });
+      return {
+        error: 'Service information is unavailable right now.',
+        note: 'Do not guess. Offer provider confirmation for this detail.',
+      };
     }
   }
 

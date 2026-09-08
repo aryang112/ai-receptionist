@@ -1,0 +1,421 @@
+{
+  "schemaVersion": 1,
+  "auditedAt": "2026-09-04",
+  "entries": [
+    {
+      "id": "eyebrow_tinting",
+      "displayName": "Eyebrow Tinting",
+      "aliases": [
+        "eyebrow tinting",
+        "eyebrow tint",
+        "brow tinting",
+        "brow tint",
+        "brow thread tint"
+      ],
+      "facts": [
+        {
+          "topic": "longevity",
+          "text": "Eyebrow tint generally remains visible on the brow hairs for about three to four weeks, while any stain on the skin usually fades sooner.",
+          "qualifiers": [
+            "Longevity varies with hair growth, skin type, cleansing, exfoliation, skincare products, and swimming."
+          ],
+          "scope": "general",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/_files/ugd/820321_fbd40d0c7b514ea68b564ad835765948.pdf",
+          "corroboratingUrl": "https://browcodepro.com/pages/faqs"
+        },
+        {
+          "topic": "aftercare",
+          "text": "For the first twenty-four to forty-eight hours, be gentle with the brow area and avoid rubbing, exfoliating products, active skincare, and excessive heat or steam there.",
+          "qualifiers": [
+            "Exfoliation and chlorinated water can make the tint fade faster."
+          ],
+          "scope": "general",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/_files/ugd/820321_fbd40d0c7b514ea68b564ad835765948.pdf",
+          "corroboratingUrl": "https://browcodepro.com/pages/faqs"
+        },
+        {
+          "topic": "patch_test",
+          "text": "Patch-test requirements must be confirmed with Richa before giving a definite salon policy.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "needs_owner_review",
+          "safety": "sensitive",
+          "sourceUrl": "https://www.richasthreading.com/_files/ugd/820321_fbd40d0c7b514ea68b564ad835765948.pdf"
+        }
+      ]
+    },
+    {
+      "id": "brow_lamination",
+      "displayName": "Brow Lamination",
+      "aliases": [
+        "brow lamination",
+        "eyebrow lamination",
+        "brow laminate",
+        "eyebrow lifting",
+        "eye brow threading lamination bundle"
+      ],
+      "facts": [
+        {
+          "topic": "overview",
+          "text": "Brow lamination softens and redirects the existing brow hairs, then sets them into a fuller or more neatly brushed shape.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/brow-lamination-parkville-md"
+        },
+        {
+          "topic": "process",
+          "text": "The service uses a lifting solution to make the brow hairs flexible, shapes them, sets them with a second solution, and finishes with nourishing oil; tint may be added for more depth.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/brow-lamination-parkville-md"
+        },
+        {
+          "topic": "longevity",
+          "text": "Brow lamination typically lasts about four to six weeks.",
+          "qualifiers": [
+            "Results vary with the natural brow hairs and aftercare."
+          ],
+          "scope": "salon",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/brow-lamination-parkville-md",
+          "corroboratingUrl": "https://elleebana.com/faqs/brow-lamination/"
+        },
+        {
+          "topic": "suitability",
+          "text": "It can help sparse or unruly brows look fuller by arranging the hairs that are already present, but it cannot add hair where there is none.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/brow-lamination-parkville-md"
+        },
+        {
+          "topic": "expected_results",
+          "text": "The expected result is a smoother, fuller-looking brow that can be styled fluffy or sleek.",
+          "qualifiers": [
+            "The result depends on the amount, direction, and density of the natural brow hair."
+          ],
+          "scope": "salon",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/brow-lamination-parkville-md"
+        },
+        {
+          "topic": "patch_test",
+          "text": "The website recommends a patch test, but the exact timing and whether it is mandatory need owner confirmation.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "needs_owner_review",
+          "safety": "sensitive",
+          "sourceUrl": "https://www.richasthreading.com/brow-lamination-parkville-md"
+        }
+      ]
+    },
+    {
+      "id": "lash_lift",
+      "displayName": "Lash Lift",
+      "aliases": [
+        "lash lift",
+        "lash lamination",
+        "eyelash lift",
+        "eyelash lamination",
+        "lash perm"
+      ],
+      "facts": [
+        {
+          "topic": "overview",
+          "text": "A lash lift reshapes and curls the natural lashes rather than attaching extension fibers; a tint can add darker definition.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/lash-lamination-and-tint-carney-md"
+        },
+        {
+          "topic": "process",
+          "text": "The natural lashes are arranged on a silicone shield, lifted and set with professional solutions, then conditioned; tint may be included for definition.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/lash-lamination-and-tint-carney-md"
+        },
+        {
+          "topic": "expected_results",
+          "text": "The expected result is a more curled and defined appearance using the client's natural lashes.",
+          "qualifiers": [
+            "Results depend on natural lash length, density, and growth cycle."
+          ],
+          "scope": "salon",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/lash-lamination-and-tint-carney-md"
+        },
+        {
+          "topic": "longevity",
+          "text": "The salon page currently gives both four-to-six-week and six-to-eight-week ranges.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "conflicting",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/lash-lamination-and-tint-carney-md",
+          "corroboratingUrl": "https://elleebana.com/category/elleebana/lash-lift/"
+        },
+        {
+          "topic": "aftercare",
+          "text": "The salon page says to avoid water, steam, moisture, and mascara for twenty-four to forty-eight hours, while the named manufacturer's current guidance says water itself does not undo the lift.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "conflicting",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/lash-lamination-and-tint-carney-md",
+          "corroboratingUrl": "https://elleebana.com/lash-lift-aftercare-the-elleebana-way/"
+        },
+        {
+          "topic": "patch_test",
+          "text": "Patch-test guidance varies across the salon materials and requires owner approval before it is stated as policy.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "needs_owner_review",
+          "safety": "sensitive",
+          "sourceUrl": "https://www.richasthreading.com/_files/ugd/820321_fbd40d0c7b514ea68b564ad835765948.pdf"
+        },
+        {
+          "topic": "contraindications",
+          "text": "The salon does not have approved pregnancy or contraindication guidance for lash lifts, so please confirm with Richa and your clinician before booking.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "voice_ready",
+          "safety": "medical",
+          "delivery": "verbatim",
+          "sourceUrl": "https://elleebana.com/category/elleebana/lash-lift/"
+        }
+      ]
+    },
+    {
+      "id": "lash_tinting",
+      "displayName": "Lash Tinting",
+      "aliases": [
+        "lash tinting",
+        "lash tint",
+        "eyelash tinting",
+        "eyelash tint"
+      ],
+      "facts": [
+        {
+          "topic": "overview",
+          "text": "Lash tinting darkens the natural lashes to make them look more defined without adding extension fibers.",
+          "qualifiers": [],
+          "scope": "general",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/lash-lamination-and-tint-carney-md"
+        },
+        {
+          "topic": "patch_test",
+          "text": "Patch-test requirements and suitability questions require owner confirmation.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "needs_owner_review",
+          "safety": "sensitive",
+          "sourceUrl": "https://www.richasthreading.com/_files/ugd/820321_fbd40d0c7b514ea68b564ad835765948.pdf"
+        }
+      ]
+    },
+    {
+      "id": "microblading",
+      "displayName": "Microblading",
+      "aliases": [
+        "microblading",
+        "micro blading",
+        "microblading shading",
+        "microblading consultation",
+        "microblading touch up",
+        "permanent eyebrow makeup"
+      ],
+      "facts": [
+        {
+          "topic": "overview",
+          "text": "Microblading is a form of permanent makeup that places pigment into the skin with a handheld tool to create eyebrow-like strokes.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/eyebrow-microblading-parkville-md",
+          "corroboratingUrl": "https://www.fda.gov/cosmetics/cosmetic-products/tattoos-permanent-makeup-fact-sheet"
+        },
+        {
+          "topic": "expected_results",
+          "text": "The intended result is a fuller, natural-looking eyebrow shape; the color normally appears darker at first and then softens during healing.",
+          "qualifiers": ["Retention and final color vary by skin and healing."],
+          "scope": "salon",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/eyebrow-microblading-parkville-md"
+        },
+        {
+          "topic": "longevity",
+          "text": "Published longevity estimates vary materially, so an exact salon range needs owner confirmation.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "needs_owner_review",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/eyebrow-microblading-parkville-md"
+        },
+        {
+          "topic": "preparation",
+          "text": "The website includes instructions about aspirin, blood thinners, alcohol, and retinol that require clinical and owner review.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "unsafe",
+          "safety": "medical",
+          "sourceUrl": "https://www.richasthreading.com/eyebrow-microblading-parkville-md"
+        },
+        {
+          "topic": "aftercare",
+          "text": "The linked aftercare sheet contains detailed wound-care, product, and healing instructions that require owner review before voice use.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "needs_owner_review",
+          "safety": "medical",
+          "sourceUrl": "https://www.richasthreading.com/_files/ugd/820321_2148934b4949487684f2a9f0eaed5f66.pdf"
+        },
+        {
+          "topic": "contraindications",
+          "text": "The salon does not have approved guidance for pregnancy, medication, or other medical concerns. Please confirm with Richa and your clinician before booking, and do not stop prescribed medication without guidance from the clinician who prescribed it.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "voice_ready",
+          "safety": "medical",
+          "delivery": "verbatim",
+          "sourceUrl": "https://www.fda.gov/cosmetics/cosmetic-products/tattoos-permanent-makeup-fact-sheet"
+        },
+        {
+          "topic": "safety",
+          "text": "The salon does not have approved guidance for pregnancy, medication, or other medical concerns. Please confirm with Richa and your clinician before booking, and do not stop prescribed medication without guidance from the clinician who prescribed it.",
+          "qualifiers": [],
+          "scope": "salon",
+          "reviewStatus": "voice_ready",
+          "safety": "medical",
+          "delivery": "verbatim",
+          "sourceUrl": "https://www.fda.gov/cosmetics/cosmetic-products/tattoos-permanent-makeup-fact-sheet"
+        }
+      ]
+    },
+    {
+      "id": "threading",
+      "displayName": "Threading",
+      "aliases": [
+        "threading",
+        "brow threading",
+        "eyebrow threading",
+        "lip threading",
+        "chin threading",
+        "face threading",
+        "neck threading",
+        "unibrow threading",
+        "uni brow thread"
+      ],
+      "facts": [
+        {
+          "topic": "overview",
+          "text": "Threading removes facial hair from the root with twisted thread and can be used to shape brows or remove hair from areas such as the lip, chin, face, and neck.",
+          "qualifiers": [],
+          "scope": "general",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/threading"
+        }
+      ]
+    },
+    {
+      "id": "waxing",
+      "displayName": "Waxing",
+      "aliases": [
+        "waxing",
+        "wax",
+        "brow waxing",
+        "eyebrow waxing",
+        "lip waxing",
+        "chin waxing",
+        "face waxing",
+        "body waxing",
+        "bikini wax",
+        "brazilian wax",
+        "leg wax",
+        "arm wax",
+        "underarm wax",
+        "stomach wax",
+        "back wax",
+        "neck wax"
+      ],
+      "facts": [
+        {
+          "topic": "overview",
+          "text": "Waxing removes hair from the root and is offered for facial and body areas.",
+          "qualifiers": [
+            "Comfort and skin response vary, so do not promise that the service is painless."
+          ],
+          "scope": "general",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/body-waxing"
+        }
+      ]
+    },
+    {
+      "id": "facials",
+      "displayName": "Facials",
+      "aliases": [
+        "facial",
+        "facials",
+        "deep pore cleansing",
+        "stress solution spa facial",
+        "vita mineral power facial"
+      ],
+      "facts": [
+        {
+          "topic": "overview",
+          "text": "The salon offers facial treatments that may involve cleansing, steam, exfoliation, extraction, masks, creams, or massage depending on the selected service.",
+          "qualifiers": [
+            "Do not promise that every facial includes every step."
+          ],
+          "scope": "salon",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/facials"
+        }
+      ]
+    },
+    {
+      "id": "eyelash_extensions",
+      "displayName": "Eyelash Extensions",
+      "aliases": [
+        "eyelash extensions",
+        "lash extensions",
+        "lash fill",
+        "fill ins"
+      ],
+      "facts": [
+        {
+          "topic": "overview",
+          "text": "Eyelash extensions add fibers to create a longer and fuller lash appearance, unlike a lash lift, which reshapes the natural lashes.",
+          "qualifiers": [],
+          "scope": "general",
+          "reviewStatus": "voice_ready",
+          "safety": "low",
+          "sourceUrl": "https://www.richasthreading.com/eyelash-extensions"
+        }
+      ]
+    }
+  ]
+}
