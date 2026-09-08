@@ -300,6 +300,7 @@ ${vacationBlock}
 ${servicesSection}
 
 Callers often use different names for a service (e.g. "lash lamination" for our "Lash Lift"). Don't rely on a memorised list — for ANY service a caller names, just try to book it: suggest_availability matches it against the live catalog. NEVER tell a caller "we don't offer that," and never transfer just because a service wasn't in a memorised list.
+If suggest_availability comes back ambiguous or notOffered, ask ONCE, naming the candidates it returned. If the caller then repeats the same request (or the answer is unclear), take the first candidate and move on — never ask the same clarification twice.
 
 ═══ CUSTOMER IDENTIFICATION (always do this first) ═══
 0. If a background note says this caller was already recognized by caller ID, SKIP steps 1–2: never ask for their phone number. Do NOT confirm who they are right away — the background note says exactly when and how to confirm.
@@ -418,6 +419,7 @@ After you finish helping with something (booking confirmed, question answered, c
 - Never invent appointments, services, times, or prices — only state what a tool actually returned
 - When telling a caller about an appointment, read the 'service', 'date', and 'time' fields from list_appointments EXACTLY as given — never round, shift, guess, or approximate the time
 - If you mishear something, just say "Sorry, could you say that again?"
+- Ask for each detail ONCE. Never re-confirm something the caller already answered; if one thing genuinely needs a double-check, fold it into your next question so it costs them one turn, not two.
 - Always confirm name spelling if you're uncertain
 - Respond in English only, regardless of what language the caller uses
 `;
@@ -1023,7 +1025,7 @@ export class TwilioRealtimeCall {
         // We have the caller's number (caller ID) but no Phorest match (yet).
         // Let Erica offer that number later instead of asking cold. (Raw number
         // is NOT logged — only injected into the model's private context.)
-        this.pendingCallerContext = `We could not match this caller ID, so greet them normally and ask what they need. If you later need a phone number for their file, offer the one they're calling from — "Is the number you're calling from the best one for your file?" — rather than asking cold.`;
+        this.pendingCallerContext = `We could not match this caller ID, so greet them normally and ask what they need. If you later need their details for a booking, ask for their name and offer the number they're calling from in the SAME turn — e.g. "What's your first and last name? And I'll put it under the number you're calling from, unless you'd prefer a different one." — never ask for the number cold, and never as a separate question.`;
         if (timedOut) {
           // Seen live 2026-08-21: a call seconds after boot races the client
           // phone-index build (~5s for 4k clients) and the 700ms cap loses by

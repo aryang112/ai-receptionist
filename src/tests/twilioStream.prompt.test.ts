@@ -310,3 +310,14 @@ describe('buildInstructions — transfer failback greeting', () => {
     );
   });
 });
+
+// 2026-09-07: Erica asked "do you mean Brow Threading?" three times and then
+// split "phone on file" and "name" into two more questions. Over-confirmation
+// rules live in the prompt — lock the once-only wording in.
+describe('buildInstructions — ask once (over-confirmation guard)', () => {
+  it('tells Erica to clarify a service at most once and to ask for each detail once', () => {
+    const instructions = buildInstructions();
+    expect(instructions).toMatch(/never ask the same clarification twice/i);
+    expect(instructions).toMatch(/Ask for each detail ONCE/);
+  });
+});
