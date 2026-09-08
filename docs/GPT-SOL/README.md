@@ -1,6 +1,6 @@
 # GPT-SOL project handoff
 
-Last refreshed: 2026-09-02
+Last refreshed: 2026-09-08 (release pointer; deeper architecture pages retain their dated context)
 
 This folder is the durable orientation package for an agent joining the AI
 Receptionist project. It synthesizes the current implementation, production
@@ -39,8 +39,9 @@ are not automatically current work. Confirm every item against the newest
 - Calls use Twilio Media Streams and OpenAI Realtime speech-to-speech with G.711
   mu-law passthrough. Phorest is the source of client, service, appointment,
   and availability data.
-- Production behavior is commit `eca23f1`, Railway deployment
-  `de80d873-ce67-4f6d-a892-30e8ee53b663` (`SUCCESS`). The model is
+- Production behavior is commit `bc39b09`, Railway deployment
+  `ee43e7fe-9fd0-4dd7-9dcf-f907c6cfcd1a` (`SUCCESS`). See
+  [release handoff](../reviews/CONVERSATION_RELEASE_2026-09-08.md). The model is
   `gpt-realtime-2.1`, the voice is Marin, and real Phorest is enabled.
 - Realtime reasoning effort is not explicitly configured. No reasoning-level
   change was made as part of this documentation pass.
