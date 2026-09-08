@@ -5,6 +5,21 @@
 > Main still contains unreleased prompt/matcher/knowledge-related review work. Do not deploy main as equivalent to the production hotfix branch.
 > Latest work: 2026-09-08 — narrow booking hotfix deployed; broader conversation reconciliation on main remains unreleased.
 
+## 2026-09-08 — Owner scope correction: preserve contact flow; investigate service terminology
+
+- Aryan explicitly rejected combining name and calling-number confirmation. Preserve
+  production's sequence: ask whether the calling number is best, WAIT for the answer,
+  then ask first and last name (with the existing alternate-number path if declined).
+  This supersedes older acceptance/ear-test items for the combined contact question.
+- Current request is to investigate Fable's reusable service terminology matcher and
+  phrase comparison table. No additional prompt rewrite or deployment requested here.
+- Original matcher commit `4f8c52f`, PR #1, credits Claude / Claude Fable 5.1 and links
+  to Claude Code session `session_019TLQvBahHHUhMquA6gfdup`. Word synonyms are separate
+  from its catalog-vocabulary filter. The latter drops meaningful unknown terms:
+  the saved 63-service probe maps "henna brows" incorrectly to Brow Threading.
+- Main still contains the rejected combined-contact draft; remove that draft before
+  any future release. Production remains unchanged on `1425f8c`.
+
 ## 2026-09-08 — DEPLOYED narrow new-client booking hotfix (Codex)
 
 - Aryan explicitly approved immediate deployment despite the usual after-hours rule.
