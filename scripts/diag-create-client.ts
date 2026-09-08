@@ -60,7 +60,9 @@ const variants: Record<string, Record<string, unknown>> = {
 };
 
 if (!variant) {
-  console.log('Payload variants (nothing sent — pass --try <name> to POST one):');
+  console.log(
+    'Payload variants (nothing sent — pass --try <name> to POST one):'
+  );
   for (const [name, body] of Object.entries(variants)) {
     console.log(`\n[${name}]`, JSON.stringify(body, null, 2));
   }
@@ -69,7 +71,9 @@ if (!variant) {
 
 const body = variants[variant];
 if (!body) {
-  console.error(`Unknown variant "${variant}". One of: ${Object.keys(variants).join(', ')}`);
+  console.error(
+    `Unknown variant "${variant}". One of: ${Object.keys(variants).join(', ')}`
+  );
   process.exit(1);
 }
 
