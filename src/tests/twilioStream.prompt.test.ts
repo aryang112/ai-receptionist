@@ -273,7 +273,9 @@ describe('buildInstructions — TRANSFER self-service + closed-hours rules', () 
       instructions.indexOf('═══ SPAM & TELEMARKETING')
     );
     expect(messageMode).toMatch(/ask.*what.*Richa.*know/i);
-    expect(messageMode).toMatch(/ask once.*anything else/i);
+    expect(messageMode).toMatch(
+      /After success, follow the result note and CLOSE/i
+    );
     const solicitation = messageMode.slice(
       0,
       messageMode.indexOf('After the caller gives')
@@ -543,13 +545,16 @@ describe('buildInstructions — production prompt architecture (2026-08-28)', ()
     );
   });
 
-  it('has the guide-prescribed blocks: unclear audio, pronunciations, numeric escalation threshold', () => {
+  it('has the guide-prescribed blocks: unclear audio, pronunciations, consistent bounded recovery', () => {
     const p = buildInstructions();
     expect(p).toContain('UNCLEAR AUDIO');
     expect(p).toMatch(/ask one brief clarification/);
     expect(p).toMatch(/do not infer, preamble, or call a tool/);
     expect(p).toMatch(/REE-cha/);
-    expect(p).toMatch(/MORE THAN 2 tool failures/);
+    expect(p).toMatch(/Retry the same operation at most once when safe/);
+    expect(p).toMatch(/a second failure/);
+    expect(p).not.toContain('MORE THAN 2');
+    expect(p).toMatch(/Never retry an uncertain write/);
   });
 
   it('moved-to-tools content is GONE from the prompt (single source of truth)', () => {
@@ -721,7 +726,7 @@ describe('later Realtime context notes', () => {
       /Do not mention a time limit/
     );
     expect(REALTIME_CONTEXT_NOTES.interruptedEndCall).toMatch(
-      /Continue the call: listen and help/
+      /Listen and address any new request, then follow CLOSE/
     );
   });
 });

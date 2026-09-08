@@ -765,7 +765,7 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
     }
   );
 
-  it('successful coaching acknowledges once and asks whether anything else is needed', async () => {
+  it('successful coaching acknowledges once and honors a settled or non-client ending', async () => {
     const call = buildCall();
     call.notifyOwnerSms = vi.fn().mockResolvedValue({
       queued: true,
@@ -777,7 +777,10 @@ describe('leave_message_for_owner — server-owned exact caller transcript', () 
     const result = await call.handleLeaveMessageForOwner({});
 
     expect(result).toMatchObject({ messageAccepted: true });
-    expect(result.note).toMatch(/ask once.*anything else/i);
+    expect(result.note).toMatch(
+      /clearly done or NON-CLIENT CALLS applies, close without another question/
+    );
+    expect(result.note).toMatch(/otherwise ask once.*anything else/i);
     expect(result.note).not.toMatch(/\b(?:SMS|Twilio|queue|provider|tool)\b/i);
   });
 });

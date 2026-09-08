@@ -176,7 +176,10 @@ describe('suggest_availability — note coaching per result state', () => {
     });
     expect(result.error).toBeTruthy();
     expect(result.note).toMatch(/retry this tool once/);
-    expect(result.note).toMatch(/Richa/);
+    expect(result.note).toMatch(
+      /transfer to Richa only if current server status permits it/
+    );
+    expect(result.note).toMatch(/otherwise offer a message/);
   });
 });
 
