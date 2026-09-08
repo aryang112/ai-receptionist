@@ -1,6 +1,7 @@
 # STATE — AI Receptionist (Erica)
 
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
+> Hotfix ready: `1425f8c` on `codex/booking-hotfix-2026-09-08`; Aryan accepted scope, deployment timing exception asked at 5:11 PM ET. See `docs/reviews/BOOKING_HOTFIX_2026-09-08.md` before deploying.
 > Latest release assessment: 2026-09-08 — production still `117ada0`; main reconciled but live matcher probe is RED. Assess with Aryan before deployment; see review below.
 > Last major work: 2026-09-08 — cloud/Codex PRs reconciled onto main (first-time-caller booking fix + matcher + ask-once prompt); NOT yet deployed.
 
