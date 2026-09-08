@@ -6,14 +6,21 @@ and `tasks/lessons.md` for the gotchas.
 For a current architecture, Realtime 2.1, quirks, and operations handoff, start
 with [`GPT-SOL/README.md`](GPT-SOL/README.md).
 
-Forwarding is live. As of 2026-09-03, production behavior is `117ada0` with
-closure need-discovery and opt-in owner recaps enabled for external callers
+Forwarding is live. As of 2026-09-08, production behavior is `1425f8c` on
+`codex/booking-hotfix-2026-09-08`: the September 3 baseline plus new-client
+placeholder email/consent opt-outs and explicit eyebrow-threading aliases.
+Closure need-discovery and opt-in owner recaps remain enabled for external callers
 (the 2026-09-03 prompt-audit rewrite + `wait_for_user` are committed locally,
 not yet deployed — see `docs/PROMPT_AUDIT_2026-09-03.md`);
 internal/test lines are excluded through Railway configuration. The categorized reliability backlog,
 prompt-versus-code decisions, acceptance tests, and after-hours-only release
 gate are in
 [`FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md`](FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md).
+The live hotfix excludes main's broad vocabulary filter and combined contact
+question. Main's source map below includes unreleased work; consult
+[`reviews/BOOKING_HOTFIX_2026-09-08.md`](reviews/BOOKING_HOTFIX_2026-09-08.md)
+for the exact production boundary. Aryan explicitly approved a deploy-now timing
+exception for this hotfix; that does not change the standing release rule.
 
 ## Data flow (a call)
 ```

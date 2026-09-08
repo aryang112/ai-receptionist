@@ -1,9 +1,43 @@
 # STATE — AI Receptionist (Erica)
 
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
-> Hotfix ready: `1425f8c` on `codex/booking-hotfix-2026-09-08`; Aryan accepted scope, deployment timing exception asked at 5:11 PM ET. See `docs/reviews/BOOKING_HOTFIX_2026-09-08.md` before deploying.
-> Latest release assessment: 2026-09-08 — production still `117ada0`; main reconciled but live matcher probe is RED. Assess with Aryan before deployment; see review below.
-> Last major work: 2026-09-08 — cloud/Codex PRs reconciled onto main (first-time-caller booking fix + matcher + ask-once prompt); NOT yet deployed.
+> Production: `1425f8c` on `codex/booking-hotfix-2026-09-08`, deployed September 8 at approximately 5:16 PM ET after Aryan explicitly approved deploying now. See `docs/reviews/BOOKING_HOTFIX_2026-09-08.md`.
+> Main still contains unreleased prompt/matcher/knowledge-related review work. Do not deploy main as equivalent to the production hotfix branch.
+> Latest work: 2026-09-08 — narrow booking hotfix deployed; broader conversation reconciliation on main remains unreleased.
+
+## 2026-09-08 — DEPLOYED narrow new-client booking hotfix (Codex)
+
+- Aryan explicitly approved immediate deployment despite the usual after-hours rule.
+  Zero queued/ringing/in-progress Twilio calls immediately before upload.
+- Exact source `1425f8c89924c547e8a2ca1f130a940276bfed5f`, pushed on
+  `codex/booking-hotfix-2026-09-08`; clean verified `git archive`, no local artifacts.
+  Railway deployment `111fbb86-6401-45cb-bfc5-a1901a95a141` is SUCCESS; image digest
+  `sha256:2c16046df859049dd15f20b912835f74dfef053b4f3e067e9a7feecdcf71a3b8`.
+- Scope: September 3 production plus placeholder-email client creation with both
+  email consents false, six explicit eyebrow-threading aliases, shared payload
+  builder, diagnostic, and regressions. Only two application files differ from
+  `117ada0`. No prompt/session/model/voice/configuration/forwarding change.
+- Release validation: 47 files / 543 tests local and UTC; build/format clean;
+  11 live-catalog checks passed. Live tenant accepted exact client body and retained
+  both opt-outs; labelled diagnostic client was archived. No test appointment made.
+- Post-deploy: health/services/admin HTTP 200, 63 services warmed, complete
+  4,187-client / 28-page production phone index (`incomplete=false`), zero warning
+  ring entries. Running-container source hashes for both changed services plus the
+  unchanged prompt and session files match the release commit exactly.
+- Read-only execution of the deployed compiled matcher: eyebrow threading →
+  Brow Threading; henna brows → notOffered. Runtime remains gpt-realtime-2.1,
+  marin, real Phorest, owner recaps enabled, gpt-4o-mini-transcribe.
+- Immediate rollback: clean archive of `117ada0` (restores the missing-email bug).
+  First real new-caller booking remains the production end-to-end confirmation.
+- Caller directory check requested by Aryan: all 5,574 client records across 28
+  pages, including archived/deleted, compared by full normalized mobile, landline,
+  and linked-client number against Twilio caller IDs. Neither today's 9:41 AM
+  last-4 1584 nor 1:42 PM last-4 7568 matched. This does not identify who was calling
+  or rule out an existing client using another number. No full numbers logged.
+- **PENDING:** selectively reconcile this validated release's narrow matching and
+  shared diagnostic builder into main without losing unreleased work; transfer
+  ordering fix with early-stop/failure tests; ear-test prompt changes separately;
+  PR #3 remains held. Never redeploy the old broad matcher merely because main tests pass.
 
 ## 2026-09-08 — Independent release assessment (Codex; no deployment)
 
