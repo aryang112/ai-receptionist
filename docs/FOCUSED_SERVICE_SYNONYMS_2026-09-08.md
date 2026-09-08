@@ -1,7 +1,8 @@
 # Focused service wording — September 8, 2026
 
 Prepared on `codex/focused-service-synonyms-2026-09-08`, based on deployed
-`1425f8c`. Not deployed. The production prompt, sequential number-then-name
+`1425f8c`. Deployed as `fcee0d8` on September 8 at approximately 6:21 PM ET;
+see `reviews/SYNONYMS_RELEASE_2026-09-08.md`. The production prompt, sequential number-then-name
 questions, model/session settings, client-create fix and catalog cache are retained.
 
 ## Decision and alternatives

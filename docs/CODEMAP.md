@@ -6,7 +6,11 @@ and `tasks/lessons.md` for the gotchas.
 For a current architecture, Realtime 2.1, quirks, and operations handoff, start
 with [`GPT-SOL/README.md`](GPT-SOL/README.md).
 
-Forwarding is live as of 2026-09-02. The categorized reliability backlog,
+Production is `fcee0d8` on `codex/focused-service-synonyms-2026-09-08`, deployed
+September 8 at approximately 6:21 PM ET. Focused brow/lash matching and the
+client-create hotfix are live; the existing sequential contact flow is preserved.
+See [`reviews/SYNONYMS_RELEASE_2026-09-08.md`](reviews/SYNONYMS_RELEASE_2026-09-08.md).
+Forwarding is live. The categorized reliability backlog,
 prompt-versus-code decisions, acceptance tests, and after-hours-only release
 gate are in
 [`FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md`](FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md).
