@@ -1,5 +1,11 @@
 # Lessons — AI Receptionist (Erica)
 
+## 2026-09-08 — Reconcile source history before replacing production
+
+The latest GitHub branch was based on August 24 while the production source had later local fixes. Newer commit timestamps did not mean the branch contained newer production behavior. Compare ancestry and the recorded deployment source; preserve production safeguards when integrating remote fixes. A green suite on the older tree cannot cover code it does not contain. Use the shared review inventory in `docs/reviews/PRODUCTION_PARITY_2026-09-08.md`.
+
+For this review, keep a real supplied email; use Fable's opted-out placeholder only when email is absent or blank. Preserve the newer client-resolution and uncertain-create safeguards around that payload change. The ask-once rule does not waive explicit number consent or final appointment read-back/approval. Source comparison and mocked tests cannot establish production audio behavior.
+
 Hard-won gotchas. Read this BEFORE touching Phorest time handling, the OpenAI
 session config, or the availability/booking flow. Most of these bit us in
 production testing and cost real debugging.
