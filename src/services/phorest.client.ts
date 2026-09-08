@@ -831,11 +831,12 @@ export function isPlaceholderEmail(email?: string): boolean {
   );
 }
 
-async function createClient(customer: {
+/** Shared with the live diagnostic so it validates the application's exact body. */
+export function buildClientCreatePayload(customer: {
   name: string;
   phone?: string;
   email?: string;
-}): Promise<string> {
+}) {
   const { firstName, lastName } = splitName(customer.name);
   const phone = sanitisePhone(customer.phone);
   // Phorest REJECTS a client with no email (400 EMAIL_REQUIRED — live
@@ -844,7 +845,7 @@ async function createClient(customer: {
   const email =
     customer.email?.trim() ||
     `${phone || Date.now()}@${PLACEHOLDER_EMAIL_DOMAIN}`;
-  const payload = {
+  return {
     firstName,
     lastName,
     ...(email ? { email } : {}),
@@ -858,6 +859,15 @@ async function createClient(customer: {
       emailReminderConsent: false,
     }),
   };
+}
+
+async function createClient(customer: {
+  name: string;
+  phone?: string;
+  email?: string;
+}): Promise<string> {
+  const payload = buildClientCreatePayload(customer);
+  const { firstName, lastName, email, mobile: phone } = payload;
 
   let response: ClientCreateResponse;
   try {

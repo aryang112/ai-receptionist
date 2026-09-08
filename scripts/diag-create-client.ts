@@ -1,106 +1,113 @@
 /**
- * diag-create-client.ts — reproduce the Phorest `EMAIL_REQUIRED` client-create
- * failure (prod 2026-09-07 1:03 PM ET, and the same double book_appointment
- * failure on 2026-08-27 6:13 PM ET).
- *
- * Production sends POST /client with a PLACEHOLDER email
- * (`<digits>@placeholder.richasthreading.com`, see createClient in
- * src/services/phorest.client.ts) and Phorest answers
- * 400 {"errorCode":"EMAIL_REQUIRED","detail":"Email is Required"}.
- * This script isolates WHICH part Phorest rejects.
- *
- * Read-only by default: with no args it only prints the payload variants.
- * Each `--try` WRITES one clearly-labelled test client to the live tenant
- * (firstName "EricaDiag", lastName "DeleteMe-<ts>") — delete them in Phorest
- * afterwards.
- *
- *   npx tsx scripts/diag-create-client.ts                 # print only
- *   npx tsx scripts/diag-create-client.ts --try placeholder   # exactly what prod sends
- *   npx tsx scripts/diag-create-client.ts --try none          # no email field at all
- *   npx tsx scripts/diag-create-client.ts --try real          # real-looking mailbox on a real domain
- *   npx tsx scripts/diag-create-client.ts --try nomobile      # placeholder email, no mobile
+ * Validate the application's exact new-client body against the tenant.
+ * Default: print a redacted preview only. --try placeholder creates ONE labelled
+ * test client, verifies its stored email consents, then archives that same client.
+ * Never retries a create. No appointment, SMS, or phone call is requested.
  */
 import 'dotenv/config';
+import { env } from '../src/config/env.js';
+import { buildClientCreatePayload } from '../src/services/phorest.client.js';
 
-const variant = process.argv.includes('--try')
-  ? process.argv[process.argv.indexOf('--try') + 1]
-  : undefined;
-
-const base = (process.env.PHOREST_BASE_URL || '').trim().replace(/\/?$/, '/');
-const businessId = process.env.PHOREST_BUSINESS_ID || '';
-const branchId = process.env.PHOREST_BRANCH_ID || '';
-const user = process.env.PHOREST_API_USERNAME || '';
-const secret = process.env.PHOREST_API_SECRET || '';
-
-if (!base || !businessId || !branchId || !user || !secret) {
-  console.error(
-    'Missing PHOREST_BASE_URL / PHOREST_BUSINESS_ID / PHOREST_BRANCH_ID / PHOREST_API_USERNAME / PHOREST_API_SECRET in .env'
-  );
-  process.exit(1);
+const args = process.argv.slice(2);
+if (args.length && args.join(' ') !== '--try placeholder') {
+  throw new Error('Usage: diag-create-client.ts [--try placeholder]');
 }
-
-const ts = Date.now();
-// A fake-but-well-formed test number (555-01xx block is reserved, never dialable).
-const mobile = `4105550${String(ts).slice(-3)}`;
-const common = {
-  firstName: 'EricaDiag',
-  lastName: `DeleteMe-${ts}`,
-  creatingBranchId: branchId,
-};
-
-const variants: Record<string, Record<string, unknown>> = {
-  placeholder: {
-    ...common,
-    email: `${mobile}@placeholder.richasthreading.com`,
-    mobile,
-  },
-  none: { ...common, mobile },
-  real: { ...common, email: `erica.diag.${ts}@gmail.com`, mobile },
-  nomobile: { ...common, email: `${ts}@placeholder.richasthreading.com` },
-};
-
-if (!variant) {
-  console.log(
-    'Payload variants (nothing sent — pass --try <name> to POST one):'
-  );
-  for (const [name, body] of Object.entries(variants)) {
-    console.log(`\n[${name}]`, JSON.stringify(body, null, 2));
-  }
-  process.exit(0);
-}
-
-const body = variants[variant];
-if (!body) {
-  console.error(
-    `Unknown variant "${variant}". One of: ${Object.keys(variants).join(', ')}`
-  );
-  process.exit(1);
-}
-
-(async () => {
-  const url = new URL(`api/business/${businessId}/client`, base);
-  console.log(`POST ${url}\n${JSON.stringify(body, null, 2)}\n`);
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      Authorization: `Basic ${Buffer.from(`${user}:${secret}`).toString('base64')}`,
+const label = `DeleteMe-${Date.now()}`;
+// Entire 202-555-01xx range is reserved for fictional numbers.
+const phone = `20255501${String(Date.now() % 100).padStart(2, '0')}`;
+const payload = buildClientCreatePayload({ name: `EricaDiag ${label}`, phone });
+console.log(
+  JSON.stringify(
+    {
+      mode: args.length ? 'create-verify-archive' : 'preview-only',
+      payload: {
+        ...payload,
+        mobile: '[reserved test number]',
+        email: '[placeholder email]',
+        creatingBranchId: '[configured branch]',
+      },
     },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(15_000),
-  });
-  const text = await res.text();
-  console.log(`HTTP ${res.status}`);
-  console.log(text.slice(0, 1000));
-  if (res.ok) {
-    console.log(
-      `\n✅ Phorest ACCEPTED variant "${variant}". Delete client "EricaDiag DeleteMe-${ts}" in Phorest.`
-    );
-  } else {
-    console.log(`\n❌ Phorest REJECTED variant "${variant}".`);
+    null,
+    2
+  )
+);
+
+if (args.length) {
+  for (const key of [
+    'PHOREST_BASE_URL',
+    'PHOREST_API_USERNAME',
+    'PHOREST_API_SECRET',
+    'PHOREST_BUSINESS_ID',
+    'PHOREST_BRANCH_ID',
+  ] as const) {
+    if (!env[key]) throw new Error(`Missing ${key}`);
   }
-})().catch((err) => {
-  console.error('Request failed:', err);
-  process.exit(1);
-});
+  const root = new URL(
+    `api/business/${env.PHOREST_BUSINESS_ID}/client`,
+    `${env.PHOREST_BASE_URL.replace(/\/$/, '')}/`
+  );
+  root.protocol = 'https:';
+  const headers = {
+    Authorization: `Basic ${Buffer.from(`${env.PHOREST_API_USERNAME}:${env.PHOREST_API_SECRET}`).toString('base64')}`,
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  };
+  const request = async (url: URL, method: string, body?: unknown) => {
+    const res = await fetch(url, {
+      method,
+      headers,
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok)
+      throw new Error(
+        `${method} client diagnostic HTTP ${res.status}; do not retry a create without reconciliation`
+      );
+    return res.json() as Promise<Record<string, unknown>>;
+  };
+  const created = await request(root, 'POST', payload);
+  if (typeof created.clientId !== 'string')
+    throw new Error(
+      `Create response missing clientId. Find EricaDiag ${label} in Phorest; do not retry.`
+    );
+  const clientUrl = new URL(
+    `${root.href}/${encodeURIComponent(created.clientId)}`
+  );
+  let verified = false;
+  try {
+    const stored = await request(clientUrl, 'GET');
+    verified =
+      stored.firstName === payload.firstName &&
+      stored.lastName === payload.lastName &&
+      stored.email === payload.email &&
+      stored.emailMarketingConsent === false &&
+      stored.emailReminderConsent === false;
+    console.log(
+      JSON.stringify({
+        created: true,
+        exactIdentityAndEmail:
+          stored.email === payload.email &&
+          stored.lastName === payload.lastName,
+        emailMarketingConsent: stored.emailMarketingConsent,
+        emailReminderConsent: stored.emailReminderConsent,
+        verified,
+      })
+    );
+  } finally {
+    // Only mutate the client ID returned by THIS diagnostic's create response.
+    const archived = await request(clientUrl, 'PUT', {
+      ...payload,
+      archived: true,
+      smsMarketingConsent: false,
+      smsReminderConsent: false,
+    });
+    const stored = await request(clientUrl, 'GET');
+    console.log(JSON.stringify({ archived: stored.archived === true, label }));
+    if (stored.archived !== true)
+      throw new Error(`Test client archive not confirmed: EricaDiag ${label}`);
+  }
+  if (!verified)
+    throw new Error(
+      'Created client did not retain the expected consent settings'
+    );
+}

@@ -39,17 +39,23 @@ function buildCall() {
 const OPEN_TUESDAY = '2026-09-15'; // Tue 12–7 PM, after the September closure
 
 describe('suggest_availability — caller phrasing vs catalog naming', () => {
-  it.each(['Eyebrow threading', 'eyebrows threading', 'threading for my eyebrows'])(
+  it.each([
+    'Eyebrow threading',
+    'eyebrows threading',
+    'threading for my eyebrows',
+  ])(
     '"%s" returns open times for Brow Threading (no notOffered/ambiguous round-trip)',
     async (serviceName) => {
       vi.spyOn(phorest, 'listServices').mockResolvedValue([
         { id: 'live_brow', name: 'Brow Threading', price: 15, durationMin: 15 },
       ]);
-      const availability = vi.spyOn(phorest, 'getAvailability').mockResolvedValue([
-        `${OPEN_TUESDAY}T13:00:00`,
-        `${OPEN_TUESDAY}T13:15:00`,
-        `${OPEN_TUESDAY}T13:30:00`,
-      ]);
+      const availability = vi
+        .spyOn(phorest, 'getAvailability')
+        .mockResolvedValue([
+          `${OPEN_TUESDAY}T13:00:00`,
+          `${OPEN_TUESDAY}T13:15:00`,
+          `${OPEN_TUESDAY}T13:30:00`,
+        ]);
       const call = buildCall();
       const res = await call.handleSuggestAvailability({
         serviceName,
@@ -58,7 +64,9 @@ describe('suggest_availability — caller phrasing vs catalog naming', () => {
       expect(res.notOffered).toBeUndefined();
       expect(res.ambiguous).toBeUndefined();
       expect(res.slots?.length).toBeGreaterThan(0);
-      expect(availability.mock.calls.every(([id]) => id === 'live_brow')).toBe(true);
+      expect(availability.mock.calls.every(([id]) => id === 'live_brow')).toBe(
+        true
+      );
     }
   );
 

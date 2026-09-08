@@ -16,7 +16,9 @@ import { findServiceByName, resolveService } from '../services/booking.js';
 
 describe('findServiceByName synonym aliases', () => {
   it('maps "lash lamination" -> Lash Lift', async () => {
-    expect((await findServiceByName('lash lamination'))?.name).toBe('Lash Lift');
+    expect((await findServiceByName('lash lamination'))?.name).toBe(
+      'Lash Lift'
+    );
   });
   it('maps "eyelash lift" -> Lash Lift', async () => {
     expect((await findServiceByName('eyelash lift'))?.name).toBe('Lash Lift');
@@ -56,7 +58,9 @@ describe('resolveService aliases return a decisive match', () => {
   it.each(['henna brows', 'brow henna', 'eyebrow tattoo', 'eyeball threading'])(
     'does not discard unknown treatment words in %s',
     async (phrase) => {
-      expect(await resolveService(phrase)).toMatchObject({ kind: 'notOffered' });
+      expect(await resolveService(phrase)).toMatchObject({
+        kind: 'notOffered',
+      });
     }
   );
 
