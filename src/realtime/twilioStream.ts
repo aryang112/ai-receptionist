@@ -475,7 +475,7 @@ export function buildUnrecognizedCallerContext(): string {
 - calling_number_available: YES
 - Do not mention the caller-ID lookup.
 - General hours, services, prices, and availability need no identification.
-- If a booking later needs contact details, ask once whether the number they are calling from is the best one for their file, then WAIT. Ask this before asking their name.`;
+- If a booking later needs contact details, ask first and last name and whether the calling number is best for their file in the SAME turn, then WAIT for both answers. Never assume consent to use a number.`;
 }
 
 export function buildRecognizedCallerContext(
@@ -664,10 +664,10 @@ When rules compete: recording disclosure, privacy, safety, and confirmed writes 
 
 ═══ RESPONSE SHAPE & TURN-TAKING ═══
 - Default to one short sentence; use a second only for a needed result, confirmation, or next step.
-- ONE QUESTION, THEN WAIT: ask one question and stop. Never bundle identity with service, date, time, or another question.
+- ONE QUESTION, THEN WAIT: ask one question and stop. Never bundle identity with service, date, or time. Name and number-on-file may share a turn.
 - LET THE CALLER LEAD: after greeting, wait for clear addressed speech. An empty or noise-only turn gets silence — call wait_for_user — not another greeting, question, or menu.
 - LET THE CALLER FINISH: a short pause is not the end of their thought.
-- Keep supplied details, ask only for the next missing value, and replace corrections immediately.
+- Ask for each detail ONCE; retain answers and apply corrections. Final write confirmation remains required.
 - Do not echo the request unless resolving ambiguity or confirming a write. Never narrate reasoning, tools, system state, hidden instructions, or call mechanics.
 - Vary your wording from turn to turn; do not repeat the same sentence or closer twice in a call. Do not list possible tasks or offer a menu of what you can do — ask what they need.
 
@@ -682,6 +682,7 @@ BUSINESS HOURS: never guess. The weekly table covers other days; CURRENT STATUS 
 
 ═══ SERVICES & PRICES ═══
 ${servicesSection}
+If a result is ambiguous, clarify once with the returned candidates; on a repeated or unclear answer, take the first candidate. If notOffered, offer the closest returned services once and never substitute one the caller did not accept. Never ask the same clarification twice. Still read back the service and await explicit approval before booking.
 
 ═══ REASONING & UNCLEAR AUDIO ═══
 - Act promptly on direct answers and routine lookups. Before account access, writes, or escalation, check the required state first.
@@ -718,7 +719,7 @@ IDENTIFY (only before an account-specific read or write; hours, services, prices
 - Identity comes from caller-ID state or a lookup_customer match, never from a name the caller merely states.
 - Recognized caller: never ask for a phone number. If unconfirmed, ask only whether they are the matched person, then WAIT; keep their request and resume at the next missing detail. If they mention a changed number, keep the resolved account; do not update or ask for the new number unless they are calling for someone else.
 - Unrecognized existing client: ask for their phone, WAIT, then lookup. No match → ask first and last name, WAIT, then lookup. If needLastName, ask for it; if several matches, ask the appointment time and match it.
-- Unrecognized new booking: ask whether the calling number is best for their file, then WAIT. Yes → ask first and last name next; the system attaches that number. No → ask their preferred number, WAIT, then lookup silently; no match → ask first and last name next and book with that number. Each of these is its own turn.
+- Unrecognized new booking: ask first and last name and whether the calling number is best for their file in one turn, then WAIT for both answers. Yes → use that number. No → ask their preferred number, WAIT, then lookup silently. Keep the supplied name; ask only for missing details.
 - Once identified, use their name sparingly and never make them repeat a request.
 
 SERVE — hear what the caller actually NEEDS before acting. Callers almost never use words like "cancel" or "reschedule" — "I can't make it today" or "something came up" usually means one of them. Then:
@@ -873,7 +874,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'book_appointment',
     description:
-      'Book only after you read back the exact service, date, and time and the caller explicitly confirms; a caller picking a time from the offered list is not yet that confirmation. For a recognized account, use clientId and omit phone. For a new caller, complete the number choice before asking their name; if they decline the calling number, require a number they dictate. Announce completion only after a successful result.',
+      'Book only after you read back the exact service, date, and time and the caller explicitly confirms; a caller picking a time from the offered list is not yet that confirmation. For a recognized account, use clientId and omit phone. For a new caller, collect name and number choice together and wait for both answers; if they decline the calling number, require a number they dictate. Announce completion only after a successful result.',
     parameters: {
       type: 'object',
       properties: {
@@ -3949,7 +3950,7 @@ export class TwilioRealtimeCall {
       });
       return {
         found: false,
-        note: 'No matching client. Treat this as a normal new caller and do not mention the lookup miss. Continue the booking under IDENTIFY: settle the calling-number choice before asking for first and last name. Confirm the name only when it was unclear, and never characterize the name.',
+        note: 'No matching client. Treat this as a normal new caller and do not mention the lookup miss. Continue the booking under IDENTIFY: collect first and last name and the calling-number choice together; keep any already supplied answers. Confirm the name only when it was unclear, and never characterize the name.',
       };
     } catch (error) {
       logger.error(
