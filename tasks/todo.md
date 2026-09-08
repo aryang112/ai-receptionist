@@ -510,7 +510,7 @@ main as atomic commits, keep local docs/scripts, push main, supersede PRs.
       `ambiguous` only (never auto-pick on notOffered)
 - [x] npm test + tsc + prettier green on main
 - [x] Commit 4: docs — state.md, lessons, CODEMAP, docs/reviews/* records
-- [ ] Push main to origin; comment/close PR #1 and #2 as superseded
-- [ ] PR #3 (service knowledge): decision after subagent review; not merged
+- [x] Push main to origin; comment/close PR #1 and #2 as superseded
+- [x] PR #3 (service knowledge): decision after subagent review; not merged
       to main without owner approval of content + privacy change
 - [ ] NOT deploying — needs Aryan go-ahead + ear test (standing rule)
