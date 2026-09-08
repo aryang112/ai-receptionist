@@ -169,8 +169,12 @@ Caller dials Twilio number
 - **phorest.ts** — selector (mock vs real by env / NODE_ENV).
 - **phorest.types.ts** — `PhorestPort` interface (CONTRACT — mock & real must match),
   `Service`, `CustomerResult`, `AppointmentSummary`.
-- **booking.ts** — `suggestSlots`, `bookAppointment`, `findServiceByName` (fuzzy match
-  + `SERVICE_ALIASES`, e.g. "lash lamination"→"Lash Lift"), Zod schemas.
+- **booking.ts** — `suggestSlots`, `bookAppointment`, `resolveService`/`findServiceByName`
+  (service matcher: `TOKEN_SYNONYMS` — spoken variants of catalog words, eyebrow→brow,
+  applied to names AND phrases; `SERVICE_ALIASES` — a phrase that names a different
+  service, "lash lamination"→"Lash Lift"; a catalog-vocabulary filter drops filler words;
+  whole-word scoring → match/ambiguous/notOffered), Zod schemas. Probe real phrasings
+  with `scripts/probe-service-phrases.ts` (2026-09-08).
 ## src/core/
 - **hours.ts** — `getHoursStatus(date)` (open/closed/closedRightNow/nextOpen),
   `getOpenClose(date)`. Reads `config/business.json` (the hours source of truth).
@@ -286,6 +290,12 @@ quoted candidate-reply lines), **validate-session-fields.ts** /
 against gpt-realtime-2.1 before shipping — the lessons.md rule as one command),
 **probe-client-history.ts** (raw client fields + 120 days of past appointments
 for the service-history feature).
+2026-09-08: **probe-service-phrases.ts** (~90 real caller phrasings through
+resolveService against the live or mock catalog; contract rows exit 1 — run after
+any service rename or matcher change), **diag-create-client.ts** (prints the exact
+POST /client payload; `--try placeholder|none|real|nomobile` WRITES one labelled
+test client each — isolates what the tenant rejects). Review records live in
+`docs/reviews/` (RECONCILIATION_REVIEW_2026-09-08 is the dev-lead decision log).
 2026-09-03: **probe-prompt-live.ts** — the exact local prompt + tools on the
 production model/session shape, text in, audio transcript out, business tools
 intercepted with canned results. Run before any prompt deploy.

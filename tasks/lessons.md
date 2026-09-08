@@ -397,3 +397,33 @@ read-back being skipped that two production test calls had already shown.
 Third: yesterday's closure commit re-introduced a quoted assistant line with a
 "varied naturally" tag. One example + "vary" is still one example. The 🦜
 lesson stands — describe, don't quote — and the prompt test now asserts it.
+
+## 2026-09-08 — Phorest's live tenant REJECTS a client with no email (docs say optional)
+`POST /client` without `email` returns **400 `EMAIL_REQUIRED` "Email is Required"**
+on this tenant even though the published ClientCreateRequest marks only
+firstName/lastName required. Removing the placeholder (2026-09-02, to keep fake
+addresses out of marketing) silently broke EVERY first-time caller's booking
+(live 2026-09-07 1:03 PM ET). Recognized callers never hit the create path, so
+test calls from known numbers looked fine. **Rule (reverses 2026-09-02):** always
+send a placeholder (`PLACEHOLDER_EMAIL_DOMAIN`) and opt it out with
+`emailMarketingConsent: false` + `emailReminderConsent: false` (both verified in
+Phorest's createClient reference); downstream consumers skip it via
+`isPlaceholderEmail()`. Verify any change to the create body with
+`scripts/diag-create-client.ts` before deploying.
+
+## 2026-09-08 — A mock catalog RICHER than the real one hides matcher bugs
+The mock had an "Eyebrow Threading" entry the salon doesn't have, so "eyebrow
+threading" passed every test and dead-ended live (the catalog says "Brow").
+Keep the mock's NAMES aligned with Phorest's, and run
+`scripts/probe-service-phrases.ts` against the LIVE catalog after any service
+rename or matcher change.
+
+## 2026-09-08 — GitHub main must track local main, or cloud agents build on ghosts
+GitHub `main` sat at `72aae0f` (Aug 24) while local `main` ran 100 commits
+ahead and was what production was built from. A cloud Fable session and two
+Codex PRs were then built on the stale tree: their prompt edits targeted text
+that no longer existed, their "fix" re-added a placeholder the stale base still
+had, and merging any of them would have deleted ~4,200 lines of local docs.
+**Rule:** `git push origin main` after every deploy record, and before handing a
+task to a cloud/remote agent. When a remote branch shares no history with local
+main, port `git diff main <branch> -- src/` as a patch instead of merging.

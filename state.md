@@ -1,7 +1,46 @@
 # STATE — AI Receptionist (Erica)
 
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
-> Last major work: 2026-09-03 — closure need-discovery and post-call owner recaps deployed.
+> Last major work: 2026-09-08 — cloud/Codex PRs reconciled onto main (first-time-caller booking fix + matcher + ask-once prompt); NOT yet deployed.
+
+## 2026-09-08 — 🔀 Reconciled Fable cloud PR #1 + Codex PR #2 onto main; PR #3 held (Fable, local)
+
+- Full decision log: `docs/reviews/RECONCILIATION_REVIEW_2026-09-08.md`. Codex records kept
+  alongside (`CODEX_HANDOFF_2026-09-08.md`, `PRODUCTION_PARITY_2026-09-08.md`).
+- Why it was messy: GitHub `main` was stuck at `72aae0f` (Aug 24) while local main ran 100
+  commits ahead. The cloud Fable session (PR #1) and Codex (PR #2, #3) built on the stale
+  tree; merging any branch conflicted in 4-5 files and would have deleted ~4,200 lines of
+  local docs plus 5 local scripts. Ported `git diff main codex-branch -- src/` as a patch
+  instead. **main is now pushed to GitHub** — cloud agents branch from truth from here on.
+- Landed on main (9101f95, f270e17, 5644669):
+  1. `createClient` sends a placeholder email again (`PLACEHOLDER_EMAIL_DOMAIN`) with
+     `emailMarketingConsent`/`emailReminderConsent: false` (field names verified in Phorest's
+     createClient reference). Root cause of the 2026-09-07 1:03 PM lost booking: `e1e5268`
+     (Sep 2) removed the placeholder; the tenant answers 400 EMAIL_REQUIRED without one, so
+     EVERY first-time caller booking has failed since the Sep 2 deploy. Placeholder creates
+     provably worked before (Prashanna KC test client, 08-27).
+  2. Service matcher: `TOKEN_SYNONYMS` + filler filter; "eyebrow threading" → Brow Threading.
+     Mock catalog no longer has a fake "Eyebrow Threading". Mock probe: all contract rows pass.
+  3. Prompt ask-once integration on the lean prompt: ambiguous → one clarification then first
+     candidate; notOffered → offer closest once, never substitute (NARROWED from the cloud
+     wording, which auto-picked on notOffered too); name + number-on-file in ONE turn, both
+     answers + explicit consent required (changes the 08-27 sequential contract — ear-test it).
+- Verified on main: 46 files / 554 tests, tsc clean, prettier clean.
+- PR #3 (service-information prototype) NOT merged: privacy rewrite drops the explicit
+  "when Richa arrives/leaves / who's working" bans and contradicts two surviving rules;
+  verbatim safe-responses speak "approved guidance" review language aloud; 20 voice-ready
+  facts self-approved, no owner sign-off; validate script does a live Phorest read.
+- **PENDING — action items**
+  - Run the live-catalog probe locally (sandbox blocked it): `npx tsx scripts/probe-service-phrases.ts`.
+  - Optional tenant proof: `node --env-file=.env --import tsx scripts/diag-create-client.ts --try placeholder`
+    (writes ONE labelled test client — delete in the Phorest UI after).
+  - Ear test: combined name/number turn; narrowed clarification rule; lean prompt + `wait_for_user`
+    (37d1d93, still never live).
+  - Deploy needs Aryan's go-ahead → `railway up`. Prod is still `117ada0` — first-time callers
+    cannot book until this ships.
+  - PR #3: revise per the review doc, re-propose privacy wording keeping the ban list, get
+    Richa's sign-off on the knowledge facts, rebase onto the new main.
+
 
 ## 2026-09-03 (evening) — erica-call-qa live routine prompt updated in place
 

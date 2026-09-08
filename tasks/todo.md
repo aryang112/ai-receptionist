@@ -494,3 +494,23 @@ this quarter over polishing.
       greeting, cache per-number in data/, score=1 → soft guard line in
       Erica's context (polite-brief-no-transfer). Soft signal ONLY — never
       auto-block (false positives). Deferred by Aryan 2026-08-26.
+
+## 2026-09-08 — Reconcile Fable cloud PR #1 + Codex PR #2/#3 onto local main
+Context: GitHub main was stale at 72aae0f (Aug 24); local main is 100 commits
+ahead and is the real source of prod (117ada0 deployed; 37d1d93 lean prompt
+NOT deployed). Fable's cloud branch and Codex's PRs were built on the stale
+base, so branch merges conflict. Decision: port the SOURCE delta onto local
+main as atomic commits, keep local docs/scripts, push main, supersede PRs.
+- [x] Apply `git diff main codex/conversation-review -- src/ + 2 new scripts`
+      (excludes Codex's accidental deletion of 5 local scripts)
+- [x] Commit 1: placeholder email + consent opt-outs on client create (+tests)
+- [x] Commit 2: service matcher (TOKEN_SYNONYMS, filler filter) + mock + tests
+      + probe/diag scripts
+- [x] Commit 3: ask-once prompt integration; REVISE first-candidate rule to
+      `ambiguous` only (never auto-pick on notOffered)
+- [x] npm test + tsc + prettier green on main
+- [x] Commit 4: docs — state.md, lessons, CODEMAP, docs/reviews/* records
+- [ ] Push main to origin; comment/close PR #1 and #2 as superseded
+- [ ] PR #3 (service knowledge): decision after subagent review; not merged
+      to main without owner approval of content + privacy change
+- [ ] NOT deploying — needs Aryan go-ahead + ear test (standing rule)
