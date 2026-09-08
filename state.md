@@ -1,7 +1,38 @@
 # STATE — AI Receptionist (Erica)
 
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
+> Latest release assessment: 2026-09-08 — production still `117ada0`; main reconciled but live matcher probe is RED. Assess with Aryan before deployment; see review below.
 > Last major work: 2026-09-08 — cloud/Codex PRs reconciled onto main (first-time-caller booking fix + matcher + ask-once prompt); NOT yet deployed.
+
+## 2026-09-08 — Independent release assessment (Codex; no deployment)
+
+- Read `docs/reviews/RELEASE_ASSESSMENT_2026-09-08.md` before acting on the older
+  deployment checklist. Aryan requested assessment together before deciding the release.
+- Railway still reports the September 3 `117ada0` deployment; local and remote main
+  were `c39a41e`. Fable's source changes are already ported onto main; PRs #1/#2 are
+  closed as superseded. Detached hotfix `9d619df` is production plus email + matcher
+  only; its parent `acbed9c` is the existing email-only candidate. Neither is deployed.
+- September 7 lost booking independently VERIFIED from full transcript, tool records,
+  and historical Railway logs: two client-create HTTP 400 EMAIL_REQUIRED failures.
+  Latest September 8 QA all-clear covers zero calls and excludes this incident.
+  September 7 QA's claim about who hung up remains NEEDS LISTEN.
+- **Live catalog probe RUN: five contract failures.** Two unresolved phrase gaps
+  (`threading for my eyebrows`, `full leg wax`), three incorrect catalog assumptions
+  (`haircut`, `hair cut`, `massage`). Production/main comparison also proves a NEW
+  regression: `henna brows` changes from notOffered to a direct Brow Threading match.
+- **Diagnostic gap:** `diag-create-client.ts --try placeholder` omits the consent
+  fields the application sends; align the exact payload before using it as release proof.
+- **Older unmerged work:** September 1 audit branch `8b26fa2` is NOT fully ported.
+  Main/prod still stamp transfer outcome after awaiting Twilio redirect; an early
+  stream stop can persist the previous outcome and generic hangup reason. Selectively
+  port/reproduce this race with a regression test; do not bulk-merge its old hangup
+  response suppression, which conflicts with the newer tool-result-owned goodbye.
+- Fresh main tests: 46 files / 554 passed; build passed. No runtime code, live data,
+  forwarding, credentials, or deployment changed. Original dirty knowledge worktree preserved.
+- **PENDING — supersedes older release readiness:** agree narrow release scope with
+  Aryan, repair/restrict matcher before including it, validate exact create payload,
+  and complete pre-production call checks. Recommendation: September 3 baseline plus
+  email fix and a scoped matching correction; hold broad prompt/knowledge changes.
 
 ## 2026-09-08 — 🔀 Reconciled Fable cloud PR #1 + Codex PR #2 onto main; PR #3 held (Fable, local)
 
