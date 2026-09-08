@@ -95,8 +95,12 @@ if (args.length) {
     );
   } finally {
     // Only mutate the client ID returned by THIS diagnostic's create response.
-    const archived = await request(clientUrl, 'PUT', {
+    // Phorest requires the current client version on updates (HTTP 400 without it).
+    const current = await request(clientUrl, 'GET');
+    await request(clientUrl, 'PUT', {
       ...payload,
+      clientId: created.clientId,
+      version: current.version,
       archived: true,
       smsMarketingConsent: false,
       smsReminderConsent: false,
