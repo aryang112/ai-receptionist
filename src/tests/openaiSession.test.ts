@@ -88,6 +88,43 @@ describe('RT-2 response.create collision avoidance', () => {
   });
 });
 
+describe('C7b response identity for post-tool farewell gating', () => {
+  it('forwards the audio response id and advances/resets the current response id', async () => {
+    const onAudioChunk = vi.fn();
+    const { session } = buildSession({ onAudioChunk });
+
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_tool' },
+    });
+    expect(session.getCurrentResponseId()).toBe('resp_tool');
+
+    await fire(session, {
+      type: 'response.output_audio.delta',
+      response_id: 'resp_tool',
+      item_id: 'item_audio',
+      delta: 'AA==',
+    });
+    expect(onAudioChunk).toHaveBeenCalledExactlyOnceWith(
+      'AA==',
+      'item_audio',
+      'resp_tool'
+    );
+
+    await fire(session, {
+      type: 'response.done',
+      response: { id: 'resp_tool', status: 'completed' },
+    });
+    expect(session.getCurrentResponseId()).toBeNull();
+
+    await fire(session, {
+      type: 'response.created',
+      response: { id: 'resp_goodbye' },
+    });
+    expect(session.getCurrentResponseId()).toBe('resp_goodbye');
+  });
+});
+
 describe('RT-3 error classification', () => {
   it('softens a lone application error (no onError, session stays alive)', async () => {
     const onError = vi.fn();
@@ -454,10 +491,12 @@ describe('M1 — onUserTranscript / onAssistantTranscript / onUsage handler wiri
     const { session } = buildSession({ onUserTranscript });
     await fire(session, {
       type: 'conversation.item.input_audio_transcription.completed',
+      item_id: 'item_caller_1',
       transcript: 'I need a lash lift Tuesday',
     });
     expect(onUserTranscript).toHaveBeenCalledExactlyOnceWith(
-      'I need a lash lift Tuesday'
+      'I need a lash lift Tuesday',
+      'item_caller_1'
     );
   });
 
@@ -613,6 +652,11 @@ describe('M1 — configureSession session.update payload (OPENAI_INPUT_TRANSCRIP
         threshold: env.OPENAI_VAD_THRESHOLD,
         prefix_padding_ms: env.OPENAI_VAD_PREFIX_MS,
         silence_duration_ms: env.OPENAI_VAD_SILENCE_MS,
+        // Greeting protection: server-side interrupt AND auto-created replies
+        // start OFF; twilioStream re-enables both once the greeting has
+        // played out (setAutoResponses — validated live 2026-08-26).
+        interrupt_response: false,
+        create_response: false,
       },
     };
   }
@@ -682,5 +726,43 @@ describe('VAD turn boundaries — onSpeechStarted / onSpeechStopped wiring', () 
     await fire(session, { type: 'input_audio_buffer.speech_stopped' });
     expect(onSpeechStopped).toHaveBeenCalledTimes(1);
     expect(onSpeechStarted).toHaveBeenCalledTimes(1);
+  });
+});
+
+// wait_for_user (2026-09-03): the model's only way to stay silent on a
+// non-addressed turn. Its result must reach the conversation but must never
+// start a response — a response.create here would force the speech the tool
+// exists to avoid.
+describe('silent tools (wait_for_user)', () => {
+  it('delivers the function output but never starts a response for a silent tool', async () => {
+    const { session, sent } = buildSession();
+    session.registerTool('wait_for_user', async () => ({ ok: true }), {
+      silent: true,
+    });
+    await session.handleToolCompleted({
+      call_id: 'c_wait',
+      name: 'wait_for_user',
+      arguments: '{}',
+    });
+    expect(types(sent)).toEqual(['conversation.item.create']);
+    expect(sent[0].item).toMatchObject({
+      type: 'function_call_output',
+      call_id: 'c_wait',
+    });
+    expect(session.pendingResponseCreate).toBe(false);
+  });
+
+  it('a normal tool still gets its response.create', async () => {
+    const { session, sent } = buildSession();
+    session.registerTool('get_prices', async () => ({ ok: true }));
+    await session.handleToolCompleted({
+      call_id: 'c_1',
+      name: 'get_prices',
+      arguments: '{}',
+    });
+    expect(types(sent)).toEqual([
+      'conversation.item.create',
+      'response.create',
+    ]);
   });
 });

@@ -292,10 +292,16 @@ describe('G2 — silence watchdog', () => {
 });
 
 describe('G2 — endCallNow is the single hangup path for end_call', () => {
-  it('handleEndCall (normal goodbye) still returns { ended: true } via endCallNow', async () => {
+  it('handleEndCall publishes its farewell result, then still closes via endCallNow after fresh audio', async () => {
+    vi.useFakeTimers();
     const { call } = buildCall();
     const res = await call.handleEndCall({});
-    expect(res).toEqual({ ended: true });
+    expect(res).toMatchObject({ ending: true });
+    expect(call.closed).toBe(false);
+    call.sendAudioToTwilio('AA==', 'goodbye-response');
+    call.markQueue = [];
+    await vi.advanceTimersByTimeAsync(1);
     expect(call.closed).toBe(true);
+    vi.useRealTimers();
   });
 });

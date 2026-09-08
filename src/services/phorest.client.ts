@@ -227,7 +227,7 @@ async function phorestFetch<T = unknown>(
       const response = await fetch(url, {
         ...init,
         headers,
-        signal: AbortSignal.timeout(PHOREST_TIMEOUT_MS),
+        signal: init.signal ?? AbortSignal.timeout(PHOREST_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -307,6 +307,25 @@ let clientPhoneIndexReloading = false;
 // avoid log spam; behavior is otherwise unchanged.
 let clientIndexIncomplete = false;
 let clientIndexIncompleteWarned = false;
+
+// A model response can issue the same booking call more than once before the
+// first client lookup/create finishes. Keep client identity resolution
+// single-flight per confirmed appointment subject, then retain the successful
+// result briefly so a near-sequential repeat cannot create a second profile.
+// Pending entries are never evicted; resolved entries are both TTL- and
+// LRU-bounded, while uncertain entries stay fail-closed and periodically reconcile.
+const CLIENT_RESOLUTION_TTL_MS = 10 * 60 * 1000;
+// A client-create transport failure may have committed at Phorest even though
+// Erica never received the response. Retry authoritative reads after this
+// interval, but never issue another create while the outcome remains unknown.
+const CLIENT_RESOLUTION_UNCERTAIN_RECONCILE_MS = 30 * 1000;
+const CLIENT_RESOLUTION_MAX_SUCCESSFUL = 256;
+type ClientResolutionEntry = {
+  promise: Promise<string>;
+  state: 'pending' | 'resolved' | 'uncertain';
+  expiresAt: number;
+};
+const clientResolutionCache = new Map<string, ClientResolutionEntry>();
 
 // The client list changes slowly, but a long-running process must not serve a
 // stale phone index forever (a client added today would never resolve). After
@@ -536,24 +555,142 @@ function splitName(fullName: string): { firstName: string; lastName: string } {
   return { firstName, lastName };
 }
 
+// US numbers never start with 0 (NANP area codes are 2–9), so leading zeros
+// are always a formatting artifact (UI national notation / typed prefix) —
+// strip them, then strip a leading country 1: we store and match on the bare
+// 10-digit number (Aryan's convention, 2026-08-27).
 function sanitisePhone(phone?: string) {
   if (!phone) return undefined;
-  const digits = phone.replace(/[^0-9]/g, '');
+  let digits = phone.replace(/[^0-9]/g, '').replace(/^0+/, '');
+  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
   return digits || undefined;
 }
 
 function normalizePhone(phone: string): string {
-  const digits = phone.replace(/\D/g, '');
+  const digits = phone.replace(/\D/g, '').replace(/^0+/, '');
   return digits.length === 11 && digits.startsWith('1')
     ? digits.slice(1)
     : digits;
 }
 
-async function findClientByEmail(email: string): Promise<string | undefined> {
-  const response = await phorestFetch<ClientResponse>(
-    `api/business/${env.PHOREST_BUSINESS_ID}/client?email=${encodeURIComponent(email)}&size=1`
+function normalizeIdentityText(value: string): string {
+  return value.trim().normalize('NFKC').replace(/\s+/g, ' ').toLowerCase();
+}
+
+function normalizeEmail(email?: string): string | undefined {
+  const normalized = email ? normalizeIdentityText(email) : '';
+  return normalized || undefined;
+}
+
+type ConfirmedClientSubject = {
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  email?: string;
+  phone?: string;
+};
+
+function confirmedClientSubject(customer: {
+  name: string;
+  phone?: string;
+  email?: string;
+}): ConfirmedClientSubject | undefined {
+  const nameParts = customer.name
+    .trim()
+    .normalize('NFKC')
+    .split(/\s+/)
+    .filter(Boolean);
+  if (nameParts.length < 2) return undefined;
+
+  const firstName = nameParts[0]!;
+  const lastName = nameParts.slice(1).join(' ');
+  const email = normalizeEmail(customer.email);
+  const sanitizedPhone = sanitisePhone(customer.phone);
+  const phone = sanitizedPhone?.length === 10 ? sanitizedPhone : undefined;
+  if (!email && !phone) return undefined;
+
+  return {
+    firstName,
+    lastName,
+    fullName: normalizeIdentityText(nameParts.join(' ')),
+    ...(email ? { email } : {}),
+    ...(phone ? { phone } : {}),
+  };
+}
+
+function clientMatchesConfirmedSubject(
+  client: ClientRecord,
+  subject: ConfirmedClientSubject
+): boolean {
+  return clientConfirmedContactScore(client, subject) > 0;
+}
+
+function clientConfirmedContactScore(
+  client: ClientRecord,
+  subject: ConfirmedClientSubject
+): number {
+  const clientName = normalizeIdentityText(
+    `${client.firstName ?? ''} ${client.lastName ?? ''}`
   );
-  return response._embedded?.clients?.[0]?.clientId;
+  if (clientName !== subject.fullName) return 0;
+
+  const emailMatches =
+    subject.email !== undefined &&
+    normalizeEmail(client.email) === subject.email;
+  const phoneMatches =
+    subject.phone !== undefined &&
+    normalizePhone(client.mobile ?? '') === subject.phone;
+  return Number(emailMatches) + Number(phoneMatches);
+}
+
+class AmbiguousClientMatchError extends Error {
+  constructor() {
+    super('Multiple Phorest clients match the confirmed caller identity');
+    this.name = 'AmbiguousClientMatchError';
+  }
+}
+
+function pickConfirmedClientRecord(
+  clients: ClientRecord[],
+  subject: ConfirmedClientSubject
+): ClientRecord | undefined {
+  const matches = clients
+    .map((client) => ({
+      client,
+      score: clientConfirmedContactScore(client, subject),
+    }))
+    .filter((candidate) => candidate.score > 0)
+    .sort((a, b) => b.score - a.score);
+  if (matches.length === 0) return undefined;
+
+  const bestScore = matches[0]!.score;
+  const bestMatches = matches.filter(
+    (candidate) => candidate.score === bestScore
+  );
+  if (bestMatches.length > 1) {
+    logger.warn(
+      {
+        matchCount: bestMatches.length,
+        candidateCount: matches.length,
+        contactMatchCount: bestScore,
+      },
+      'Multiple Phorest clients ambiguously match the confirmed caller identity'
+    );
+    throw new AmbiguousClientMatchError();
+  }
+  return bestMatches[0]!.client;
+}
+
+async function findClientRecordByEmail(
+  subject: ConfirmedClientSubject,
+  options: RequestOptions = {}
+): Promise<ClientRecord | undefined> {
+  if (!subject.email) return undefined;
+  const response = await phorestFetch<ClientResponse>(
+    `api/business/${env.PHOREST_BUSINESS_ID}/client?email=${encodeURIComponent(subject.email)}&size=50`,
+    options
+  );
+  return pickConfirmedClientRecord(response._embedded?.clients ?? [], subject);
 }
 
 async function findClientRecordByPhone(
@@ -565,34 +702,120 @@ async function findClientRecordByPhone(
   return index.get(normalized);
 }
 
-// Name lookup used as a fallback when a phone match belongs to a DIFFERENT
-// person (shared/family number). Returns the first client whose first+last name
-// matches case-insensitively, else undefined.
-async function findClientIdByName(
-  firstName: string,
-  lastName: string
-): Promise<string | undefined> {
-  if (!firstName) return undefined;
+// The name query is only a way to narrow the provider read. A result is never
+// trusted by name alone: the returned record must also carry the confirmed
+// email and/or phone for this appointment subject.
+async function findClientRecordByConfirmedName(
+  subject: ConfirmedClientSubject,
+  options: RequestOptions = {}
+): Promise<ClientRecord | undefined> {
   const response = await phorestFetch<ClientResponse>(
-    `api/business/${env.PHOREST_BUSINESS_ID}/client?firstName=${encodeURIComponent(firstName)}${lastName ? `&lastName=${encodeURIComponent(lastName)}` : ''}&size=10`
+    `api/business/${env.PHOREST_BUSINESS_ID}/client?firstName=${encodeURIComponent(subject.firstName)}&lastName=${encodeURIComponent(subject.lastName)}&size=50`,
+    options
   );
-  const clients = response._embedded?.clients ?? [];
-  const wantFirst = firstName.trim().toLowerCase();
-  const wantLast = lastName.trim().toLowerCase();
-  const matches = clients.filter((c) => {
-    const first = (c.firstName ?? '').trim().toLowerCase();
-    const last = (c.lastName ?? '').trim().toLowerCase();
-    return first === wantFirst && (!wantLast || last === wantLast);
-  });
-  // F10j: more than one client with the same name — we pick the first, but make
-  // the ambiguity visible (booking could land on the wrong same-named record).
-  if (matches.length > 1) {
-    logger.warn(
-      { firstName: wantFirst, matchCount: matches.length },
-      'Multiple clients share this name — using the first (name lookup is ambiguous)'
-    );
+  return pickConfirmedClientRecord(response._embedded?.clients ?? [], subject);
+}
+
+// Direct provider reads used before a create and after an ambiguous create
+// failure. Unlike the process phone index, these reads can observe a client
+// that Phorest committed moments ago.
+async function findAuthoritativeClientRecord(
+  subject: ConfirmedClientSubject,
+  options: RequestOptions = {}
+): Promise<ClientRecord | undefined> {
+  if (subject.email) {
+    const byEmail = await findClientRecordByEmail(subject, options);
+    if (byEmail) return byEmail;
   }
-  return matches[0]?.clientId;
+  if (subject.phone) {
+    return findClientRecordByConfirmedName(subject, options);
+  }
+  return undefined;
+}
+
+function rememberClientRecordInPhoneIndex(client: ClientRecord): void {
+  if (!clientPhoneIndex || !client.mobile) return;
+  const phone = normalizePhone(client.mobile);
+  if (phone && phone.length >= 7 && !clientPhoneIndex.has(phone)) {
+    // Shared/family numbers deliberately keep their original index owner.
+    // Subject-specific resolution is retained separately in the result cache.
+    clientPhoneIndex.set(phone, client);
+  }
+}
+
+class ClientCreateOutcomeUncertainError extends Error {
+  constructor() {
+    super(
+      'Phorest client-create outcome is uncertain; an immediate retry is blocked'
+    );
+    this.name = 'ClientCreateOutcomeUncertainError';
+  }
+}
+
+function isAmbiguousClientCreateFailure(error: unknown): boolean {
+  // A deterministic 4xx means Phorest rejected the request. Transport errors,
+  // timeouts, malformed success responses, and 5xx responses may have happened
+  // after the provider committed the client.
+  return !(error instanceof PhorestHttpError) || error.status >= 500;
+}
+
+const CLIENT_CREATE_RECONCILE_ATTEMPTS = 3;
+const CLIENT_CREATE_RECONCILE_DELAY_MS = 100;
+const CLIENT_CREATE_RECONCILE_TIMEOUT_MS = 2500;
+
+async function reconcileClientCreate(customer: {
+  name: string;
+  phone?: string;
+  email?: string;
+}): Promise<ClientRecord | undefined> {
+  const subject = confirmedClientSubject(customer);
+  if (!subject) return undefined;
+  const deadlineAt = Date.now() + CLIENT_CREATE_RECONCILE_TIMEOUT_MS;
+  const deadlineSignal = AbortSignal.timeout(
+    CLIENT_CREATE_RECONCILE_TIMEOUT_MS
+  );
+
+  for (
+    let attempt = 0;
+    attempt < CLIENT_CREATE_RECONCILE_ATTEMPTS;
+    attempt += 1
+  ) {
+    if (deadlineSignal.aborted || Date.now() >= deadlineAt) break;
+    try {
+      const record = await findAuthoritativeClientRecord(subject, {
+        // The loop owns retry timing. A shared deadline prevents three nested
+        // read retries from turning one caller-facing tool into ~24s of silence.
+        retriable: false,
+        signal: deadlineSignal,
+      });
+      if (record) {
+        rememberClientRecordInPhoneIndex(record);
+        return record;
+      }
+    } catch (error) {
+      logger.warn(
+        { attempt: attempt + 1, err: String(error) },
+        'Client-create reconciliation read failed'
+      );
+    }
+
+    if (
+      attempt + 1 < CLIENT_CREATE_RECONCILE_ATTEMPTS &&
+      !deadlineSignal.aborted &&
+      Date.now() < deadlineAt
+    ) {
+      await new Promise<void>((resolve) =>
+        setTimeout(
+          resolve,
+          Math.min(
+            CLIENT_CREATE_RECONCILE_DELAY_MS,
+            Math.max(0, deadlineAt - Date.now())
+          )
+        )
+      );
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -624,8 +847,8 @@ async function createClient(customer: {
   const payload = {
     firstName,
     lastName,
-    email,
-    mobile: phone,
+    ...(email ? { email } : {}),
+    ...(phone ? { mobile: phone } : {}),
     creatingBranchId: env.PHOREST_BRANCH_ID,
     // A placeholder mailbox can never receive mail — opt it out so Phorest's
     // marketing/reminder emails never target it. A real email keeps the
@@ -636,15 +859,23 @@ async function createClient(customer: {
     }),
   };
 
-  const response = await phorestFetch<ClientCreateResponse>(
-    `api/business/${env.PHOREST_BUSINESS_ID}/client`,
-    {
-      method: 'POST',
-      body: JSON.stringify(payload),
+  let response: ClientCreateResponse;
+  try {
+    response = await phorestFetch<ClientCreateResponse>(
+      `api/business/${env.PHOREST_BUSINESS_ID}/client`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+    if (!response.clientId) {
+      throw new Error('Phorest client create returned no clientId');
     }
-  );
-  if (!response.clientId) {
-    throw new Error('Failed to create Phorest client');
+  } catch (error) {
+    if (!isAmbiguousClientCreateFailure(error)) throw error;
+    const reconciled = await reconcileClientCreate(customer);
+    if (reconciled) return reconciled.clientId;
+    throw new ClientCreateOutcomeUncertainError();
   }
 
   // Keep the in-memory phone index hot: a caller who books a new profile and
@@ -653,38 +884,32 @@ async function createClient(customer: {
   // guard creates a second profile (e.g. the daughter) that carries the same
   // phone; overwriting would make the original owner's (mom's) next call
   // prefetch the wrong person. First writer for a number wins.
-  if (clientPhoneIndex && phone) {
-    const normalized = normalizePhone(phone);
-    if (
-      normalized &&
-      normalized.length >= 7 &&
-      !clientPhoneIndex.has(normalized)
-    ) {
-      clientPhoneIndex.set(normalized, {
-        clientId: response.clientId,
-        firstName,
-        lastName,
-        mobile: phone,
-        email,
-      });
-    }
-  }
+  rememberClientRecordInPhoneIndex({
+    clientId: response.clientId,
+    firstName,
+    lastName,
+    ...(phone ? { mobile: phone } : {}),
+    ...(email ? { email } : {}),
+  });
 
   return response.clientId;
 }
 
-async function getOrCreateClient(customer: {
+async function getOrCreateClientUncached(customer: {
   name: string;
   phone?: string;
   email?: string;
 }): Promise<string> {
-  const email = customer.email?.trim().toLowerCase();
-  if (email) {
-    const existing = await findClientByEmail(email);
-    if (existing) return existing;
+  const subject = confirmedClientSubject(customer);
+  if (subject?.email) {
+    const existing = await findClientRecordByEmail(subject);
+    if (existing) {
+      rememberClientRecordInPhoneIndex(existing);
+      return existing.clientId;
+    }
   }
 
-  const { firstName: wantFirst, lastName: wantLast } = splitName(customer.name);
+  const { firstName: wantFirst } = splitName(customer.name);
 
   const phone = sanitisePhone(customer.phone);
   if (phone) {
@@ -693,22 +918,160 @@ async function getOrCreateClient(customer: {
       // Only reuse the phone match if the caller's name is consistent with the
       // record. On a SHARED/FAMILY number, blindly reusing the phone owner books
       // the wrong person (name silently discarded) — and the booking is then
-      // invisible to a later "when's my appointment?" under the real name. If a
-      // firstName was provided and does NOT match, fall through to name lookup,
-      // then create a fresh profile. (No name provided -> keep old behavior.)
-      const recFirst = (record.firstName ?? '').trim().toLowerCase();
-      const provided = wantFirst.trim().toLowerCase();
-      const nameMatches =
-        !provided || provided === 'guest' || recFirst === provided;
-      if (nameMatches) return record.clientId;
+      // invisible to a later "when's my appointment?" under the real name. If
+      // a confirmed full name does NOT match, fall through to an authoritative
+      // subject lookup, then create a fresh profile.
+      if (subject && clientMatchesConfirmedSubject(record, subject)) {
+        return record.clientId;
+      }
 
-      const byName = await findClientIdByName(wantFirst, wantLast);
-      if (byName) return byName;
-      return createClient(customer);
+      // Preserve the pre-existing best-effort behavior for an unconfirmed
+      // single-component name, but never apply it to a confirmed full name.
+      if (!subject) {
+        const recFirst = normalizeIdentityText(record.firstName ?? '');
+        const provided = normalizeIdentityText(wantFirst);
+        if (!provided || provided === 'guest' || recFirst === provided) {
+          return record.clientId;
+        }
+      }
+    }
+
+    if (subject) {
+      const authoritative = await findClientRecordByConfirmedName(subject);
+      if (authoritative) {
+        rememberClientRecordInPhoneIndex(authoritative);
+        return authoritative.clientId;
+      }
     }
   }
 
   return createClient(customer);
+}
+
+function normalizedClientSubjectKey(customer: {
+  name: string;
+  phone?: string;
+  email?: string;
+}): string | undefined {
+  const subject = confirmedClientSubject(customer);
+  if (!subject) return undefined;
+
+  // Phone + confirmed full name is the canonical appointment subject. Optional
+  // email must not split two parallel payloads for the same caller into
+  // separate client creates. Email is the fallback only when no phone exists.
+  if (subject.phone) return `phone-name:${subject.phone}:${subject.fullName}`;
+  if (subject.email) return `email-name:${subject.email}:${subject.fullName}`;
+  return undefined;
+}
+
+function pruneClientResolutionCache(now: number): void {
+  for (const [key, entry] of clientResolutionCache) {
+    if (entry.state === 'resolved' && entry.expiresAt <= now) {
+      clientResolutionCache.delete(key);
+    }
+  }
+
+  let successfulCount = 0;
+  for (const entry of clientResolutionCache.values()) {
+    if (entry.state === 'resolved') successfulCount += 1;
+  }
+  if (successfulCount <= CLIENT_RESOLUTION_MAX_SUCCESSFUL) return;
+
+  // Map iteration is insertion order. Cache hits and successful settlements
+  // are moved to the end, so deleting from the front gives us a small LRU.
+  for (const [key, entry] of clientResolutionCache) {
+    if (entry.state !== 'resolved') continue;
+    clientResolutionCache.delete(key);
+    successfulCount -= 1;
+    if (successfulCount <= CLIENT_RESOLUTION_MAX_SUCCESSFUL) break;
+  }
+}
+
+function trackClientResolution(
+  subjectKey: string,
+  promise: Promise<string>
+): Promise<string> {
+  const entry: ClientResolutionEntry = {
+    promise,
+    state: 'pending',
+    expiresAt: 0,
+  };
+  clientResolutionCache.set(subjectKey, entry);
+
+  void promise.then(
+    (clientId) => {
+      // A missing/unknown outcome must never become a reusable binding.
+      if (clientResolutionCache.get(subjectKey) !== entry) return;
+      if (!clientId) {
+        clientResolutionCache.delete(subjectKey);
+        return;
+      }
+      entry.state = 'resolved';
+      entry.expiresAt = Date.now() + CLIENT_RESOLUTION_TTL_MS;
+      clientResolutionCache.delete(subjectKey);
+      clientResolutionCache.set(subjectKey, entry);
+      pruneClientResolutionCache(Date.now());
+    },
+    (error) => {
+      if (clientResolutionCache.get(subjectKey) !== entry) return;
+      if (error instanceof ClientCreateOutcomeUncertainError) {
+        entry.state = 'uncertain';
+        // This is the next time a retry may perform authoritative reads. It is
+        // not an expiry into another create attempt.
+        entry.expiresAt = Date.now() + CLIENT_RESOLUTION_UNCERTAIN_RECONCILE_MS;
+        clientResolutionCache.delete(subjectKey);
+        clientResolutionCache.set(subjectKey, entry);
+        return;
+      }
+      // Authoritative rejections and read failures are safe to retry. Only a
+      // possibly committed client create is latched as uncertain.
+      clientResolutionCache.delete(subjectKey);
+    }
+  );
+
+  return promise;
+}
+
+async function reconcileUncertainClient(customer: {
+  name: string;
+  phone?: string;
+  email?: string;
+}): Promise<string> {
+  const reconciled = await reconcileClientCreate(customer);
+  if (reconciled) return reconciled.clientId;
+  throw new ClientCreateOutcomeUncertainError();
+}
+
+function getOrCreateClient(customer: {
+  name: string;
+  phone?: string;
+  email?: string;
+}): Promise<string> {
+  const subjectKey = normalizedClientSubjectKey(customer);
+  if (!subjectKey) return getOrCreateClientUncached(customer);
+
+  const now = Date.now();
+  pruneClientResolutionCache(now);
+  const cached = clientResolutionCache.get(subjectKey);
+  if (cached) {
+    if (cached.state === 'uncertain' && cached.expiresAt <= now) {
+      // Once a create may have committed, every later attempt is read-only.
+      // Replace the rejected latch with one shared reconciliation promise;
+      // absence is still uncertainty and can never authorize another POST.
+      return trackClientResolution(
+        subjectKey,
+        reconcileUncertainClient(customer)
+      );
+    }
+    // Touch every hit. Pending calls share the exact same work, resolved calls
+    // retain recently used identities, and uncertain calls reuse the same
+    // explicit failure instead of issuing a second create.
+    clientResolutionCache.delete(subjectKey);
+    clientResolutionCache.set(subjectKey, cached);
+    return cached.promise;
+  }
+
+  return trackClientResolution(subjectKey, getOrCreateClientUncached(customer));
 }
 
 async function pickStaffId(
@@ -822,6 +1185,14 @@ async function fetchAppointment(
 }
 
 export const realPhorest: PhorestPort = {
+  async listStaffNames(): Promise<string[]> {
+    const staff = await loadStaff();
+    return staff
+      .filter((s) => !s.archived)
+      .map((s) => (s.firstName || '').trim())
+      .filter(Boolean);
+  },
+
   async listServices(): Promise<Service[]> {
     const services = await loadServices();
     const normalised = Array.from(services.values()).map(normaliseService);

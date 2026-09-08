@@ -44,6 +44,65 @@ const BOOK_DATE = '2025-10-01';
 // 2025-10-02 is a Thursday (12:00-19:00) — same date the pre-existing F6
 // reschedule tests use.
 const RESCHEDULE_DATE = '2025-10-02';
+const VACATION_DATE = '2026-09-03';
+
+describe('FR-01 — known closed dates fail closed before Phorest', () => {
+  it('suggests zero slots without calling availability, even if the remote mock would throw', async () => {
+    const availabilitySpy = vi
+      .spyOn(phorest, 'getAvailability')
+      .mockRejectedValue(new Error('Phorest timeout'));
+    const call = buildCall();
+
+    const res = await call.handleSuggestAvailability({
+      serviceName: 'Lash Lift',
+      date: VACATION_DATE,
+    });
+
+    expect(res.error).toBeUndefined();
+    expect(res.salonOpenThatDay).toBe(false);
+    expect(res.slots).toEqual([]);
+    expect(availabilitySpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects booking locally with zero availability and write calls', async () => {
+    const availabilitySpy = vi
+      .spyOn(phorest, 'getAvailability')
+      .mockRejectedValue(new Error('Phorest timeout'));
+    const createSpy = vi.spyOn(phorest, 'createAppointment');
+    const call = buildCall();
+
+    const res = await call.handleBookAppointment({
+      serviceName: 'Lash Lift',
+      date: VACATION_DATE,
+      time: '13:00',
+      customer: { name: 'Jane Smith' },
+    });
+
+    expect(res.error).toMatch(/closed/i);
+    expect(availabilitySpy).not.toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects rescheduling locally with zero availability and write calls', async () => {
+    const availabilitySpy = vi
+      .spyOn(phorest, 'getAvailability')
+      .mockRejectedValue(new Error('Phorest timeout'));
+    const updateSpy = vi.spyOn(phorest, 'updateAppointment');
+    const call = buildCall();
+    call.servedAppointmentIds.add('appt1');
+    call.servedAppointmentServices.set('appt1', 'Lash Lift');
+
+    const res = await call.handleReschedule({
+      appointmentId: 'appt1',
+      date: VACATION_DATE,
+      time: '13:00',
+    });
+
+    expect(res.error).toMatch(/closed/i);
+    expect(availabilitySpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+});
 
 describe('A1 — book_appointment re-validates availability fresh before writing', () => {
   it('rejects a STALE offered slot that is no longer in the fresh availability, and does NOT write', async () => {

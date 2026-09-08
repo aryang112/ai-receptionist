@@ -3,6 +3,7 @@ import { DateTime } from 'luxon';
 import {
   getHoursStatus,
   getActiveOrUpcomingVacation,
+  getVacationForDate,
   isOpenNow,
   isWithinTransferWindow,
 } from '../core/hours.js';
@@ -65,6 +66,29 @@ describe('vacations (V1)', () => {
     expect(s.hoursThatDay).toBe('12 PM to 7 PM');
   });
 
+  it('nextOpen names the DATE when the next opening is a week or more away (2026-09-01 audit)', () => {
+    // Tue Sep 1 inside the closure: the bare label "Thursday" would point at
+    // THIS Thursday (Sep 3, itself closed). The real reopen is Thu Sep 10.
+    const s = getHoursStatus('2026-09-01', at('2026-09-01T17:00'));
+    expect(s.nextOpen).toBe('Thursday, September 10 at 12 PM');
+    // Within the coming week a bare weekday stays (no regression): Fri Sep 4
+    // → Thu Sep 10 is 6 days out, the nearest Thursday.
+    expect(getHoursStatus('2026-09-04', at('2026-09-04T17:00')).nextOpen).toBe(
+      'Thursday at 12 PM'
+    );
+  });
+
+  it('getVacationForDate covers ANY closure date, with the reopen day', () => {
+    expect(getVacationForDate('2026-09-03')).toEqual({
+      from: '2026-09-01',
+      to: '2026-09-09',
+      reopenISO: '2026-09-10',
+      publicExplanation: 'Richa is away',
+    });
+    expect(getVacationForDate('2026-09-10')).toBeNull();
+    expect(getVacationForDate('2026-08-31')).toBeNull();
+  });
+
   it('a day before the vacation is unaffected', () => {
     // 2026-08-31 is a Monday -> mon hours 12:00-17:00.
     const s = getHoursStatus('2026-08-31', at('2026-08-22T13:00'));
@@ -77,6 +101,7 @@ describe('vacations (V1)', () => {
       from: '2026-09-01',
       to: '2026-09-09',
       reopenISO: '2026-09-10',
+      publicExplanation: 'Richa is away',
     });
   });
 
@@ -87,6 +112,7 @@ describe('vacations (V1)', () => {
       from: '2026-09-01',
       to: '2026-09-09',
       reopenISO: '2026-09-10',
+      publicExplanation: 'Richa is away',
     });
   });
 

@@ -132,6 +132,26 @@ describe('handleTransferToOwner — timed dial with a dial-status action', () =>
     expect(env.TRANSFER_DIAL_TIMEOUT_S).toBeLessThan(20);
   });
 
+  it('a successful handoff also texts Richa an FYI (voicemail pickups look "completed" — this is the salon-side trail)', async () => {
+    const call = buildCall('CA_dial_fyi');
+    call.publicHost = 'erica.up.railway.app';
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_failback' });
+    call.notifyOwnerSms = notifyOwnerSms;
+
+    const result = await call.handleTransferToOwner({
+      reason: 'wants to speak with Richa about a bridal party',
+    });
+
+    expect(result).toEqual({ transferred: true });
+    expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
+    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(
+      /A caller called and was transferred to your phone/
+    );
+    expect(notifyOwnerSms.mock.calls[0]?.[0]).not.toMatch(/bridal party/);
+  });
+
   it('with NO public host (old/edge session): byte-identical to the original bare <Dial>', async () => {
     const call = buildCall('CA_dial_bare');
     expect(call.publicHost).toBeUndefined();
@@ -168,11 +188,13 @@ describe('handleTransferToOwner — a failback segment never dials again', () =>
     recordToolCallSpy.mockRestore();
   });
 
-  it('takes the message path instead: SMS to Richa, no REST redirect, {transferred:false}', async () => {
+  it('offers the separate message path without dialing or synthesizing an SMS', async () => {
     const call = buildCall('CA_failback_msg');
     call.transferFailback = true;
     call.publicHost = 'erica.up.railway.app';
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_transfer_fyi' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({
@@ -181,25 +203,21 @@ describe('handleTransferToOwner — a failback segment never dials again', () =>
 
     expect(result).toEqual({
       transferred: false,
-      note: expect.stringContaining('as a text'),
+      messageRequired: true,
+      note: expect.stringContaining('leave_message_for_owner'),
     });
     // The whole point: no second dial, at any hour.
     expect(updateMock).not.toHaveBeenCalled();
-    expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
-    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/couldn't reach you/);
-    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/bridal package/);
-    // The note must tell the model the truth about what just happened.
+    expect(notifyOwnerSms).not.toHaveBeenCalled();
+    // The note must tell the model the truth without claiming a message exists.
     expect(result.note).toMatch(/rang out on this call/);
-    expect(call.outcome).toBe('info');
+    expect(call.outcome).toBe('none');
     expect(recordToolCallSpy).toHaveBeenCalledWith(
       'CA_failback_msg',
       expect.objectContaining({
         name: 'transfer_to_owner',
-        ok: true,
-        detail: {
-          failbackMessage: true,
-          reason: 'asking about a bridal package',
-        },
+        ok: false,
+        error: 'Owner already did not answer',
       })
     );
   });

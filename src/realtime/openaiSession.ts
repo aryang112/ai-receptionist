@@ -36,11 +36,15 @@ export type RealtimeUsage = {
 
 export type RealtimeHandlers = {
   /** base64 G.711 mu-law audio from OpenAI, ready to send straight to Twilio. */
-  onAudioChunk?: (base64MuLaw: string, itemId?: string) => void;
+  onAudioChunk?: (
+    base64MuLaw: string,
+    itemId?: string,
+    responseId?: string
+  ) => void;
   onTextDelta?: (delta: string) => void;
   onResponseComplete?: () => void;
   /** Fired when OpenAI VAD detects the caller started talking (barge-in trigger). */
-  onSpeechStarted?: () => void;
+  onSpeechStarted?: (itemId?: string) => void;
   /**
    * Fired when OpenAI VAD detects the caller's turn ENDED (they paused long
    * enough for server_vad to close the turn). Pairs with onSpeechStarted so a
@@ -49,7 +53,7 @@ export type RealtimeHandlers = {
    * unbroken monologue never emits speech_stopped, and was being counted as
    * 21s of silence).
    */
-  onSpeechStopped?: () => void;
+  onSpeechStopped?: (itemId?: string) => void;
   onError?: (error: Error) => void;
   /**
    * Fired when the OpenAI WebSocket closes for a reason OTHER than our own
@@ -63,7 +67,7 @@ export type RealtimeHandlers = {
    * enabled (env.OPENAI_INPUT_TRANSCRIPTION !== 'off', default OFF) — with it
    * off this event never arrives, so this handler simply never fires.
    */
-  onUserTranscript?: (text: string) => void;
+  onUserTranscript?: (text: string, itemId?: string) => void;
   /** M1: Erica's final transcribed turn (response.(output_)audio_transcript.done). */
   onAssistantTranscript?: (text: string) => void;
   /** M1: per-turn token usage, fired alongside the existing 📊 turn tokens log. */
@@ -123,6 +127,8 @@ export class OpenAIRealtimeSession {
   private readonly model: string;
   private readonly voice: string;
   private readonly toolHandlers = new Map<string, ToolHandler>();
+  /** Tools whose result must NOT start a response (wait_for_user). */
+  private readonly silentTools = new Set<string>();
   private readonly toolBuffers = new Map<
     string,
     { name: string; args: string }
@@ -287,8 +293,14 @@ export class OpenAIRealtimeSession {
     return descriptions[code] || `Unknown code ${code}`;
   }
 
-  registerTool(name: string, handler: ToolHandler) {
+  registerTool(
+    name: string,
+    handler: ToolHandler,
+    opts: { silent?: boolean } = {}
+  ) {
     this.toolHandlers.set(name, handler);
+    if (opts.silent) this.silentTools.add(name);
+    else this.silentTools.delete(name);
   }
 
   async configureSession({
@@ -355,6 +367,18 @@ export class OpenAIRealtimeSession {
               threshold: env.OPENAI_VAD_THRESHOLD,
               prefix_padding_ms: env.OPENAI_VAD_PREFIX_MS,
               silence_duration_ms: env.OPENAI_VAD_SILENCE_MS,
+              // Greeting protection (2026-08-26, both fields validated live):
+              // while the greeting plays, a caller's "hello" must neither
+              // CANCEL its generation (interrupt_response) nor SPAWN a
+              // queued reply that re-opens after it ("Hi there, what do you
+              // need?" right after the greeting already asked — observed).
+              // Both start OFF; twilioStream re-enables them the moment the
+              // greeting has played out (setAutoResponses) and manually
+              // triggers ONE response if the caller said something
+              // substantive during it. Every later turn depends on that
+              // re-enable — it is load-bearing.
+              interrupt_response: false,
+              create_response: false,
             },
           },
           output: {
@@ -423,6 +447,12 @@ export class OpenAIRealtimeSession {
     return true;
   }
 
+  /** Response currently generating; used to distinguish post-tool farewell
+   * audio from trailing chunks of the response that invoked end_call. */
+  getCurrentResponseId(): string | null {
+    return this.currentResponseId;
+  }
+
   /**
    * Log how long it took Erica to start speaking after the last turn trigger
    * (caller stopped talking, greeting requested, or a tool result returned).
@@ -465,6 +495,36 @@ export class OpenAIRealtimeSession {
    * assistant message to only the audio that was actually heard. Pair this with
    * a Twilio `clear` (sent by the caller of this method) to flush buffered audio.
    */
+  /**
+   * Toggle OpenAI's automatic response handling on caller speech: both the
+   * auto-cancel of an in-progress response (interrupt_response) and the
+   * auto-created reply to a committed caller turn (create_response). Off
+   * during the greeting; on for the rest of the call. Sent as a partial
+   * session.update carrying the FULL turn_detection object (nested objects
+   * replace, not merge — validated live 2026-08-26, both directions echoed).
+   * Fire-and-forget: an occasional drop just leaves the current state.
+   */
+  setAutoResponses(enabled: boolean) {
+    this.sendRaw({
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        audio: {
+          input: {
+            turn_detection: {
+              type: 'server_vad',
+              threshold: env.OPENAI_VAD_THRESHOLD,
+              prefix_padding_ms: env.OPENAI_VAD_PREFIX_MS,
+              silence_duration_ms: env.OPENAI_VAD_SILENCE_MS,
+              interrupt_response: enabled,
+              create_response: enabled,
+            },
+          },
+        },
+      },
+    });
+  }
+
   truncateActiveResponse(audioEndMs: number) {
     if (!this.isOpen() || !this.activeItemId) return;
     this.sendRaw({
@@ -552,24 +612,37 @@ export class OpenAIRealtimeSession {
         // starvation responses may keep failing, so success alone might never
         // fire, permanently disarming retries for the rest of the call.
         this.consecutiveResponseFailures = 0;
-        this.handlers.onSpeechStarted?.();
+        this.handlers.onSpeechStarted?.(
+          typeof event.item_id === 'string' ? event.item_id : undefined
+        );
         break;
       }
       case 'input_audio_buffer.speech_stopped': {
         this.tSpeechStopped = Date.now();
         this.log.info({ eventType: event.type }, 'Speech stopped (VAD)');
-        this.handlers.onSpeechStopped?.();
+        this.handlers.onSpeechStopped?.(
+          typeof event.item_id === 'string' ? event.item_id : undefined
+        );
         break;
       }
       case 'conversation.item.input_audio_transcription.completed': {
         this.log.info(
-          { transcript: event.transcript },
-          'USER SAID: ' + event.transcript
+          {
+            itemId: event.item_id,
+            transcriptChars:
+              typeof event.transcript === 'string'
+                ? event.transcript.length
+                : undefined,
+          },
+          'Caller transcript completed'
         );
         // M1: only ever fires when input transcription is enabled — see
         // configureSession's env-gated `transcription` field, default OFF.
         if (typeof event.transcript === 'string') {
-          this.handlers.onUserTranscript?.(event.transcript);
+          this.handlers.onUserTranscript?.(
+            event.transcript,
+            typeof event.item_id === 'string' ? event.item_id : undefined
+          );
         }
         break;
       }
@@ -627,7 +700,10 @@ export class OpenAIRealtimeSession {
         if (this.handlers.onAudioChunk) {
           this.handlers.onAudioChunk(
             delta as string,
-            this.activeItemId ?? undefined
+            this.activeItemId ?? undefined,
+            (event.response_id as string | undefined) ??
+              this.currentResponseId ??
+              undefined
           );
         } else {
           this.log.error('No onAudioChunk handler registered!');
@@ -647,6 +723,7 @@ export class OpenAIRealtimeSession {
         this.activeItemId = null;
         // RT-2: this response is finished — the next response.create is now legal.
         this.activeResponse = false;
+        this.currentResponseId = null;
         // Surface token usage + cache hit rate so context/cost growth is visible.
         const usage = event.response?.usage;
         if (usage) {
@@ -908,7 +985,11 @@ export class OpenAIRealtimeSession {
         { tool: name, ms: Date.now() - startedAt },
         `⏱  tool ${name} ${Date.now() - startedAt}ms`
       );
-      this.sendToolResult(callId, result ?? { ok: true });
+      this.sendToolResult(
+        callId,
+        result ?? { ok: true },
+        this.silentTools.has(name)
+      );
     } catch (error) {
       this.log.warn(
         { tool: name, ms: Date.now() - startedAt },
@@ -922,7 +1003,7 @@ export class OpenAIRealtimeSession {
     }
   }
 
-  private sendToolResult(callId: string, result: unknown) {
+  private sendToolResult(callId: string, result: unknown, silent = false) {
     // The session may have been closed by the tool itself (e.g. transfer_to_owner
     // redirecting the call). Dropping the result is correct here — never throw.
     if (!this.isOpen()) {
@@ -935,6 +1016,15 @@ export class OpenAIRealtimeSession {
       type: 'conversation.item.create',
       item: { type: 'function_call_output', call_id: callId, output },
     });
+    // A silent tool (wait_for_user) exists so the model can decline to speak
+    // on a non-addressed turn. Deliver the output so the conversation stays
+    // consistent, but never start a response for it — that would force the
+    // very speech the tool was chosen to avoid. The caller's next real turn
+    // creates a response through VAD as usual.
+    if (silent) {
+      this.log.debug({ callId }, '🤫 Silent tool result — no response.create');
+      return;
+    }
     // Mark the start of the post-tool turn so first-audio latency is attributed
     // to "after-tool" rather than the (older) caller-turn timestamp.
     this.tToolResultSent = Date.now();

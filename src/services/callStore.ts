@@ -61,6 +61,17 @@ export type TranscriptEntry = {
   ts: number;
 };
 
+export type OwnerNotificationEntry = {
+  kind:
+    | 'caller_message'
+    | 'transfer'
+    | 'running_late'
+    | 'schedule_change'
+    | 'post_call_summary';
+  ok: boolean;
+  error?: string;
+};
+
 type EndEntry = {
   endedAt: number;
   durationMs: number;
@@ -69,7 +80,7 @@ type EndEntry = {
   // Optional: Erica's accumulated spoken text for the call (F10e / 4.1 digest).
   assistantTranscript?: string | undefined;
   // M1: token usage for the whole call, and a dollar ESTIMATE derived from it
-  // (see twilioStream.ts estimateCostUsd — gpt-realtime audio rates). Absent
+  // (see twilioStream.ts estimateCostUsd — gpt-realtime-2.1 rates). Absent
   // when the call never reported usage (e.g. it never opened a session).
   usage?: UsageAccumulator | undefined;
   estCostUsd?: number | undefined;
@@ -208,6 +219,23 @@ export const CallStore = {
       callSid,
       ts: Date.now(),
       entries,
+    });
+  },
+
+  // Delivery audit/deduplication only. Never persist the SMS body here: exact
+  // caller messages already live in the protected transcript record, and the
+  // notification ledger needs only outcome metadata.
+  recordOwnerNotification(
+    callSid: string,
+    entry: OwnerNotificationEntry
+  ): void {
+    append({
+      type: 'owner_notification',
+      callSid,
+      ts: Date.now(),
+      kind: entry.kind,
+      ok: entry.ok,
+      ...(entry.error ? { error: entry.error } : {}),
     });
   },
 };

@@ -14,8 +14,8 @@ import WebSocket from 'ws';
 // is her waking hours (the transfer window, default 09:00–21:00 salon TZ),
 // NOT the salon's opening hours. Inside the window the dial happens even when
 // the salon is closed (Sunday mid-day, weekday mornings/evenings). Outside
-// it, transfer_to_owner takes a message and texts it to her instead — same
-// machinery as vacation mode. The fatal failover is deliberately NOT gated
+// it, transfer_to_owner offers the separate exact-transcript message path.
+// The fatal failover is deliberately NOT gated
 // (tested implicitly by not touching it).
 
 process.env.OPENAI_REALTIME_API_KEY ||= 'test-key';
@@ -51,10 +51,12 @@ describe('transfer_to_owner — transfer-window gate', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('OUTSIDE WINDOW (Tue 9pm): no dial — SMS message + {transferred:false}', async () => {
+  it('OUTSIDE WINDOW (Tue 9pm): no dial or synthesized SMS; requests a real message', async () => {
     vi.setSystemTime(new Date('2026-08-25T21:00:00-04:00'));
     const call = buildCall();
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_after_hours' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({
@@ -63,29 +65,33 @@ describe('transfer_to_owner — transfer-window gate', () => {
 
     expect(result).toEqual({
       transferred: false,
-      note: expect.stringContaining('as a text'),
+      messageRequired: true,
+      note: expect.stringContaining('leave_message_for_owner'),
     });
-    expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
-    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/After-hours message/);
-    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/bridal package/);
+    expect(notifyOwnerSms).not.toHaveBeenCalled();
   });
 
   it('OUTSIDE WINDOW (Tue 7am, before 9): message path, no dial', async () => {
     vi.setSystemTime(new Date('2026-08-25T07:00:00-04:00'));
     const call = buildCall();
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_morning' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({ reason: 'question' });
 
     expect(result.transferred).toBe(false);
-    expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
+    expect(result.messageRequired).toBe(true);
+    expect(notifyOwnerSms).not.toHaveBeenCalled();
   });
 
   it('OPEN HOURS (Tue 2pm): proceeds to the dial branch (no message SMS)', async () => {
     vi.setSystemTime(new Date('2026-08-25T14:00:00-04:00'));
     const call = buildCall();
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_open' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({
@@ -98,6 +104,56 @@ describe('transfer_to_owner — transfer-window gate', () => {
     expect(notifyOwnerSms).not.toHaveBeenCalled();
   });
 
+  it('AMBIGUOUS AVAILABILITY: asks appointment-versus-transfer before dialing', async () => {
+    vi.setSystemTime(new Date('2026-08-25T14:00:00-04:00'));
+    const call = buildCall();
+    call.transcript = [
+      {
+        role: 'caller',
+        text: 'Hey Erica, is Richard available?',
+        ts: Date.now(),
+      },
+    ];
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_ambiguous' });
+    call.notifyOwnerSms = notifyOwnerSms;
+
+    const result = await call.handleTransferToOwner({
+      reason: 'Caller requested to speak with Richa directly.',
+    });
+
+    expect(result).toEqual({
+      transferred: false,
+      clarificationRequired: true,
+      note: expect.stringMatching(/appointment.*live connection/i),
+    });
+    expect(notifyOwnerSms).not.toHaveBeenCalled();
+  });
+
+  it('EXPLICIT CONNECTION: availability wording plus speak request still dials', async () => {
+    vi.setSystemTime(new Date('2026-08-25T14:00:00-04:00'));
+    const call = buildCall();
+    call.transcript = [
+      {
+        role: 'caller',
+        text: 'Is Richa available? I need to speak with her.',
+        ts: Date.now(),
+      },
+    ];
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_explicit' });
+    call.notifyOwnerSms = notifyOwnerSms;
+
+    const result = await call.handleTransferToOwner({
+      reason: 'Caller explicitly asked to speak with Richa.',
+    });
+
+    expect(result).toEqual({ error: 'Transfer unavailable' });
+    expect(notifyOwnerSms).not.toHaveBeenCalled();
+  });
+
   it('THE HOLLY FIX — Mon 11:46am (14 min before noon opening): DIALS', async () => {
     // Holly's actual call: Monday 2026-08-24, 11:46 AM — salon opens at
     // noon, so the old salon-hours gate blocked the dial and Erica had to
@@ -105,7 +161,9 @@ describe('transfer_to_owner — transfer-window gate', () => {
     // awake (she was receiving the SMS messages).
     vi.setSystemTime(new Date('2026-08-24T11:46:00-04:00'));
     const call = buildCall();
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_holly' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({
@@ -124,7 +182,9 @@ describe('transfer_to_owner — transfer-window gate', () => {
     ]) {
       vi.setSystemTime(new Date(time));
       const call = buildCall();
-      const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+      const notifyOwnerSms = vi
+        .fn()
+        .mockResolvedValue({ queued: true, sid: 'SM_closed' });
       call.notifyOwnerSms = notifyOwnerSms;
 
       const result = await call.handleTransferToOwner({ reason: 'question' });

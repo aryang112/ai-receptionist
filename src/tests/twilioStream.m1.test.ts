@@ -204,8 +204,8 @@ describe('M1 — accumulateUsage + estimateCostUsd', () => {
     const { call } = buildCall();
     // text: 1000 in (200 cached, 800 uncached), 300 out
     // audio: 500 in (100 cached, 400 uncached), 100 out
-    // (800*4 + 200*0.4 + 400*32 + 100*0.4 + 300*16 + 100*64) / 1e6
-    // = (3200 + 80 + 12800 + 40 + 4800 + 6400) / 1e6 = 27320/1e6 = 0.0273 (rounded 4dp)
+    // (800*4 + 200*0.4 + 400*32 + 100*0.4 + 300*24 + 100*64) / 1e6
+    // = (3200 + 80 + 12800 + 40 + 7200 + 6400) / 1e6 = 29720/1e6 = 0.0297 (rounded 4dp)
     const cost = call.estimateCostUsd({
       inputTokens: 1500,
       outputTokens: 400,
@@ -217,7 +217,7 @@ describe('M1 — accumulateUsage + estimateCostUsd', () => {
       cachedTextTokens: 200,
       cachedAudioTokens: 100,
     });
-    expect(cost).toBeCloseTo(0.0273, 10);
+    expect(cost).toBeCloseTo(0.0297, 10);
   });
 
   it('estimateCostUsd falls back to the all-audio formula when the split is absent — never NaN, matches the pre-fix math', () => {

@@ -51,16 +51,18 @@ function buildCall() {
   return call;
 }
 
-// business.json vacations: 2026-09-01 to 2026-09-09 (Richa away), reopens 2026-09-10.
-describe('V1 — transfer_to_owner during vacation', () => {
+// business.json away closure: 2026-09-01 to 2026-09-09, reopens 2026-09-10.
+describe('V1 — live transfer during away closure', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('vacation ACTIVE today: does NOT dial, sends an SMS, returns {transferred:false}', async () => {
+  it('away closure active: does not dial or synthesize a message from transfer intent', async () => {
     vi.setSystemTime(new Date('2026-09-05T16:00:00-04:00')); // inside 09-01..09-09
 
     const call = buildCall();
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_away' });
     call.notifyOwnerSms = notifyOwnerSms;
     const waitForPlaybackToDrain = vi.fn().mockResolvedValue(undefined);
     call.waitForPlaybackToDrain = waitForPlaybackToDrain;
@@ -71,23 +73,32 @@ describe('V1 — transfer_to_owner during vacation', () => {
 
     expect(result).toEqual({
       transferred: false,
-      note: expect.stringContaining('September 10'),
+      needDiscoveryRequired: true,
+      messageAvailable: true,
+      temporaryClosure: {
+        from: '2026-09-01',
+        through: '2026-09-09',
+        reopens: '2026-09-10',
+        publicExplanation: 'Richa is away',
+      },
+      note: expect.stringContaining('TEMPORARY CLOSURE POLICY'),
     });
-    expect(notifyOwnerSms).toHaveBeenCalledTimes(1);
-    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/While you're away/);
-    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(
-      /wants a haircut consult/
+    expect(result.note).toMatch(/ask what the caller needs, then wait/i);
+    expect(result.note).toMatch(/Handle supported salon tasks directly/i);
+    expect(result.note).toMatch(
+      /Offer a message only after the need is known/i
     );
-    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/a caller/); // no recognized name in this harness
+    expect(result).not.toHaveProperty('messageRequired');
+    expect(notifyOwnerSms).not.toHaveBeenCalled();
     // No dial attempted: the drain-before-dial helper (only used by the real
     // dial path) never ran, and `transferring` (only set by the real dial
     // path) stays false — this call never touched calls().update().
     expect(waitForPlaybackToDrain).not.toHaveBeenCalled();
     expect(call.transferring).toBe(false);
-    expect(call.outcome).toBe('info');
+    expect(call.outcome).toBe('none');
   });
 
-  it('resolves a known caller name from clientNames for the SMS body', async () => {
+  it('does not text even when caller identity is known until a real message uses the separate tool', async () => {
     vi.setSystemTime(new Date('2026-09-05T16:00:00-04:00'));
 
     const call = buildCall();
@@ -98,12 +109,41 @@ describe('V1 — transfer_to_owner during vacation', () => {
       lastName: 'Sharma',
       appointments: null,
     };
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_known' });
     call.notifyOwnerSms = notifyOwnerSms;
 
-    await call.handleTransferToOwner({ reason: 'question about a service' });
+    const result = await call.handleTransferToOwner({
+      reason: 'question about a service',
+    });
 
-    expect(notifyOwnerSms.mock.calls[0]?.[0]).toMatch(/Priya/);
+    expect(result).toMatchObject({
+      transferred: false,
+      needDiscoveryRequired: true,
+      messageAvailable: true,
+    });
+    expect(notifyOwnerSms).not.toHaveBeenCalled();
+  });
+
+  it('never invokes the notification provider from the live-transfer tool', async () => {
+    vi.setSystemTime(new Date('2026-09-05T16:00:00-04:00'));
+    const call = buildCall();
+    call.notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: false, reason: 'failed' });
+
+    const result = await call.handleTransferToOwner({
+      reason: 'please ask Richa to call me',
+    });
+
+    expect(result).toMatchObject({
+      transferred: false,
+      needDiscoveryRequired: true,
+      messageAvailable: true,
+    });
+    expect(call.notifyOwnerSms).not.toHaveBeenCalled();
+    expect(result.note).not.toMatch(/passed it along/i);
   });
 
   it('vacation UPCOMING (starts in 10 days, not active yet): falls through to the normal transfer path', async () => {
@@ -111,7 +151,9 @@ describe('V1 — transfer_to_owner during vacation', () => {
     vi.setSystemTime(new Date('2026-08-22T13:00:00-04:00'));
 
     const call = buildCall();
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_upcoming' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     // callSid is unset, so the NORMAL path's own guard fires — proving we
@@ -125,7 +167,9 @@ describe('V1 — transfer_to_owner during vacation', () => {
     vi.setSystemTime(new Date('2026-10-01T13:00:00-04:00')); // well after the vacation
 
     const call = buildCall();
-    const notifyOwnerSms = vi.fn().mockResolvedValue(undefined);
+    const notifyOwnerSms = vi
+      .fn()
+      .mockResolvedValue({ queued: true, sid: 'SM_later' });
     call.notifyOwnerSms = notifyOwnerSms;
 
     const result = await call.handleTransferToOwner({ reason: 'wants Richa' });

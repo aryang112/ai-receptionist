@@ -32,6 +32,106 @@ async function loadRealPhorest() {
   return mod.realPhorest;
 }
 
+type ClientResolutionFetchOptions = {
+  phoneIndexClients?: Array<Record<string, unknown>>;
+  emailLookupClients?:
+    | Array<Record<string, unknown>>
+    | ((lookupNumber: number) => Array<Record<string, unknown>>);
+  nameLookupClients?:
+    | Array<Record<string, unknown>>
+    | ((lookupNumber: number) => Array<Record<string, unknown>>);
+  onClientCreate?: (
+    createNumber: number,
+    body: Record<string, unknown>
+  ) => Response | Promise<Response>;
+};
+
+function clientResolutionFetch(options: ClientResolutionFetchOptions = {}) {
+  const stats = {
+    clientCreates: 0,
+    clientCreateBodies: [] as Array<Record<string, unknown>>,
+    emailLookups: 0,
+    nameLookups: 0,
+    bookingClientIds: [] as string[],
+  };
+
+  const mock = vi.fn(async (url: unknown, init?: RequestInit) => {
+    const u = String(url);
+    const method = (init?.method ?? 'GET').toUpperCase();
+
+    if (u.includes('/service?')) {
+      return jsonResponse({
+        _embedded: {
+          services: [
+            { serviceId: 'svc1', name: 'Brow', duration: 15, price: 15 },
+          ],
+        },
+        page: { number: 0, totalPages: 1 },
+      });
+    }
+    if (u.includes('/staff?')) {
+      return jsonResponse({
+        _embedded: { staffs: [{ staffId: 'staff1' }] },
+      });
+    }
+    if (u.includes('/booking') && method === 'POST') {
+      const body = JSON.parse(String(init?.body ?? '{}')) as {
+        clientId: string;
+      };
+      stats.bookingClientIds.push(body.clientId);
+      const sequence = stats.bookingClientIds.length;
+      return jsonResponse({
+        bookingId: `booking-${sequence}`,
+        clientAppointmentSchedules: [
+          { serviceSchedules: [{ appointmentId: `appointment-${sequence}` }] },
+        ],
+      });
+    }
+    if (u.includes('/client?email=')) {
+      stats.emailLookups += 1;
+      const clients =
+        typeof options.emailLookupClients === 'function'
+          ? options.emailLookupClients(stats.emailLookups)
+          : (options.emailLookupClients ?? []);
+      return jsonResponse({ _embedded: { clients } });
+    }
+    if (u.includes('/client?firstName=')) {
+      stats.nameLookups += 1;
+      const clients =
+        typeof options.nameLookupClients === 'function'
+          ? options.nameLookupClients(stats.nameLookups)
+          : (options.nameLookupClients ?? []);
+      return jsonResponse({
+        _embedded: { clients },
+      });
+    }
+    if (u.includes('/client?size=200')) {
+      return jsonResponse({
+        _embedded: { clients: options.phoneIndexClients ?? [] },
+        page: { number: 0, totalPages: 1 },
+      });
+    }
+    if (u.endsWith('/client') && method === 'POST') {
+      stats.clientCreates += 1;
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<
+        string,
+        unknown
+      >;
+      stats.clientCreateBodies.push(body);
+      if (options.onClientCreate) {
+        return options.onClientCreate(stats.clientCreates, body);
+      }
+      return jsonResponse({ clientId: `NEW-CLIENT-${stats.clientCreates}` });
+    }
+
+    // createAppointment performs a non-blocking appointment readback after a
+    // successful booking. It is irrelevant to client resolution in this suite.
+    return jsonResponse({});
+  });
+
+  return { mock, stats };
+}
+
 describe('realPhorest hot-path hardening', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -502,7 +602,12 @@ describe('realPhorest hot-path hardening', () => {
         return jsonResponse({
           _embedded: {
             clients: [
-              { clientId: 'DAUGHTER', firstName: 'Priya', lastName: 'Owner' },
+              {
+                clientId: 'DAUGHTER',
+                firstName: 'Priya',
+                lastName: 'Owner',
+                mobile: '4105551212',
+              },
             ],
           },
         });
@@ -650,5 +755,556 @@ describe('realPhorest hot-path hardening', () => {
     } finally {
       Date.now = realNow;
     }
+  });
+});
+
+describe('realPhorest client-resolution single-flight', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('uses opted-out placeholders for absent or blank email and preserves a real supplied email', async () => {
+    const { mock, stats } = clientResolutionFetch();
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+      name: 'No Email',
+      phone: '+1 (410) 555-1201',
+    });
+    await phorest.createAppointment('svc1', '2030-07-10T13:15:00', {
+      name: 'Blank Email',
+      phone: '+1 (410) 555-1202',
+      email: '   ',
+    });
+    await phorest.createAppointment('svc1', '2030-07-10T13:30:00', {
+      name: 'Real Email',
+      phone: '+1 (410) 555-1203',
+      email: ' person@example.com ',
+    });
+
+    expect(stats.clientCreateBodies).toHaveLength(3);
+    expect(stats.clientCreateBodies[0]).toMatchObject({
+      firstName: 'No',
+      lastName: 'Email',
+      mobile: '4105551201',
+      creatingBranchId: 'BRANCH',
+    });
+    expect(stats.clientCreateBodies[0]).toMatchObject({
+      email: '4105551201@placeholder.richasthreading.com',
+      emailMarketingConsent: false,
+      emailReminderConsent: false,
+    });
+    expect(stats.clientCreateBodies[1]).toMatchObject({
+      email: '4105551202@placeholder.richasthreading.com',
+      emailMarketingConsent: false,
+      emailReminderConsent: false,
+    });
+    expect(stats.clientCreateBodies[2]).toMatchObject({
+      email: 'person@example.com',
+      mobile: '4105551203',
+    });
+    expect(stats.clientCreateBodies[2]).not.toHaveProperty(
+      'emailMarketingConsent'
+    );
+    expect(stats.clientCreateBodies[2]).not.toHaveProperty(
+      'emailReminderConsent'
+    );
+  });
+
+  it('coalesces concurrent and near-sequential normalized phone + full-name subjects', async () => {
+    const { mock, stats } = clientResolutionFetch({
+      // Keep the shared number anchored to its original owner. Without the
+      // result cache, Priya's second request would perform another name lookup
+      // and create a duplicate because the mock provider is not yet consistent.
+      phoneIndexClients: [
+        {
+          clientId: 'MOM',
+          firstName: 'Mom',
+          lastName: 'Owner',
+          mobile: '4105551212',
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    const firstTwo = await Promise.all([
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+        name: '  Priya   Owner ',
+        phone: '+1 (410) 555-1212',
+      }),
+      phorest.createAppointment('svc1', '2030-07-10T13:15:00', {
+        name: 'priya owner',
+        phone: '4105551212',
+      }),
+    ]);
+    await phorest.createAppointment('svc1', '2030-07-10T13:30:00', {
+      name: 'PRIYA OWNER',
+      phone: '1-410-555-1212',
+    });
+
+    expect(firstTwo).toHaveLength(2);
+    expect(stats.nameLookups).toBe(1);
+    expect(stats.clientCreates).toBe(1);
+    expect(stats.bookingClientIds).toEqual([
+      'NEW-CLIENT-1',
+      'NEW-CLIENT-1',
+      'NEW-CLIENT-1',
+    ]);
+  });
+
+  it('coalesces normalized email only with the same confirmed full name', async () => {
+    const { mock, stats } = clientResolutionFetch();
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await Promise.all([
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+        name: 'Jane Doe',
+        email: ' JANE@Example.COM ',
+      }),
+      phorest.createAppointment('svc1', '2030-07-10T13:15:00', {
+        name: ' jane   doe ',
+        email: 'jane@example.com',
+      }),
+    ]);
+
+    expect(stats.emailLookups).toBe(1);
+    expect(stats.clientCreates).toBe(1);
+    expect(stats.bookingClientIds).toEqual(['NEW-CLIENT-1', 'NEW-CLIENT-1']);
+  });
+
+  it('coalesces the same phone + full-name subject when only one payload includes email', async () => {
+    const { mock, stats } = clientResolutionFetch();
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await Promise.all([
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+        name: 'Jane Doe',
+        phone: '4105551212',
+      }),
+      phorest.createAppointment('svc1', '2030-07-10T13:15:00', {
+        name: ' jane   doe ',
+        phone: '+1 (410) 555-1212',
+        email: 'jane@example.com',
+      }),
+    ]);
+
+    expect(stats.clientCreates).toBe(1);
+    expect(stats.bookingClientIds).toEqual(['NEW-CLIENT-1', 'NEW-CLIENT-1']);
+  });
+
+  it('prefers the unique exact-name record matching every supplied contact', async () => {
+    const { mock, stats } = clientResolutionFetch({
+      emailLookupClients: [
+        {
+          clientId: 'STALE-WRONG',
+          firstName: 'Jane',
+          lastName: 'Doe',
+          email: 'jane@example.com',
+          mobile: '4105559999',
+        },
+        {
+          clientId: 'CURRENT-RIGHT',
+          firstName: 'Jane',
+          lastName: 'Doe',
+          email: 'jane@example.com',
+          mobile: '4105551212',
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+      name: 'Jane Doe',
+      phone: '4105551212',
+      email: 'jane@example.com',
+    });
+
+    expect(stats.clientCreates).toBe(0);
+    expect(stats.bookingClientIds).toEqual(['CURRENT-RIGHT']);
+  });
+
+  it('fails closed when the best confirmed-contact match is still tied', async () => {
+    const duplicate = {
+      firstName: 'Jane',
+      lastName: 'Doe',
+      email: 'jane@example.com',
+      mobile: '4105551212',
+    };
+    const { mock, stats } = clientResolutionFetch({
+      emailLookupClients: [
+        { ...duplicate, clientId: 'DUPLICATE-ONE' },
+        { ...duplicate, clientId: 'DUPLICATE-TWO' },
+      ],
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+        name: 'Jane Doe',
+        phone: '4105551212',
+        email: 'jane@example.com',
+      })
+    ).rejects.toThrow('Multiple Phorest clients match');
+
+    expect(stats.clientCreates).toBe(0);
+    expect(stats.bookingClientIds).toEqual([]);
+  });
+
+  it('keeps different people sharing one normalized email as distinct subjects', async () => {
+    const { mock, stats } = clientResolutionFetch({
+      // The provider may already have an unrelated household account carrying
+      // the shared address. Neither confirmed subject may be bound to it.
+      emailLookupClients: [
+        {
+          clientId: 'HOUSEHOLD-OWNER',
+          firstName: 'Household',
+          lastName: 'Owner',
+          email: 'family@example.com',
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await Promise.all([
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+        name: 'Jane Doe',
+        email: ' FAMILY@Example.COM ',
+      }),
+      phorest.createAppointment('svc1', '2030-07-10T13:15:00', {
+        name: 'John Doe',
+        email: 'family@example.com',
+      }),
+    ]);
+
+    expect(stats.emailLookups).toBe(2);
+    expect(stats.clientCreates).toBe(2);
+    expect(new Set(stats.bookingClientIds)).toEqual(
+      new Set(['NEW-CLIENT-1', 'NEW-CLIENT-2'])
+    );
+  });
+
+  it('keeps different family members with one phone as distinct subjects', async () => {
+    const { mock, stats } = clientResolutionFetch({
+      phoneIndexClients: [
+        {
+          clientId: 'MOM',
+          firstName: 'Mom',
+          lastName: 'Owner',
+          mobile: '4105551212',
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await Promise.all([
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+        name: 'Priya Owner',
+        phone: '4105551212',
+      }),
+      phorest.createAppointment('svc1', '2030-07-10T13:15:00', {
+        name: 'Anya Owner',
+        phone: '4105551212',
+      }),
+    ]);
+
+    expect(stats.clientCreates).toBe(2);
+    expect(new Set(stats.bookingClientIds)).toEqual(
+      new Set(['NEW-CLIENT-1', 'NEW-CLIENT-2'])
+    );
+  });
+
+  it('does not cache by phone alone or name alone', async () => {
+    const { mock, stats } = clientResolutionFetch();
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await Promise.all([
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+        name: 'Jane',
+        phone: '4105551212',
+      }),
+      phorest.createAppointment('svc1', '2030-07-10T13:15:00', {
+        name: 'Jane',
+        phone: '4105551212',
+      }),
+      phorest.createAppointment('svc1', '2030-07-10T13:30:00', {
+        name: 'Priya Owner',
+      }),
+      phorest.createAppointment('svc1', '2030-07-10T13:45:00', {
+        name: 'Priya Owner',
+      }),
+    ]);
+
+    expect(stats.clientCreates).toBe(4);
+    expect(stats.bookingClientIds).toEqual([
+      'NEW-CLIENT-1',
+      'NEW-CLIENT-2',
+      'NEW-CLIENT-3',
+      'NEW-CLIENT-4',
+    ]);
+  });
+
+  it('reconciles a committed client-create timeout without a second POST', async () => {
+    const { mock, stats } = clientResolutionFetch({
+      nameLookupClients: (lookupNumber) =>
+        lookupNumber >= 2
+          ? [
+              {
+                clientId: 'COMMITTED-CLIENT',
+                firstName: 'Jane',
+                lastName: 'Doe',
+                mobile: '4105551212',
+              },
+            ]
+          : [],
+      onClientCreate: async () => {
+        throw new Error('AbortError: timed out after provider commit');
+      },
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+    const customer = { name: 'Jane Doe', phone: '4105551212' };
+
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', customer)
+    ).resolves.toMatchObject({ appointmentId: 'appointment-1' });
+
+    expect(stats.clientCreates).toBe(1);
+    expect(stats.bookingClientIds).toEqual(['COMMITTED-CLIENT']);
+
+    // Reconciliation also repairs the already-loaded phone index, so caller-ID
+    // lookup sees the canonical record without a stale full-directory reload.
+    await expect(
+      phorest.lookupCustomerByPhone('4105551212')
+    ).resolves.toMatchObject({ clientId: 'COMMITTED-CLIENT' });
+  });
+
+  it('tolerates delayed client visibility after a committed timeout', async () => {
+    const { mock, stats } = clientResolutionFetch({
+      nameLookupClients: (lookupNumber) =>
+        lookupNumber >= 3
+          ? [
+              {
+                clientId: 'DELAYED-CLIENT',
+                firstName: 'Jane',
+                lastName: 'Doe',
+                mobile: '4105551212',
+              },
+            ]
+          : [],
+      onClientCreate: async () => {
+        throw new Error('AbortError: timed out after provider commit');
+      },
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+        name: 'Jane Doe',
+        phone: '4105551212',
+      })
+    ).resolves.toMatchObject({ appointmentId: 'appointment-1' });
+
+    expect(stats.clientCreates).toBe(1);
+    expect(stats.nameLookups).toBe(3);
+    expect(stats.bookingClientIds).toEqual(['DELAYED-CLIENT']);
+  });
+
+  it('latches an unresolved create outcome so an immediate retry makes no second POST', async () => {
+    const { mock, stats } = clientResolutionFetch({
+      onClientCreate: async () => {
+        throw new Error('AbortError: client create outcome unknown');
+      },
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+    const customer = { name: 'Jane Doe', phone: '4105551212' };
+
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', customer)
+    ).rejects.toThrow('client-create outcome is uncertain');
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:15:00', customer)
+    ).rejects.toThrow('client-create outcome is uncertain');
+
+    expect(stats.clientCreates).toBe(1);
+    expect(stats.nameLookups).toBe(4);
+    expect(stats.bookingClientIds).toEqual([]);
+  });
+
+  it('keeps a 31-second retry reconcile-only when the create is still uncertain', async () => {
+    let now = Date.parse('2030-07-10T12:00:00Z');
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const { mock, stats } = clientResolutionFetch({
+      onClientCreate: async () => {
+        throw new Error('AbortError: client create outcome unknown');
+      },
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+    const customer = { name: 'Jane Doe', phone: '4105551212' };
+
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', customer)
+    ).rejects.toThrow('client-create outcome is uncertain');
+    now += 31_000;
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:15:00', customer)
+    ).rejects.toThrow('client-create outcome is uncertain');
+
+    expect(stats.clientCreates).toBe(1);
+    expect(stats.nameLookups).toBe(7);
+    expect(stats.bookingClientIds).toEqual([]);
+  });
+
+  it('recovers a later-visible client on a 31-second reconcile-only retry', async () => {
+    let now = Date.parse('2030-07-10T12:00:00Z');
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const { mock, stats } = clientResolutionFetch({
+      nameLookupClients: (lookupNumber) =>
+        lookupNumber >= 5
+          ? [
+              {
+                clientId: 'LATE-COMMITTED-CLIENT',
+                firstName: 'Jane',
+                lastName: 'Doe',
+                mobile: '4105551212',
+              },
+            ]
+          : [],
+      onClientCreate: async () => {
+        throw new Error('AbortError: client create outcome unknown');
+      },
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+    const customer = { name: 'Jane Doe', phone: '4105551212' };
+
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', customer)
+    ).rejects.toThrow('client-create outcome is uncertain');
+    now += 31_000;
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:15:00', customer)
+    ).resolves.toMatchObject({ appointmentId: 'appointment-1' });
+
+    expect(stats.clientCreates).toBe(1);
+    expect(stats.nameLookups).toBe(5);
+    expect(stats.bookingClientIds).toEqual(['LATE-COMMITTED-CLIENT']);
+  });
+
+  it('stops reconciliation attempts at one overall deadline', async () => {
+    let now = Date.parse('2030-07-10T12:00:00Z');
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const { mock, stats } = clientResolutionFetch({
+      nameLookupClients: (lookupNumber) => {
+        if (lookupNumber === 2) now += 3_000;
+        return [];
+      },
+      onClientCreate: async () => {
+        throw new Error('AbortError: client create outcome unknown');
+      },
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+        name: 'Jane Doe',
+        phone: '4105551212',
+      })
+    ).rejects.toThrow('client-create outcome is uncertain');
+
+    expect(stats.clientCreates).toBe(1);
+    expect(stats.nameLookups).toBe(2);
+    expect(stats.bookingClientIds).toEqual([]);
+  });
+
+  it('evicts a deterministic non-timeout rejection so a corrected retry can create', async () => {
+    const { mock, stats } = clientResolutionFetch({
+      onClientCreate: (createNumber) =>
+        createNumber === 1
+          ? jsonResponse({ detail: 'invalid client' }, 400)
+          : jsonResponse({ clientId: 'NEW-CLIENT-2' }),
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+    const customer = { name: 'Jane Doe', phone: '4105551212' };
+
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', customer)
+    ).rejects.toThrow('Phorest request failed with 400');
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:15:00', customer)
+    ).resolves.toMatchObject({ appointmentId: 'appointment-1' });
+
+    expect(stats.clientCreates).toBe(2);
+    expect(stats.bookingClientIds).toEqual(['NEW-CLIENT-2']);
+  });
+
+  it('does not reconcile to an unrelated same-name record with another contact', async () => {
+    const { mock, stats } = clientResolutionFetch({
+      nameLookupClients: [
+        {
+          clientId: 'WRONG-JANE',
+          firstName: 'Jane',
+          lastName: 'Doe',
+          mobile: '4105559999',
+          email: 'other@example.com',
+        },
+      ],
+      onClientCreate: async () => {
+        throw new Error('AbortError: timed out after provider commit');
+      },
+    });
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+        name: 'Jane Doe',
+        phone: '4105551212',
+      })
+    ).rejects.toThrow('client-create outcome is uncertain');
+
+    expect(stats.clientCreates).toBe(1);
+    expect(stats.bookingClientIds).toEqual([]);
+  });
+
+  it('bounds successful subject results and evicts the least recently used', async () => {
+    const { mock, stats } = clientResolutionFetch();
+    vi.stubGlobal('fetch', mock);
+    const phorest = await loadRealPhorest();
+
+    // The production cache holds 256 successful bindings. A 257th distinct
+    // subject must evict the oldest, so revisiting subject 0 resolves anew.
+    for (let i = 0; i < 257; i += 1) {
+      await phorest.createAppointment(
+        'svc1',
+        `2030-07-11T${String(8 + (i % 10)).padStart(2, '0')}:00:00`,
+        { name: `Client Number ${i}`, email: `client-${i}@example.com` }
+      );
+    }
+    await phorest.createAppointment('svc1', '2030-07-12T13:00:00', {
+      name: 'Client Number 0',
+      email: 'client-0@example.com',
+    });
+
+    expect(stats.clientCreates).toBe(258);
+    expect(stats.emailLookups).toBe(258);
   });
 });
