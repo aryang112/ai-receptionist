@@ -3,6 +3,37 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-09-08 — 🚨 PROD CALL 09-07 1:03 PM ET (…8919): lost booking — DIAGNOSED (Fable, remote)
+QA routine (Sep 07 PM) flagged it; Aryan listened. Three defects on one call:
+1. **Booking write failed 2× — Phorest `POST /client` → 400 `EMAIL_REQUIRED`
+   ("Email is Required")**, timestamped to the second against both
+   book_appointment attempts (admin /logs ring). New caller → getOrCreateClient
+   → createClient. The git-tracked createClient ALREADY sends a placeholder
+   email (`<digits>@placeholder.richasthreading.com`), so either Phorest now
+   rejects that placeholder (validation change) or the deployed tree (a9a85af,
+   NOT on GitHub — prod ≠ git since 8/27) no longer sends it. SAME SIGNATURE on
+   08-27 6:13 PM ET (…5169, new name "Prasana" on Aryan's phone → shared-phone
+   guard → createClient → book_appointment ×2 fail) — i.e. NO evidence a
+   client create has EVER succeeded in prod (every other booking resolved an
+   existing profile by phone/caller ID). Any brand-new caller cannot book.
+   → `scripts/diag-create-client.ts` (new): prints the exact payload; `--try
+   placeholder|none|real|nomobile` POSTs one labelled test client each to
+   isolate what Phorest rejects. Needs the local .env (not available remotely).
+2. **"Eyebrow threading" → notOffered** (reproduced against a Brow-Threading-
+   only catalog): SERVICE_ALIASES maps `eyebrow`/`eyebrows` but NOT `eyebrow
+   threading`; token scoring requires every query token as a whole word and
+   the catalog says "Brow", so the phrase dead-ends → Erica asked "do you mean
+   Brow Threading?" THREE times (2 of them without a tool call). The mock
+   catalog has an "Eyebrow Threading" entry, which is why tests never caught it.
+   Proposed: token-level synonyms in resolveService (eyebrow(s)/brows→brow,
+   eyelash(es)→lash) before scoring + regression test on a real-shaped catalog.
+3. **Over-confirmation**: 3× service re-ask, "Do you mean 1:00 PM…", "one quick
+   detail" + phone-on-file + name, no final read-back before the write; the
+   failure line offered "connect you with Richa" during the closure. Prompt in
+   prod is a9a85af (unseen); judge against the audit branch's once-only rules.
+Env note: `npm test` here needs OPENAI_REALTIME_API_KEY + Twilio vars from .env
+(28 + 5 env-only failures, 328/333 with a dummy key); tsc clean.
+
 ## 2026-08-24 (9) — 🔊 GREETING BARGE-IN GRACE shipped + deployed (Fable, direct)
 Aryan's first two post-deploy test calls (23:53Z + 23:58Z): pickup noise /
 reflexive "hi" fired VAD ~1.3s into the greeting → barge-in chopped it
