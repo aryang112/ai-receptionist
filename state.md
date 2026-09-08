@@ -1,5 +1,27 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-08 — DEPLOYED focused brow/lash synonyms (current production)
+
+- Aryan explicitly requested production deployment. Exact source `fcee0d8` on
+  `codex/focused-service-synonyms-2026-09-08`; Railway deployment
+  `5affb66c-af42-4c96-9cad-b0fb7ab0ef51` SUCCESS, approximately 6:21 PM ET.
+- Image digest `sha256:b0741205058047d78982d4b43fa9915a4b23b5828ac7175946a422d7c7d014be`.
+  Rollback is `1425f8c`, retaining the earlier client-create email fix.
+- Zero active calls immediately before upload; clean archive (134 files verified).
+  568 tests / 48 files and build passed. Four deployed source hashes and seven
+  compiled matcher cases verified inside the running container.
+- Health/services/admin HTTP 200; 63 services and complete 4,187-client index warmed;
+  seven health samples over a minute returned 200 with zero new-container warnings.
+  No live appointment/call was created. First real caller use remains unverified.
+- Prompt/session/model/voice/config and sequential phone-first/name-second flow are
+  unchanged. No added model/network request; local matching average ~0.180 ms.
+- Details: `docs/reviews/SYNONYMS_RELEASE_2026-09-08.md`.
+- PENDING: selectively reconcile production source into main; small repetition
+  cleanup with listening test; separately assess silent wait tool, transfer-ordering
+  fix, and held PR #3 service knowledge. Main still contains the rejected combined
+  contact question and broad matcher: do not deploy main or bulk-merge old drafts.
+  The earlier candidate/pre-production entries below are historical.
+
 ## 2026-09-08 — Focused synonym candidate prepared; production unchanged
 
 - Aryan prioritized latency and limited new vocabulary to brow/threading and lashes.
@@ -19,7 +41,7 @@
   flow, and not bulk-merge the unrelated main prompt changes.
 
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
-> Production: `1425f8c` on `codex/booking-hotfix-2026-09-08`, deployed September 8 at approximately 5:16 PM ET after Aryan explicitly approved deploying now. See `docs/reviews/BOOKING_HOTFIX_2026-09-08.md`.
+> Production: `fcee0d8` on `codex/focused-service-synonyms-2026-09-08`, deployed September 8 at approximately 6:21 PM ET. See `docs/reviews/SYNONYMS_RELEASE_2026-09-08.md`.
 > Main still contains unreleased prompt/matcher/knowledge-related review work. Do not deploy main as equivalent to the production hotfix branch.
 > Latest work: 2026-09-08 — narrow booking hotfix deployed; broader conversation reconciliation on main remains unreleased.
 
