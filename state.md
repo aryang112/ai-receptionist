@@ -3,6 +3,42 @@
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
+## 2026-09-08 (2) — ✅ FIXES for the 09-07 lost booking (Fable, remote; branch `claude/production-call-bug-diagnosis-mlpld8`)
+Aryan confirmed the placeholder-email removal was a local Codex change
+(never pushed — local main is ~100 commits ahead of GitHub; reconcile later).
+Shipped on this branch (355/355 with env stubs, tsc clean, prettier):
+1. **createClient** — placeholder email is now `PLACEHOLDER_EMAIL_DOMAIN`
+   (exported) + `isPlaceholderEmail()`; a placeholder create also sends
+   `emailMarketingConsent:false` + `emailReminderConsent:false` (documented
+   ClientCreateRequest fields) so Phorest never mails it — the marketing worry
+   that motivated the removal, solved without dropping the field. Test captures
+   the POST body. `scripts/diag-create-client.ts --try placeholder|none` proves
+   the tenant behaviour before deploy.
+2. **Service matcher** (`booking.ts`): `TOKEN_SYNONYMS` (eyebrow(s)/brows→brow,
+   eyelash→lash, threaded→threading, waxing→wax, tint→tinting, lami→lamination…)
+   applied to catalog names AND phrases inside `normalize()`; a catalog-
+   vocabulary filter drops words no service name contains ("get my brows
+   done", "upper lip threading"), order-insensitive full-name compare
+   ("threading for my eyebrows"); only a FULL name/alias counts after
+   stripping, so "leg cut" can't become Full Leg Wax. `SERVICE_ALIASES`
+   shrank to 4 phrase→service entries (`lash lamination`/`lash perm`→Lash
+   Lift, `brow perm`→Brow Lamination, `brow`→Brow Threading). Mock catalog
+   dropped its fake "Eyebrow Threading". `booking.alias.test.ts` retired into
+   `booking.match.test.ts` (+phrase tables); NEW call-level sim
+   `twilioStream.serviceMatch.test.ts` ("Eyebrow threading" → slots).
+   `scripts/probe-service-phrases.ts`: ~90 real phrasings (threading/wax/tint/
+   lift slang + transcription noise), contract rows exit 1 — RUN IT AGAINST
+   THE LIVE 63-SERVICE CATALOG locally; mock-catalog dead-ends (chin, forehead,
+   underarm, brazilian, lash tint…) are just services the mock lacks.
+3. **Prompt**: one clarification max per service (ambiguous/notOffered → ask
+   once naming candidates, then take the first); "Ask for each detail ONCE"
+   general rule; unmatched-caller note folds name + number-on-file into ONE
+   question. Prompt test locks the wording.
+Known trade-off: a dropped content word + bare "brow" alias → threading
+("henna brows" at a salon with no henna line); the read-back is the net.
+**NOT DEPLOYED** — Aryan deploys from the local tree; port these 4 source
+files (+tests) onto it, run the probe + diag scripts, then `railway up`.
+
 ## 2026-09-08 — 🚨 PROD CALL 09-07 1:03 PM ET (…8919): lost booking — DIAGNOSED (Fable, remote)
 QA routine (Sep 07 PM) flagged it; Aryan listened. Three defects on one call:
 1. **Booking write failed 2× — Phorest `POST /client` → 400 `EMAIL_REQUIRED`

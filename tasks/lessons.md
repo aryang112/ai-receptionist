@@ -27,6 +27,26 @@ rescheduled it). The correct param is **`client_id`**. Same for `from_date`,
 `to_date`, `appointment_id`. Defense-in-depth: also filter results by clientId
 client-side (the appointment object carries a `clientId` field).
 
+## 📧 Phorest REJECTS a client with no email — docs say optional (cost a real booking)
+`POST /client` without an `email` returns **400 `EMAIL_REQUIRED` "Email is
+Required"** on this tenant, even though the published ClientCreateRequest
+schema marks only firstName/lastName required. Removing the placeholder email
+(to keep fake addresses out of marketing/review tooling) silently broke EVERY
+first-time caller's booking (live 2026-09-07 1:03 PM; same signature 08-27).
+Recognized callers never hit the create path, so test calls from known numbers
+looked fine. **RULE:** always send a placeholder (`PLACEHOLDER_EMAIL_DOMAIN`)
+and opt it out (`emailMarketingConsent: false`, `emailReminderConsent: false`);
+downstream consumers skip it via `isPlaceholderEmail()`. Verify any change to
+the create body with `scripts/diag-create-client.ts` before deploying.
+
+## 🎭 A mock catalog that is RICHER than the real one hides matcher bugs
+The mock had an "Eyebrow Threading" entry the salon doesn't have, so "eyebrow
+threading" passed every test and dead-ended live (the catalog says "Brow").
+The matcher now normalizes spoken variants (`TOKEN_SYNONYMS`) and drops words
+no catalog name contains; keep the mock's NAMES aligned with Phorest's, and
+run `scripts/probe-service-phrases.ts` against the LIVE catalog after any
+service rename.
+
 ## Other Phorest API quirks
 - **31-day cap:** `/appointment` rejects ranges > 31 days ("Max date range allowed
   is 31 days"). `listAppointments` uses 30.

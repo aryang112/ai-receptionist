@@ -100,8 +100,12 @@ Caller dials Twilio number
 - **phorest.ts** — selector (mock vs real by env / NODE_ENV).
 - **phorest.types.ts** — `PhorestPort` interface (CONTRACT — mock & real must match),
   `Service`, `CustomerResult`, `AppointmentSummary`.
-- **booking.ts** — `suggestSlots`, `bookAppointment`, `findServiceByName` (fuzzy match
-  + `SERVICE_ALIASES`, e.g. "lash lamination"→"Lash Lift"), Zod schemas.
+- **booking.ts** — `suggestSlots`, `bookAppointment`, `resolveService`/`findServiceByName`
+  (service matcher: `TOKEN_SYNONYMS` — spoken variants of catalog words, eyebrow→brow,
+  applied to names AND phrases; `SERVICE_ALIASES` — a phrase that names a different
+  service, "lash lamination"→"Lash Lift"; a catalog-vocabulary filter drops filler words;
+  whole-word scoring → match/ambiguous/notOffered), Zod schemas. Probe real phrasings
+  with `scripts/probe-service-phrases.ts`.
 - **ai.ts**, **twilio.ts** — legacy helpers.
 
 ## src/core/
