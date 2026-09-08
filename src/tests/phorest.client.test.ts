@@ -438,6 +438,69 @@ describe('realPhorest hot-path hardening', () => {
     expect(bookingCalls).toBe(1);
   });
 
+  // 2026-09-07 production loss: Phorest answers POST /client with
+  // 400 EMAIL_REQUIRED when the body carries no email (its docs say optional —
+  // the live tenant disagrees). A first-time caller never gives one over the
+  // phone, so the create MUST send a placeholder and opt it out of email
+  // marketing/reminders (a placeholder mailbox can never receive mail).
+  it('new-caller create sends a placeholder email with email consents opted out', async () => {
+    let clientBody: Record<string, unknown> | undefined;
+    fetchMock.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      const u = String(url);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (u.includes('/service?')) {
+        return jsonResponse({
+          _embedded: {
+            services: [
+              {
+                serviceId: 'svc1',
+                name: 'Brow Threading',
+                duration: 15,
+                price: 15,
+              },
+            ],
+          },
+          page: { number: 0, totalPages: 1 },
+        });
+      }
+      if (u.includes('/staff?')) {
+        return jsonResponse({ _embedded: { staffs: [{ staffId: 'staff1' }] } });
+      }
+      if (u.endsWith('/client') && method === 'POST') {
+        clientBody = JSON.parse(String(init?.body));
+        return jsonResponse({ clientId: 'NEW-CLIENT' });
+      }
+      if (u.includes('/booking') && method === 'POST') {
+        // The create is what's under test; stop before the booking write.
+        throw new Error('stop after client create');
+      }
+      return jsonResponse({ _embedded: { clients: [] } });
+    });
+    const phorest = await loadRealPhorest();
+    const { PLACEHOLDER_EMAIL_DOMAIN, isPlaceholderEmail } = await import(
+      '../services/phorest.client.js'
+    );
+
+    await expect(
+      phorest.createAppointment('svc1', '2030-07-10T13:00:00', {
+        name: 'Jesenia Martinez',
+        phone: '4105558919',
+      })
+    ).rejects.toThrow('stop after client create');
+
+    expect(clientBody).toBeDefined();
+    expect(clientBody).toMatchObject({
+      firstName: 'Jesenia',
+      lastName: 'Martinez',
+      mobile: '4105558919',
+      email: `4105558919@${PLACEHOLDER_EMAIL_DOMAIN}`,
+      emailMarketingConsent: false,
+      emailReminderConsent: false,
+    });
+    expect(isPlaceholderEmail(String(clientBody!.email))).toBe(true);
+    expect(isPlaceholderEmail('jesenia@gmail.com')).toBe(false);
+  });
+
   // CONTRACT #2: a recognized caller's clientId short-circuits phone/name
   // resolution — no /client lookup, no getOrCreateClient, book straight to it.
   it('CONTRACT #2: createAppointment with clientId skips client resolution', async () => {
@@ -705,7 +768,7 @@ describe('realPhorest client-resolution single-flight', () => {
     vi.restoreAllMocks();
   });
 
-  it('omits absent or blank email from new-client payloads and preserves a real supplied email', async () => {
+  it('uses opted-out placeholders for absent or blank email and preserves a real supplied email', async () => {
     const { mock, stats } = clientResolutionFetch();
     vi.stubGlobal('fetch', mock);
     const phorest = await loadRealPhorest();
@@ -732,14 +795,25 @@ describe('realPhorest client-resolution single-flight', () => {
       mobile: '4105551201',
       creatingBranchId: 'BRANCH',
     });
-    expect(stats.clientCreateBodies[0]).not.toHaveProperty('email');
-    expect(stats.clientCreateBodies[1]).not.toHaveProperty('email');
+    expect(stats.clientCreateBodies[0]).toMatchObject({
+      email: '4105551201@placeholder.richasthreading.com',
+      emailMarketingConsent: false,
+      emailReminderConsent: false,
+    });
+    expect(stats.clientCreateBodies[1]).toMatchObject({
+      email: '4105551202@placeholder.richasthreading.com',
+      emailMarketingConsent: false,
+      emailReminderConsent: false,
+    });
     expect(stats.clientCreateBodies[2]).toMatchObject({
       email: 'person@example.com',
       mobile: '4105551203',
     });
-    expect(JSON.stringify(stats.clientCreateBodies)).not.toContain(
-      '@placeholder.'
+    expect(stats.clientCreateBodies[2]).not.toHaveProperty(
+      'emailMarketingConsent'
+    );
+    expect(stats.clientCreateBodies[2]).not.toHaveProperty(
+      'emailReminderConsent'
     );
   });
 

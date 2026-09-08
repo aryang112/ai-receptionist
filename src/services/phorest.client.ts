@@ -818,6 +818,19 @@ async function reconcileClientCreate(customer: {
   return undefined;
 }
 
+/**
+ * Domain of the synthetic email given to Phorest for a caller who has none.
+ * Anything that consumes Phorest client emails (review requests, marketing)
+ * must skip these — use isPlaceholderEmail().
+ */
+export const PLACEHOLDER_EMAIL_DOMAIN = 'placeholder.richasthreading.com';
+
+export function isPlaceholderEmail(email?: string): boolean {
+  return (
+    !!email && email.toLowerCase().endsWith(`@${PLACEHOLDER_EMAIL_DOMAIN}`)
+  );
+}
+
 async function createClient(customer: {
   name: string;
   phone?: string;
@@ -825,13 +838,25 @@ async function createClient(customer: {
 }): Promise<string> {
   const { firstName, lastName } = splitName(customer.name);
   const phone = sanitisePhone(customer.phone);
-  const email = customer.email?.trim();
+  // Phorest REJECTS a client with no email (400 EMAIL_REQUIRED — live
+  // 2026-09-07, cost a real booking) even though its docs mark the field
+  // optional. Callers never give one over the phone, so send a placeholder.
+  const email =
+    customer.email?.trim() ||
+    `${phone || Date.now()}@${PLACEHOLDER_EMAIL_DOMAIN}`;
   const payload = {
     firstName,
     lastName,
     ...(email ? { email } : {}),
     ...(phone ? { mobile: phone } : {}),
     creatingBranchId: env.PHOREST_BRANCH_ID,
+    // A placeholder mailbox can never receive mail — opt it out so Phorest's
+    // marketing/reminder emails never target it. A real email keeps the
+    // salon's defaults.
+    ...(isPlaceholderEmail(email) && {
+      emailMarketingConsent: false,
+      emailReminderConsent: false,
+    }),
   };
 
   let response: ClientCreateResponse;
