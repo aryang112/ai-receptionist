@@ -3,6 +3,12 @@
 Orientation map so agents don't have to scan every file. See `state.md` for status
 and `tasks/lessons.md` for the gotchas.
 
+Current production: `bc39b09` on `codex/conversation-consistency-2026-09-08`,
+Railway `ee43e7fe-9fd0-4dd7-9dcf-f907c6cfcd1a`, September 8 ~7:19 PM ET.
+See [conversation release](reviews/CONVERSATION_RELEASE_2026-09-08.md) for
+exact scope, validation, rollback and remaining work. The following older
+release references are historical; main includes unreleased code.
+
 For a current architecture, Realtime 2.1, quirks, and operations handoff, start
 with [`GPT-SOL/README.md`](GPT-SOL/README.md).
 
@@ -302,3 +308,12 @@ warning/cap hangup · `📨` owner SMS accepted (warn lines: skipped/failed/unce
 `🚫` blocked spam caller (webhook reject) · "Transfer suppressed — temporary
 salon closure is active" · "rejected — time no longer available on fresh
 re-check" (A1).
+
+## September 8 conversation consistency release
+
+`twilioStream.ts` owns the existing closing, contact and recovery instructions.
+No session or runtime control flow changed. `scripts/probe-conversation-consistency.ts`
+exercises the live model with simulated tools; `scripts/check-conversation-probe.mjs`
+asserts final approval, retained names, sequential contact turns, safe retry counts
+and single closings from saved results. `.github/workflows/validate.yml` runs
+regression tests/build with dummy credentials on the release branch and PRs.

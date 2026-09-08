@@ -350,3 +350,23 @@ resolved calls and routine non-client solicitations `No action needed`, but do
 not suppress a genuine message, callback request, or unresolved client issue.
 Accept generated identity/affiliation text only when it is literally grounded in
 the caller transcript.
+
+
+## 2026-09-08 — Scope name confirmation separately from booking approval
+
+The booking name parameter said “continue without a ritual” after a clear name.
+Live model probes sometimes treated that as permission to skip the existing
+service/date/time read-back and booking approval. Name answers supply contact
+data; they are not booking approval. Keep reuse/missing-name guidance in the
+existing name contract, and explicitly preserve ask → WAIT → approved write.
+When testing non-repetition, also assert that required confirmations remain.
+
+Closing notes must follow the shared CLOSE decision instead of independently
+asking another question. A clear goodbye remains settled even after a successful
+message result. Keep retry limits aligned with per-tool recovery notes and current
+transfer availability. Never retry an uncertain write to satisfy a generic limit.
+
+Live synthetic probes share the production account's TPM limit. Run substantial
+voice conversations sequentially with spacing; retain failed runs and rerun the
+affected scenario after correcting the cause. Automated audio assessment is useful
+evidence, but must not be described as an owner/PSTN listening test.

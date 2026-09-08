@@ -520,7 +520,7 @@ export const REALTIME_CONTEXT_NOTES = {
   durationGoodbye:
     'BACKGROUND (do not read aloud as-is): we are at the call time limit. Give one short, warm goodbye inviting the caller to call back, and say nothing else. Do not mention a time limit.',
   interruptedEndCall:
-    'The caller started speaking again. Continue the call: listen and help. Afterward, confirm whether they need anything else before trying end_call again.',
+    'The caller started speaking again. Listen and address any new request, then follow CLOSE. A final thanks or goodbye does not require another question.',
   endCallGoodbye:
     'The server will close after your next spoken line. Say exactly one short, warm, natural farewell addressed to the caller now. Say only the farewell; keep call-control actions silent and internal. Do not call end_call again.',
   endCallSpamGoodbye:
@@ -699,7 +699,7 @@ ${servicesSection}
 - leave_message_for_owner: after the caller chooses a message and finishes it. Pass no content or summary; the server supplies caller-authored wording. Call silently and acknowledge only success.
 - After a tool returns, state the result first, then only the next useful action or question.
 - end_call — SILENT/PROACTIVE: only when caller is CLEARLY done or per SAFETY & ESCALATION. NEVER mid-task or for silence alone; follow CLOSE.
-- Tool errors: follow the note, hide raw details, and retry once if appropriate. MORE THAN 2 tool failures → stop and offer Richa.
+- Tool errors: follow the note; hide raw details. Retry the same operation at most once when safe; a second failure → offer available help. Never retry an uncertain write or when forbidden.
 
 ═══ OPERATING RULES ═══
 - NEVER INVENT appointments, services, times, or prices. Quote returned fields EXACTLY as given; never round, shift, or approximate.
@@ -720,7 +720,7 @@ IDENTIFY (only before an account-specific read/write; hours, services, prices, a
 - Identity comes from verified caller-ID state or lookup, never a name alone.
 - Recognized caller: never ask for a phone number. If unconfirmed, ask only whether they are the matched person, then WAIT; preserve their request. The caller-context note defines how to handle the answer. After confirmation, resume at the next missing detail. If they mention a changed number, keep the resolved account; do not update or ask for the new number unless they are calling for someone else.
 - Unrecognized existing client: ask for phone, WAIT, then lookup. No match → ask first and last name, WAIT, then lookup. If needLastName, ask for it; if several matches, ask the appointment time and match it.
-- Unrecognized new booking: ask whether the calling number is best for their file, then WAIT. Yes → ask first and last name next; the system attaches that number. No → ask their preferred number next, then lookup silently; if no match, ask first and last name next and book with that number. Each caller-information step is its own turn.
+- Unrecognized new booking: ask whether the calling number is best for their file, then WAIT. Yes → ask for missing name parts next; the system attaches that number. No → ask their preferred number next, then lookup silently; if no match, ask for missing name parts next and book with that number. Each caller-information step is its own turn.
 - Once identified, use their name sparingly and never make them repeat a request.
 
 SERVE — hear what the caller actually NEEDS before acting. Callers almost never use words like "cancel" or "reschedule" — "I can't make it today" or "something came up" usually means one of them. Then:
@@ -730,7 +730,7 @@ SERVE — hear what the caller actually NEEDS before acting. Callers almost neve
 - RUNNING LATE: identify → find today's appointment via list_appointments → log_running_late with clientId, appointmentId, AND detail — a short summary in the caller's own words, including HOW late if they said. squeezed false → reassure them warmly, no rush, Richa will know. squeezed true → let them know we'll do our best to squeeze them in.
 - The caller changes their mind mid-flow (e.g. asks to cancel instead of reschedule) → ABANDON the old flow immediately and follow the new request.
 
-CLOSE: after helping, ask if there's anything else; help if needed, then ask again. When done, end_call is SILENT/PROACTIVE: its function item is the ENTIRE response. Generate zero assistant audio, text, or message items with it—no acknowledgement, transition, farewell, or procedural line. Call it first and alone. Its separate result response owns one warm, ordinary farewell addressed to them.
+CLOSE: when clearly done, close without another question. Otherwise ask once if they need anything else, then WAIT; help with new requests. Follow specific non-client ending rules. When done, end_call is SILENT/PROACTIVE: its function item is the ENTIRE response. Generate zero assistant audio, text, or message items with it. Call it first and alone. Its separate result response owns one warm, ordinary farewell addressed to them.
 
 ═══ SAFETY & ESCALATION ═══
 ASKED FOR RICHA:
@@ -739,11 +739,11 @@ ASKED FOR RICHA:
 
 SELF-SERVICE FIRST: handle supported tasks before message-taking, except when RICHA'S LINE says AVAILABLE and the caller explicitly asks to speak with her. During closure, ask their need first. If they cannot make an appointment, offer a new time; if they do not want one, offer cancellation. After helping, offer a message only if something personal remains.
 
-OTHER TRANSFERS are last resort: several different people in one group booking, a request outside your tools, an upset caller who wants a human, or MORE THAN 2 tool failures. Persistent abuse → use end_call SILENT/PROACTIVE so its result owns the polite closing, or transfer if safety requires it.
+OTHER TRANSFERS are last resort: several different people in one group booking, a request outside your tools, an upset caller who wants a human, or exhausted recovery per TOOLS. Persistent abuse → use end_call SILENT/PROACTIVE so its result owns the polite closing, or transfer if safety requires it.
 
 CONNECTING TO RICHA: only if RICHA'S LINE says AVAILABLE. Give one short handoff, then call transfer_to_owner; longer speech is cut off. Never mention routing mechanics or tool names.
 
-MESSAGE MODE: outside Richa's calling hours, offer a message; during closure, enter only after need discovery under TEMPORARY CLOSURE POLICY. Never say you will get her. Ask naturally what they would like Richa to know with no process explanation, then WAIT. After the caller gives the complete message, call leave_message_for_owner silently with no acknowledgement, transition, or dispatch narration. After success, acknowledge once naturally, ask once if they need anything else, then wait; never discuss mechanics or promise when Richa will respond. After failure, apologize briefly without internal details, then wait. Schedule-change FYIs happen automatically — never call a message or transfer tool for them or mention them to the caller.
+MESSAGE MODE: outside Richa's calling hours, offer a message; during closure, enter only after need discovery under TEMPORARY CLOSURE POLICY. Never say you will get her. Ask naturally what they would like Richa to know with no process explanation, then WAIT. After the caller gives the complete message, call leave_message_for_owner silently with no acknowledgement, transition, or dispatch narration. After success, follow the result note and CLOSE. After failure, apologize briefly without internal details, then wait. Schedule-change FYIs happen automatically — never call a message or transfer tool for them or mention them to the caller.
 
 ═══ SPAM & TELEMARKETING ═══
 - Signs: a sales pitch for business services, "your Google/business listing," loans/solar/insurance/warranties, a robocall or recorded pitch, or asking for "the owner" to sell something.
@@ -874,7 +874,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'book_appointment',
     description:
-      'Book only after the caller explicitly confirms the exact service, date, and time. For a recognized account, use clientId and omit phone. For a new caller, complete the number choice before asking their name; if they decline the calling number, require a number they dictate. Announce completion only after a successful result.',
+      'Book only after the caller explicitly confirms the exact service, date, and time: after contact collection, read those details back, ask for booking approval, and WAIT for a new explicit yes. Time selection and contact answers are not this approval. For a recognized account, use clientId and omit phone. For a new caller, complete the number choice before asking their name; if they decline the calling number, require a number they dictate. Announce completion only after a successful result.',
     parameters: {
       type: 'object',
       properties: {
@@ -900,7 +900,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             name: {
               type: 'string',
               description:
-                "The caller's first and last name. Ask everyone for both names without characterizing the name or announcing a confirmation policy. If it was heard clearly, continue without a ritual. If uncertain, confirm what you heard; if the caller spelled it, read that spelling back instead of asking them to spell it again. Never invent a spelling or call a name unusual, unique, or difficult.",
+                "The caller's first and last name. Reuse a clearly supplied full name or the identified account's full name; ask only for missing parts. Follow IDENTIFY for account verification and phone-first collection. A clear name needs no name reconfirmation; it is not booking approval. After collecting it, ask for approval of the exact service, date, and time and WAIT. If uncertain, confirm what you heard; if the caller spelled it, read that spelling back instead of asking them to spell it again. Never invent a spelling or call a name unusual, unique, or difficult.",
             },
             phone: {
               type: 'string',
@@ -3033,7 +3033,7 @@ export class TwilioRealtimeCall {
       });
       return {
         error: this.formatError(error),
-        note: 'Say a brief natural line in your own words and retry this tool once. If it fails again, offer to get Richa involved rather than retrying further.',
+        note: 'Say a brief natural line in your own words and retry this tool once. If it fails again, stop retrying. Offer a transfer to Richa only if current server status permits it; otherwise offer a message.',
       };
     }
   }
@@ -4047,7 +4047,7 @@ export class TwilioRealtimeCall {
       });
       return {
         error: this.formatError(error),
-        note: 'Say a brief natural line in your own words and retry this tool once. If it fails again, offer to get Richa involved rather than retrying further.',
+        note: 'Say a brief natural line in your own words and retry this tool once. If it fails again, stop retrying. Offer a transfer to Richa only if current server status permits it; otherwise offer a message.',
       };
     }
   }
@@ -4327,7 +4327,7 @@ export class TwilioRealtimeCall {
         ...(duplicateContent ? { duplicate: true } : {}),
         note: duplicateContent
           ? 'This caller message was already handled. Do not acknowledge it again or call a message tool again; stop and wait.'
-          : 'Acknowledge once, briefly, in ordinary receptionist language that the message has been passed along for Richa. Ask once if they need anything else, then wait. Do not discuss mechanics or promise when she will respond.',
+          : 'Acknowledge once, briefly, that the message has been passed along for Richa, then follow CLOSE: if the caller is clearly done or NON-CLIENT CALLS applies, close without another question; otherwise ask once if they need anything else, then wait. Do not discuss mechanics or promise when she will respond.',
       };
     }
     if (messageResult.reason === 'uncertain') {
@@ -4763,7 +4763,7 @@ export class TwilioRealtimeCall {
     if (this.toolCallsInFlight > 1) {
       return {
         aborted: true,
-        note: 'Another requested action is still finishing. Wait for its result, help the caller, then confirm whether they need anything else.',
+        note: 'Another requested action is still finishing. Wait for its result, help the caller, then follow CLOSE; do not ask another question if they are already clearly done.',
       };
     }
     if (this.modelEndCallPending) {

@@ -1,6 +1,32 @@
 # STATE — AI Receptionist (Erica)
 
-## 2026-09-08 — DEPLOYED focused brow/lash synonyms (current production)
+## 2026-09-08 — DEPLOYED conversation consistency (current production)
+
+- User approved implementation, validation, deployment and GitHub/docs updates.
+- Exact production source `bc39b09`; Railway `ee43e7fe-9fd0-4dd7-9dcf-f907c6cfcd1a`
+  SUCCESS, about 7:19 PM ET. Branch `codex/conversation-consistency-2026-09-08`.
+  Rollback `fcee0d8` preserves the earlier booking/email and synonym hotfixes.
+- Existing closing/message notes honor settled endings; name collection reuses
+  complete information; safe retries have one consistent limit and respect
+  transfer availability. Phone-first/name-second/WAIT and identity checks remain.
+- Live probes caught name wording that could skip existing booking approval;
+  clarified the same tool descriptions to require service/date/time read-back
+  and a new explicit yes after contact collection. No runtime state machine added.
+- 568/48 regression tests, build, GitHub CI, eight live-model cases and three
+  spoken-input cases passed. Automated audio review passed; no human/PSTN call
+  was made. No real booking, owner message or customer write created by probes.
+- Production source/config hashes, health, services, admin auth, signed voice
+  webhook, media upgrade, inbound forwarding and matcher checks passed.
+  Five-minute observation: 31/31 healthy checks, zero warnings; final 23:25 UTC
+  sanity healthy, zero active calls. GitHub tag `production-2026-09-08-conversation`
+  pins exact deployed `bc39b09`; later commits may only document this release.
+- Full release and final observation: `docs/reviews/CONVERSATION_RELEASE_2026-09-08.md`.
+- PENDING: first natural caller validation; selective main reconciliation;
+  held PR #3 service knowledge, silent-wait and transfer outcome work separately.
+  Main still has unreleased drafts: do not bulk-deploy main. This entry supersedes
+  the investigation-only and older pending-repetition items below.
+
+## 2026-09-08 — DEPLOYED focused brow/lash synonyms (superseded by conversation release)
 
 - Aryan explicitly requested production deployment. Exact source `fcee0d8` on
   `codex/focused-service-synonyms-2026-09-08`; Railway deployment
