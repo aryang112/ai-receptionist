@@ -28,6 +28,15 @@ export const BookSchema = z.object({
 // Keys and values are compared AFTER normalization (see normalize()), so they
 // must themselves be in normalized form (lowercase, alnum, single-spaced).
 const SERVICE_ALIASES: Record<string, string> = {
+  // September 7 caller phrasing: the live catalog calls this Brow Threading.
+  // Keep explicit phrases so unknown treatment words (e.g. henna) survive
+  // matching and cannot silently turn a different request into threading.
+  'eyebrow threading': 'brow threading',
+  'eyebrows threading': 'brow threading',
+  'eyebrow thread': 'brow threading',
+  'eyebrows threaded': 'brow threading',
+  'threading for my eyebrows': 'brow threading',
+  'get my eyebrows threaded': 'brow threading',
   'lash lamination': 'lash lift',
   'lash laminations': 'lash lift',
   'lash laminate': 'lash lift',

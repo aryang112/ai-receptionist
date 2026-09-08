@@ -39,6 +39,27 @@ describe('findServiceByName synonym aliases', () => {
 });
 
 describe('resolveService aliases return a decisive match', () => {
+  it.each([
+    'Eyebrow threading',
+    'eyebrows threading',
+    'eyebrow thread',
+    'eyebrows threaded',
+    'threading for my eyebrows',
+    'get my eyebrows threaded',
+  ])('resolves %s to the live Brow Threading service', async (phrase) => {
+    expect(await resolveService(phrase)).toMatchObject({
+      kind: 'match',
+      service: { id: 's3', name: 'Brow Threading' },
+    });
+  });
+
+  it.each(['henna brows', 'brow henna', 'eyebrow tattoo', 'eyeball threading'])(
+    'does not discard unknown treatment words in %s',
+    async (phrase) => {
+      expect(await resolveService(phrase)).toMatchObject({ kind: 'notOffered' });
+    }
+  );
+
   it('"lash lamination" resolves (kind: match) to Lash Lift', async () => {
     const r = await resolveService('lash lamination');
     expect(r.kind).toBe('match');
