@@ -1,5 +1,16 @@
 # CODEMAP — AI Receptionist (Erica)
 
+## Current review additions — 2026-09-08
+
+This review branch includes the later production implementation missing from the older map below. See `reviews/PRODUCTION_PARITY_2026-09-08.md` for the exact inventory. Current source uses the configurable `gpt-realtime-2.1` default; no runtime model/voice environment was changed.
+
+- `src/realtime/twilioStream.ts`: `handleLeaveMessageForOwner` captures exact caller-authored messages; `handleWaitForUser` supplies silence; owner recap teardown, closure gates and call-ending safeguards are retained. Related name/number questions share a turn, followed by explicit answers.
+- `src/realtime/openaiSession.ts`: silent registered tools return their output without a follow-up response. Existing session fields are preserved.
+- `src/services/postCallSummary.ts`: opt-in asynchronous owner recaps; `callStore.ts` records notification metadata for deduplication; `ownerSms.ts` returns bounded delivery outcomes.
+- `src/services/phorest.client.ts`: confirmed-contact ranking, single-flight creates and uncertain-create reconciliation are retained alongside Fable's placeholder/consent fix. Real supplied email is preserved.
+- `src/services/booking.ts`: Fable's token synonyms and catalog-based phrase handling are retained with the real-shaped mock catalog and call-level regression.
+- Tests: PR #2 has 46 files / 554 tests. PR #3 separately adds `serviceKnowledge.ts`, configuration, read-only `get_service_information`, scripts and two suites (48 files / 568 tests); see its design/handoff before using the prototype.
+
 Orientation map so agents don't have to scan every file. See `state.md` for status
 and `tasks/lessons.md` for the gotchas.
 

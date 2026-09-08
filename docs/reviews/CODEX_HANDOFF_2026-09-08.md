@@ -2,6 +2,8 @@
 
 This is draft review work in the existing repository. It has not been deployed. Main and the existing Fable branch were not modified.
 
+See `PRODUCTION_PARITY_2026-09-08.md` for the independently checked feature inventory and open review decisions. The current `state.md`, code map and lessons now point to that shared baseline.
+
 ## Base and production evidence
 
 The review starts at Fable's latest available branch, `claude/production-call-bug-diagnosis-mlpld8`, commit `4f8c52f`. On preparation, Railway reported successful active deployment `981138c1-6e73-4952-9daa-1087109f1647` from September 3 with release message identifying `117ada0`. The user mentioned a recent deployment, but no newer one was visible through the configured Railway project; Fable's PR also still said NOT DEPLOYED. Treat `4f8c52f` as the latest source baseline, not a verified deployed commit. Recheck the deployment identity before any release.

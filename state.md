@@ -1,5 +1,13 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-08 — REVIEW BRANCH ONLY: production/Fable reconciliation
+
+- This branch is not a deployment record. PR #2 starts from Fable `4f8c52f` and includes the later production source missing from the August 24 GitHub baseline, plus the unpublished conversation cleanup. PR #3 adds the service-information prototype.
+- Shared review baseline: `codex/conversation-review-2026-09-08`. Do not deploy PR #1's older tree alone over the later production tree.
+- See `docs/reviews/PRODUCTION_PARITY_2026-09-08.md` for the feature inventory, source comparisons, retained Fable changes and open decisions; see `docs/reviews/CODEX_HANDOFF_2026-09-08.md` for offline test commands.
+- Production identity remains the September 3 `117ada0` release in the configured Railway metadata. The reported newer deployment was not visible; verify it before release. Main, Fable's branch and production were not modified by this review.
+- Older entries below describe their historical branch state. Statements such as 355 tests or code not being available on GitHub are superseded for these review branches by the shared handoff.
+
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-06 — GA Realtime migration + ~25 production-bug fixes.
 
