@@ -24,31 +24,31 @@ export const BookSchema = z.object({
   }),
 });
 
+// Keep this vocabulary small: observed brow/threading and lash/tint wording.
+// Normalize BOTH caller wording and catalog names; never drop unknown treatments.
+const TOKEN_SYNONYMS: Record<string, string> = {
+  eyebrow: 'brow',
+  eyebrows: 'brow',
+  brows: 'brow',
+  eyelash: 'lash',
+  eyelashes: 'lash',
+  lashes: 'lash',
+  thread: 'threading',
+  threaded: 'threading',
+  tint: 'tinting',
+  tinted: 'tinting',
+};
+
 // Common caller phrasings that don't share a keyword with the real service name.
 // Keys and values are compared AFTER normalization (see normalize()), so they
 // must themselves be in normalized form (lowercase, alnum, single-spaced).
 const SERVICE_ALIASES: Record<string, string> = {
-  // September 7 caller phrasing: the live catalog calls this Brow Threading.
-  // Keep explicit phrases so unknown treatment words (e.g. henna) survive
-  // matching and cannot silently turn a different request into threading.
-  'eyebrow threading': 'brow threading',
-  'eyebrows threading': 'brow threading',
-  'eyebrow thread': 'brow threading',
-  'eyebrows threaded': 'brow threading',
-  'threading for my eyebrows': 'brow threading',
-  'get my eyebrows threaded': 'brow threading',
   'lash lamination': 'lash lift',
   'lash laminations': 'lash lift',
   'lash laminate': 'lash lift',
-  'eyelash lamination': 'lash lift',
-  'eyelash lift': 'lash lift',
   'brow laminations': 'brow lamination',
-  'eyebrow lamination': 'brow lamination',
   // Bare brow/eyebrow phrasings should land on threading (the brow service the
   // salon actually offers), not a tint or a permanent-makeup line.
-  eyebrows: 'brow threading',
-  eyebrow: 'brow threading',
-  brows: 'brow threading',
   brow: 'brow threading',
 };
 
@@ -61,7 +61,10 @@ function normalize(s: string): string {
     .toLowerCase()
     .replace(/^\s*\d+[a-z]?\)\s*/, '')
     .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
+    .trim()
+    .split(' ')
+    .map((word) => TOKEN_SYNONYMS[word] ?? word)
+    .join(' ');
 }
 
 function tokens(s: string): string[] {
@@ -87,15 +90,41 @@ export async function resolveService(name: string): Promise<ServiceMatch> {
   if (!q) return { kind: 'notOffered', closest: services.slice(0, 3) };
 
   // (1) exact normalized name.
-  const exact = services.find((s) => normalize(s.name) === q);
-  if (exact) return { kind: 'match', service: exact };
+  const exact = services.filter((s) => normalize(s.name) === q);
+  if (exact.length > 1)
+    return { kind: 'ambiguous', candidates: exact.slice(0, 3) };
+  if (exact.length === 1) return { kind: 'match', service: exact[0]! };
 
   // (2) alias -> re-resolve the aliased phrase (exact, then token scoring).
   const aliased = SERVICE_ALIASES[q];
   if (aliased) {
-    const aliasExact = services.find((s) => normalize(s.name) === aliased);
-    if (aliasExact) return { kind: 'match', service: aliasExact };
+    const aliasExact = services.filter((s) => normalize(s.name) === aliased);
+    if (aliasExact.length > 1)
+      return { kind: 'ambiguous', candidates: aliasExact.slice(0, 3) };
+    if (aliasExact.length === 1)
+      return { kind: 'match', service: aliasExact[0]! };
     // Fall through using the aliased phrase as the query for token scoring.
+  }
+
+  // Only known conversational words around brows/lashes may be ignored, and
+  // only for a FULL name/alias match. Keep "henna", "not", "extensions", etc.
+  // Catalog membership never decides which words are meaningful.
+  if (/\b(?:brow|lash)\b/.test(q)) {
+    const core = q
+      .split(' ')
+      .filter(
+        (word) => !/^(?:i|can|want|to|get|do|my|done|for|please)$/.test(word)
+      )
+      .join(' ');
+    if (core && core !== q) {
+      const key = (SERVICE_ALIASES[core] ?? core).split(' ').sort().join(' ');
+      const full = services.filter(
+        (s) => tokens(s.name).sort().join(' ') === key
+      );
+      if (full.length > 1)
+        return { kind: 'ambiguous', candidates: full.slice(0, 3) };
+      if (full.length === 1) return { kind: 'match', service: full[0]! };
+    }
   }
 
   // (3) whole-word token scoring. Every query token must appear as a whole word
