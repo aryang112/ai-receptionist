@@ -1,5 +1,23 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-08 — Focused synonym candidate prepared; production unchanged
+
+- Aryan prioritized latency and limited new vocabulary to brow/threading and lashes.
+  Candidate source commit `8471b7e` on `codex/focused-service-synonyms-2026-09-08`
+  starts from deployed `1425f8c`. Worktree:
+  `/Users/aryangupta/Documents/Dev/ai-receptionist-synonyms-2026-09-08`.
+- Ten word substitutions, five retained existing phrase aliases, restricted known
+  filler removal; no catalog-vocabulary stripping, added model/API request, or
+  prompt/contact-flow change. Phone confirmation remains first, name second.
+- 568 tests / 48 files, build and format passed. Saved 63-service catalog:
+  17 phrase contracts plus all 63 exact service identities passed. Local warm
+  matcher mean 0.123 → 0.180 ms; p95 0.164 → 0.385 ms, 20,000 samples/version.
+  This is matching cost only, not measured production voice latency.
+- Review report: candidate worktree `docs/FOCUSED_SERVICE_SYNONYMS_2026-09-08.md`.
+  Not deployed or merged into main; main still contains the older broad draft.
+  Future release must use the reviewed candidate, preserve the sequential contact
+  flow, and not bulk-merge the unrelated main prompt changes.
+
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
 > Last major work: 2026-09-03 — local-only post-call owner recap implementation.
 
