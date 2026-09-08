@@ -1,5 +1,25 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-08 — Repetition and prompt conflict investigation only
+
+- User requested findings and proposed design before any prompt fix. No executable
+  changes or deployment in this pass; production remains `fcee0d8`.
+- Read all 16 non-owner/test transcripts from September 2–8 (includes vendors,
+  spam and greeting-only calls, not 16 clients). Historical September 7 logs confirm
+  eyebrow threading returned notOffered and led into three service clarifications;
+  today's deployed matcher addresses the mismatch. Preserve useful time clarification.
+- Closing-loop evidence is narrower than earlier summary: vendor goodbye reopened,
+  job inquiry unnecessarily offered more help; no widespread client closing loop
+  established. September 3 repeated return date is verified text, audio cause unknown.
+- Live conflicts: unconditional closing/message question versus non-client ending;
+  >2 failures versus retry once; booking name schema “ask everyone” versus retained
+  details. Propose small note/schema/flow alignment, not the old broad rewrite.
+- Latest Sep 8 AM QA zero-call window independently verified. Sep 7 failed booking
+  and EMAIL_REQUIRED confirmed in historical logs; caller-hung-up claim unverified.
+- Findings/proposed probes: `docs/reviews/REPETITION_PROMPT_REVIEW_2026-09-08.md`.
+  Main baseline 554/46 tests passed. Pending owner discussion of this design;
+  do not implement it merely because older action items say “repetition cleanup.”
+
 ## 2026-09-08 — DEPLOYED focused brow/lash synonyms (current production)
 
 - Aryan explicitly requested production deployment. Exact source `fcee0d8` on
