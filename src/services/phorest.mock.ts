@@ -14,17 +14,13 @@ function normalizePhone(phone: string): string {
 }
 
 // Pretend salon services. Kept representative on purpose so the service-matcher
-// tests have realistic ambiguity to chew on: two brow-adjacent threading names,
-// two distinct wax services (so a bare "wax" query is genuinely ambiguous), a
-// couple of tint/lift/lamination lines, and a $0 consult.
+// tests have realistic ambiguity to chew on: the live catalog's naming ("Brow
+// Threading" — there is NO "Eyebrow Threading" entry, and a mock one masked the
+// 2026-09-07 "eyebrow threading -> not offered" bug), two distinct wax services
+// (so a bare "wax" query is genuinely ambiguous), a couple of tint/lift/
+// lamination lines, and a $0 consult.
 const services: Service[] = [
-  { id: 'svc_brows', name: 'Eyebrow Threading', price: 15, durationMin: 15 },
-  {
-    id: 'svc_brow_threading',
-    name: 'Brow Threading',
-    price: 15,
-    durationMin: 15,
-  },
+  { id: 'svc_brows', name: 'Brow Threading', price: 15, durationMin: 15 },
   {
     id: 'svc_fullface',
     name: 'Full Face Threading',

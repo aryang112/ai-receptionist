@@ -24,22 +24,37 @@ export const BookSchema = z.object({
   }),
 });
 
-// Common caller phrasings that don't share a keyword with the real service name.
-// Keys and values are compared AFTER normalization (see normalize()), so they
-// must themselves be in normalized form (lowercase, alnum, single-spaced).
+// Spoken variants of catalog words, applied to BOTH catalog names and caller
+// phrases inside normalize() — so "eyebrow threading" and "Brow Threading"
+// become the same tokens. Only word-level variants belong here; a phrase that
+// names a DIFFERENT service ("lash lamination" -> Lash Lift) is a SERVICE_ALIAS.
+const TOKEN_SYNONYMS: Record<string, string> = {
+  eyebrow: 'brow',
+  eyebrows: 'brow',
+  brows: 'brow',
+  eyelash: 'lash',
+  eyelashes: 'lash',
+  lashes: 'lash',
+  thread: 'threading',
+  threaded: 'threading',
+  waxing: 'wax',
+  waxed: 'wax',
+  tint: 'tinting',
+  tinted: 'tinting',
+  laminate: 'lamination',
+  laminated: 'lamination',
+  laminations: 'lamination',
+  lami: 'lamination',
+};
+
+// Caller phrase -> the catalog service it actually means. Keys and values are
+// compared AFTER normalization (synonyms included), so write them normalized.
 const SERVICE_ALIASES: Record<string, string> = {
   'lash lamination': 'lash lift',
-  'lash laminations': 'lash lift',
-  'lash laminate': 'lash lift',
-  'eyelash lamination': 'lash lift',
-  'eyelash lift': 'lash lift',
-  'brow laminations': 'brow lamination',
-  'eyebrow lamination': 'brow lamination',
-  // Bare brow/eyebrow phrasings should land on threading (the brow service the
-  // salon actually offers), not a tint or a permanent-makeup line.
-  eyebrows: 'brow threading',
-  eyebrow: 'brow threading',
-  brows: 'brow threading',
+  'lash perm': 'lash lift',
+  'brow perm': 'brow lamination',
+  // A bare "brow(s)" / "eyebrow(s)" means threading (the brow service the salon
+  // actually offers), not a tint or a permanent-makeup line.
   brow: 'brow threading',
 };
 
@@ -52,12 +67,25 @@ function normalize(s: string): string {
     .toLowerCase()
     .replace(/^\s*\d+[a-z]?\)\s*/, '')
     .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
+    .trim()
+    .split(' ')
+    .map((w) => TOKEN_SYNONYMS[w] ?? w)
+    .join(' ');
 }
 
 function tokens(s: string): string[] {
   return normalize(s).split(' ').filter(Boolean);
 }
+
+// Order-insensitive identity of a phrase ("threading for my brows" names the
+// same service as "Brow Threading" once filler is gone).
+function phraseKey(s: string): string {
+  return tokens(s).sort().join(' ');
+}
+
+const ALIASES_BY_KEY = new Map(
+  Object.entries(SERVICE_ALIASES).map(([k, v]) => [phraseKey(k), v])
+);
 
 // The outcome of resolving a caller phrase against the live catalog.
 export type ServiceMatch =
@@ -77,17 +105,34 @@ export async function resolveService(name: string): Promise<ServiceMatch> {
   const q = normalize(name);
   if (!q) return { kind: 'notOffered', closest: services.slice(0, 3) };
 
-  // (1) exact normalized name.
-  const exact = services.find((s) => normalize(s.name) === q);
-  if (exact) return { kind: 'match', service: exact };
+  // (1) exact normalized name, or (2) an alias that names one.
+  const byFullName = (phrase: string): Service | undefined => {
+    const key = phraseKey(phrase);
+    const target = ALIASES_BY_KEY.get(key);
+    return (
+      services.find((s) => phraseKey(s.name) === key) ??
+      (target ? services.find((s) => normalize(s.name) === target) : undefined)
+    );
+  };
+  const direct = byFullName(q);
+  if (direct) return { kind: 'match', service: direct };
 
-  // (2) alias -> re-resolve the aliased phrase (exact, then token scoring).
-  const aliased = SERVICE_ALIASES[q];
-  if (aliased) {
-    const aliasExact = services.find((s) => normalize(s.name) === aliased);
-    if (aliasExact) return { kind: 'match', service: aliasExact };
-    // Fall through using the aliased phrase as the query for token scoring.
+  // (2b) Callers wrap the service in filler ("can I get my brows done", "upper
+  // lip threading"). Drop every word that appears in NO catalog name and retry
+  // the full-name/alias lookup on what remains. Only a FULL name counts here,
+  // so stripping words can never widen a partial match ("hair cut" must not
+  // become "hair" -> some hair-removal line).
+  const vocabulary = new Set(services.flatMap((s) => tokens(s.name)));
+  const core = tokens(q)
+    .filter((t) => vocabulary.has(t) || ALIASES_BY_KEY.has(t))
+    .join(' ');
+  if (core && core !== q) {
+    const coreMatch = byFullName(core);
+    if (coreMatch) return { kind: 'match', service: coreMatch };
   }
+
+  // Alias target not in the catalog (alias rot) -> score its phrase instead.
+  const aliased = SERVICE_ALIASES[q];
 
   // (3) whole-word token scoring. Every query token must appear as a whole word
   // in the service name; score = matchedName-token-ratio isn't enough on its own
