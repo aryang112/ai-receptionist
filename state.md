@@ -1,5 +1,89 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-09 late — DEPLOYED September 10 reopening cleanup (current production)
+
+- Aryan requested removal of the old away/closed story before September 10.
+  Main prompt already expires that dated notice at midnight Eastern; fixed the
+  hours tool's separate leak of expired closure records and public reasons.
+- Exact production source `0b70df6`, branch `codex/reopening-cleanup-2026-09-09`;
+  Railway `24184059-17cf-4ba1-a80d-92aab7684013` SUCCESS about 11:44 PM ET.
+  Rollback `bc39b09`; source branch pushed. Five container hashes match release.
+- September 10: no expired notice in generated current-status prompt or hours
+  result; salon noon–7 PM, transfer eligibility 9 AM–9 PM. Both midnight and
+  normal daytime boundaries verified against compiled deployed code in an
+  isolated diagnostic process. No midnight restart required for new calls.
+- 572 tests / 49 files, build and formatting passed. Live-model checks returned
+  tomorrow's correct hours and used simulated transfer; no real test call or SMS.
+  Zero active calls before clean-archive deployment; health/admin 200 and zero
+  new warnings, complete 4,187-client index. business.json, session/model/voice,
+  base prompt, matching, booking and transfer code unchanged.
+- Release evidence and limitations: `docs/reviews/REOPENING_RELEASE_2026-09-10.md`.
+  Isolated worktree: `/Users/aryangupta/Documents/Dev/ai-receptionist-reopening-2026-09-09`.
+- Pending: eyebrow-tattoo alias remains an UNDEPLOYED separate candidate;
+  nearby-date search remains design only. Booking approval and reporting fixes,
+  selective main reconciliation, and held PR #3 remain separate. Never bulk-deploy main.
+
+## 2026-09-09 — Eyebrow tattoo alias prepared; nearby-date design discussed
+
+- Aryan explicitly requested eyebrow tattoo as an alternative phrase for
+  microblading. Implemented the normalized `brow tattoo` alias targeting the
+  full `Micro Blading/ Shading` service on production-based branch
+  `codex/eyebrow-tattoo-alias-2026-09-09`, worktree
+  `/Users/aryangupta/Documents/Dev/ai-receptionist-tattoo-2026-09-09`.
+- Runtime change: one alias plus comment in booking.ts; seven regressions cover
+  full treatment versus touch-up, missing target and unrelated tattoo treatments.
+  All 575 tests / 49 files, build, formatting and 63 live-catalog exact identities
+  plus seven phrase checks pass. Fresh checkout tests initially lacked dummy
+  credentials; passing rerun uses the existing CI dummy environment.
+- Committed candidate only; NOT deployed. Main application code unchanged.
+  Microshading/eyebrow shading and generic microblading touch-up selection remain
+  separate unresolved matching work; this alias does not claim to fix those.
+- Nearby-date request remains design discussion: current tool checks one day.
+  Recommend bounded next-date search using existing slot/hour/duration filtering,
+  returning 2–3 choices in one result, plus a brief result/schema behavior change.
+  Prompt-only successive-day calls are possible but add model/tool round trips.
+  Proposed scope is a modest availability feature with edge-case tests, not just
+  a prompt sentence. No nearby-date implementation or deployment performed.
+
+## 2026-09-09 — Daily call review; production unchanged
+
+- Owner listening feedback: keep the useful brow-tattoo clarification; after a
+  full requested day, proactively offer 2–3 verified nearby date/time choices.
+  Read-only deployed matcher probe: shading works; microshading and eyebrow/brow
+  shading fail; plain microblading incorrectly selects six-month touch-up.
+  Proposed narrow phrase mappings plus touch-up disambiguation, and bounded
+  next-date search in the availability tool. Detailed addendum in today's review.
+  No implementation/deployment authorized by this discussion or performed yet.
+
+- Aryan requested today's production/fraud status, recordings, transcript review
+  and proposed fixes. Four recordings shared; no audio listening claimed.
+- Four completed inbound calls: greeting-only, hours inquiry, recognized-client
+  Micro Blading/Shading booking, and self-stated bank representative's message.
+  Seven tools successful; Phorest independently retains September 15 noon booking
+  BOOKED/ACTIVE, $500 service value. New-client create remains unexercised today.
+- VERIFIED: booking skipped full service/date/time read-back and new approval
+  after identity yes, despite deployed instructions. Caller did select the slot;
+  this is a safeguard deviation, not proof of an unwanted booking. Likely salience
+  gap in recognized-caller context and successful lookup result; no code approval gate.
+- NEEDS LISTEN: booking ~0:55–1:15, repeated date questions / questionable Goodbye
+  transcription. Do not infer clipping, ignored goodbye or latency from text alone.
+- Zero spam/blocked today, zero numbers currently above live block threshold.
+  Bank affiliation unverified. Three recaps delivered; bank message sent, with no
+  delivered receipt at review. No duplicate recap for the explicit message.
+- VERIFIED reporting issues: expected socket closes logged as errors; successful
+  application hangups can be recorded as generic caller hung up due to REST/stop
+  ordering. Today's four socket errors follow stream teardown, not evidence of outage.
+- Latest September 9 AM QA independently checked including September 8 overlap.
+  Morning-only coverage; audio/hangup and caller-classification claims overstated.
+- Production source hash still matches bc39b09, health/admin 200; local baseline
+  554/46 green. No runtime/configuration/deployment or customer write performed.
+- Full evidence, QA dispositions and concrete fix/replay design:
+  `docs/reviews/CALL_REVIEW_2026-09-09.md`; private artifacts in
+  `outputs/call-review-2026-09-09/`.
+- PENDING: discuss targeted recognized-caller approval fix and listen to flagged
+  interval; stage/replay any agreed change from production lineage. Preserve prior
+  selective-main reconciliation and held PR #3 scope; never bulk-deploy main.
+
 ## 2026-09-08 — DEPLOYED conversation consistency (current production)
 
 - User approved implementation, validation, deployment and GitHub/docs updates.
@@ -87,7 +171,7 @@
   flow, and not bulk-merge the unrelated main prompt changes.
 
 > Working memory / handoff. Read `tasks/lessons.md` and `docs/CODEMAP.md` next.
-> Production: `bc39b09` on `codex/conversation-consistency-2026-09-08`, deployed September 8 at approximately 7:19 PM ET. See `docs/reviews/CONVERSATION_RELEASE_2026-09-08.md`.
+> Production: `0b70df6` on `codex/reopening-cleanup-2026-09-09`, deployed September 9 at approximately 11:44 PM ET. See `docs/reviews/REOPENING_RELEASE_2026-09-10.md`.
 > Main still contains unreleased prompt/matcher/knowledge-related review work. Do not deploy main as equivalent to the production hotfix branch.
 > Latest work: 2026-09-08 — narrow booking hotfix deployed; broader conversation reconciliation on main remains unreleased.
 

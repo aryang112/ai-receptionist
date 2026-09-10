@@ -3,9 +3,9 @@
 Orientation map so agents don't have to scan every file. See `state.md` for status
 and `tasks/lessons.md` for the gotchas.
 
-Current production: `bc39b09` on `codex/conversation-consistency-2026-09-08`,
-Railway `ee43e7fe-9fd0-4dd7-9dcf-f907c6cfcd1a`, September 8 ~7:19 PM ET.
-See [conversation release](reviews/CONVERSATION_RELEASE_2026-09-08.md) for
+Current production: `0b70df6` on `codex/reopening-cleanup-2026-09-09`,
+Railway `24184059-17cf-4ba1-a80d-92aab7684013`, September 9 ~11:44 PM ET.
+See [reopening release](reviews/REOPENING_RELEASE_2026-09-10.md) for
 exact scope, validation, rollback and remaining work. The following older
 release references are historical; main includes unreleased code.
 
