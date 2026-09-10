@@ -3612,7 +3612,7 @@ export class TwilioRealtimeCall {
         temporaryClosures,
         note: temporaryClosures.length
           ? "When a temporary closure affects the question, follow TEMPORARY CLOSURE POLICY and match the explanation to the caller's subject. Do not invent anyone's whereabouts."
-          : 'Use the regular hours and CURRENT STATUS. If the caller refers to a previous closure, clarify the current hours and whether Richa can take a call; do not speculate about the reason for past closures.',
+          : 'Answer only the requested hours using CURRENT STATUS and the regular schedule. Do not add commentary about staff absences or why the salon is open or closed.',
       };
 
       logger.info(
