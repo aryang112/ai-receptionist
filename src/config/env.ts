@@ -28,6 +28,15 @@ export const env = {
   // starts come back at odd minutes (2:43, 2:58…). We snap offered times UP to
   // this clean clock grid (minutes). 15 = quarter-hours; set 30 for half-hours.
   SLOT_GRID_MIN: Number(process.env.SLOT_GRID_MIN || 15),
+  // Empty-day fallback only; cap speculative read work and caller wait time.
+  NEARBY_AVAILABILITY_DAYS: Math.max(
+    1,
+    Math.min(14, Math.floor(Number(process.env.NEARBY_AVAILABILITY_DAYS) || 7))
+  ),
+  NEARBY_AVAILABILITY_BUDGET_MS: Math.max(
+    250,
+    Math.min(5000, Number(process.env.NEARBY_AVAILABILITY_BUDGET_MS) || 2500)
+  ),
 
   // G2: silence watchdog. After this much mutual silence (neither the caller
   // nor Erica has said anything), Erica checks in once ("Are you still

@@ -694,7 +694,7 @@ ${servicesSection}
 ═══ TOOLS ═══
 - Follow any tool-result note as the instruction for that moment.
 - Call read-only tools once intent and required values are clear; otherwise ask for only the missing/conflicting value.
-- suggest_availability requires a SERVICE, never a person, and matches the live catalog. Named day → only that day. No day → today AND tomorrow, a couple from each. Named time/part of day → preferredTime as 24h HH:MM.
+- suggest_availability needs a SERVICE, never a person. Named day → check first; if empty, offer alternativeDates. No day → today AND tomorrow, a couple from each. Named time/part of day → preferredTime as 24h HH:MM.
 - book_appointment / reschedule_appointment / cancel_appointment: only AFTER the caller explicitly confirmed the exact service, day, and time (or exact appointment to cancel). Write only what they clearly approved; claim only returned success.
 - leave_message_for_owner: after the caller chooses a message and finishes it. Pass no content or summary; the server supplies caller-authored wording. Call silently and acknowledge only success.
 - After a tool returns, state the result first, then only the next useful action or question.
@@ -865,6 +865,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'string',
           description:
             "If the caller mentioned a desired time (e.g. '4 PM', 'evening', 'morning'), pass it as 24h HH:MM (e.g. '16:00') so the returned slots are centered on it. Omit if they have no preference.",
+        },
+        searchNearby: {
+          type: 'boolean',
+          description:
+            'Omit for automatic nearby-date choices when the requested day has no openings. Set false when the caller restricts acceptable dates, such as only this date or only Fridays; a requested date alone is not a restriction.',
         },
       },
       required: ['serviceName', 'date'],
@@ -2790,6 +2795,186 @@ export class TwilioRealtimeCall {
     }
   }
 
+  /** Keep ordinary and nearby offers on the same preference/spread rules. */
+  private selectOfferedSlots(
+    available: DateTime[],
+    date: string,
+    preferredTime?: string,
+    max = 10
+  ) {
+    // CRITICAL: don't just take the earliest N (that hid afternoon/evening
+    // slots). If the caller asked for a time, return the slots CLOSEST to it;
+    // otherwise return an even spread across the whole day so morning AND
+    // evening are represented. Hand the model { time, value } only.
+    const pref = preferredTime
+      ? DateTime.fromISO(`${date}T${preferredTime}`, {
+          zone: env.TIMEZONE,
+        })
+      : null;
+    let picked: DateTime[];
+    if (pref && pref.isValid) {
+      picked = [...available]
+        .sort(
+          (a, b) =>
+            Math.abs(a.toMillis() - pref.toMillis()) -
+            Math.abs(b.toMillis() - pref.toMillis())
+        )
+        .slice(0, max)
+        .sort((a, b) => a.toMillis() - b.toMillis());
+    } else if (available.length <= max) {
+      picked = available;
+    } else {
+      const step = (available.length - 1) / (max - 1);
+      picked = Array.from(
+        { length: max },
+        (_, i) => available[Math.round(i * step)]!
+      );
+    }
+    return picked.map((dt) => ({
+      time: dt.toFormat('h:mm a'),
+      value: dt.toFormat('HH:mm'),
+    }));
+  }
+
+  private async findNearbyAvailability(
+    serviceName: string,
+    date: string,
+    preferredTime?: string
+  ) {
+    const from = DateTime.fromISO(date, { zone: env.TIMEZONE });
+    const today = DateTime.now().setZone(env.TIMEZONE).startOf('day');
+    if (!from.isValid || from < today || this.closed) return null;
+    const through = from
+      .plus({ days: env.NEARBY_AVAILABILITY_DAYS })
+      .toISODate()!;
+    const dates = Array.from(
+      { length: env.NEARBY_AVAILABILITY_DAYS },
+      (_, i) => from.plus({ days: i + 1 }).toISODate()!
+    ).filter((candidate) => getOpenClose(candidate) !== null);
+    const alternativeDates: Array<{
+      date: string;
+      slots: Array<{ time: string; value: string }>;
+    }> = [];
+    const canonicalNames = new Map<string, string>();
+    const checkedDates: string[] = [];
+    const failedDates: string[] = [];
+    const started = Date.now();
+    let incomplete = false;
+    // Two reads at a time; three dates of choices; a single overall deadline.
+    for (let i = 0; i < dates.length && alternativeDates.length < 3; i += 2) {
+      const remaining =
+        env.NEARBY_AVAILABILITY_BUDGET_MS - (Date.now() - started);
+      if (remaining <= 0 || this.closed) {
+        incomplete = true;
+        break;
+      }
+      const batch = dates.slice(i, i + 2);
+      const settled = new Map<
+        string,
+        Awaited<ReturnType<TwilioRealtimeCall['fetchOpenSlots']>> | undefined
+      >();
+      const work = Promise.all(
+        batch.map(async (candidate) => {
+          try {
+            settled.set(
+              candidate,
+              await this.fetchOpenSlots(serviceName, candidate)
+            );
+          } catch {
+            settled.set(candidate, undefined);
+          }
+        })
+      );
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        work,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, remaining);
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
+      // Pending reads may finish later, but only this snapshot can publish
+      // slots or change the offered-slot cache. Never mutate either in work.
+      for (const candidate of batch) {
+        const result = settled.get(candidate);
+        if (!result || 'notOffered' in result || 'ambiguous' in result) {
+          failedDates.push(candidate);
+          incomplete = true;
+          continue;
+        }
+        checkedDates.push(candidate);
+        if (result.slots.length && alternativeDates.length < 3) {
+          canonicalNames.set(candidate, result.service.name);
+          alternativeDates.push({
+            date: candidate,
+            slots: this.selectOfferedSlots(
+              result.slots,
+              candidate,
+              preferredTime,
+              3
+            ),
+          });
+        }
+      }
+      if (settled.size < batch.length) break;
+    }
+    if (this.closed) return null;
+    for (const alternative of alternativeDates) {
+      this.offeredSlots.set(
+        this.slotKey(canonicalNames.get(alternative.date)!, alternative.date),
+        new Set(alternative.slots.map((slot) => slot.value))
+      );
+    }
+    logger.info(
+      {
+        tool: 'suggest_availability',
+        checkedDates,
+        failedDates,
+        incomplete,
+        alternativeCount: alternativeDates.length,
+        ms: Date.now() - started,
+      },
+      'Nearby availability checked'
+    );
+    return {
+      alternativeDates,
+      nearbySearch: { through, checkedDates, failedDates, incomplete },
+    };
+  }
+
+  private async addNearbyDates<
+    T extends {
+      service: string;
+      date: string;
+      slots: Array<{ time: string; value: string }>;
+      note: string;
+    },
+  >(response: T, searchNearby = true, preferredTime?: string) {
+    if (response.slots.length) return response;
+    if (!searchNearby) {
+      return {
+        ...response,
+        note: "Explain the requested date using its hours and closure fields; never call a closed day fully booked. Respect the caller's date restriction; do not offer or ask to check other dates unless they relax it.",
+      };
+    }
+    const nearby = await this.findNearbyAvailability(
+      response.service,
+      response.date,
+      preferredTime
+    );
+    if (!nearby) return response;
+    const next = nearby.alternativeDates.length
+      ? 'Offer two or three date/time choices from alternativeDates now, respecting the time preference, then ask which works; do not ask the caller to supply another date first.'
+      : nearby.nearbySearch.incomplete
+        ? 'Nearby dates could not all be checked. Do not call them full; ask which later date the caller would like checked.'
+        : 'No openings were found through nearbySearch.through. Ask whether to look farther ahead or for a different date preference.';
+    return {
+      ...response,
+      ...nearby,
+      note: `Explain the requested date using its hours and closure fields; never call a closed day fully booked. ${next}`,
+    };
+  }
+
   private async handleSuggestAvailability(args: unknown) {
     try {
       const parsed = parseToolArgs('suggest_availability', args);
@@ -2804,6 +2989,7 @@ export class TwilioRealtimeCall {
         serviceName: string;
         date: string;
         preferredTime?: string;
+        searchNearby?: boolean;
       };
       logger.info(
         { tool: 'suggest_availability', args: payload },
@@ -2824,19 +3010,23 @@ export class TwilioRealtimeCall {
           ok: true,
           detail: { date: payload.date, offered: 0, closed: true },
         });
-        return {
-          service: payload.serviceName,
-          date: payload.date,
-          slots: [],
-          salonOpenThatDay: false,
-          hoursThatDay: hours.hoursThatDay,
-          closedRightNow: hours.closedRightNow,
-          nextOpen: hours.nextOpen,
-          ...(awayClosure
-            ? { temporaryClosure: temporaryClosureToolContext(awayClosure) }
-            : {}),
-          note,
-        };
+        return await this.addNearbyDates(
+          {
+            service: payload.serviceName,
+            date: payload.date,
+            slots: [],
+            salonOpenThatDay: false,
+            hoursThatDay: hours.hoursThatDay,
+            closedRightNow: hours.closedRightNow,
+            nextOpen: hours.nextOpen,
+            ...(awayClosure
+              ? { temporaryClosure: temporaryClosureToolContext(awayClosure) }
+              : {}),
+            note,
+          },
+          payload.searchNearby,
+          payload.preferredTime
+        );
       }
       const result = await this.fetchOpenSlots(
         payload.serviceName,
@@ -2928,39 +3118,11 @@ export class TwilioRealtimeCall {
       // below has always worked with.
       const inHours = result.slots;
 
-      // CRITICAL: don't just take the earliest N (that hid afternoon/evening
-      // slots). If the caller asked for a time, return the slots CLOSEST to it;
-      // otherwise return an even spread across the whole day so morning AND
-      // evening are represented. Hand the model { time, value } only.
-      const MAX = 10;
-      const pref = payload.preferredTime
-        ? DateTime.fromISO(`${payload.date}T${payload.preferredTime}`, {
-            zone: env.TIMEZONE,
-          })
-        : null;
-      let picked: DateTime[];
-      if (pref && pref.isValid) {
-        picked = [...inHours]
-          .sort(
-            (a, b) =>
-              Math.abs(a.toMillis() - pref.toMillis()) -
-              Math.abs(b.toMillis() - pref.toMillis())
-          )
-          .slice(0, MAX)
-          .sort((a, b) => a.toMillis() - b.toMillis());
-      } else if (inHours.length <= MAX) {
-        picked = inHours;
-      } else {
-        const step = (inHours.length - 1) / (MAX - 1);
-        picked = Array.from(
-          { length: MAX },
-          (_, i) => inHours[Math.round(i * step)]!
-        );
-      }
-      const slots = picked.map((dt) => ({
-        time: dt.toFormat('h:mm a'),
-        value: dt.toFormat('HH:mm'),
-      }));
+      const slots = this.selectOfferedSlots(
+        inHours,
+        payload.date,
+        payload.preferredTime
+      );
 
       // Remember exactly the 24h values we offered for this service+date so
       // book_appointment can reject any time we never presented as available.
@@ -3008,19 +3170,23 @@ export class TwilioRealtimeCall {
               ? 'Open that day but genuinely fully booked — say so and offer another day.'
               : 'Offer only times from slots, nearest to what the caller asked for. If they want a time not in slots, it is not open — offer the nearest listed times instead, never invent one.';
 
-      return {
-        service: result.service.name,
-        date: result.date,
-        slots, // [{ time: "1:10 PM", value: "13:10" }] — within business hours only
-        salonOpenThatDay: hours.salonOpenThatDay,
-        hoursThatDay: hours.hoursThatDay,
-        closedRightNow: hours.closedRightNow,
-        nextOpen: hours.nextOpen,
-        ...(awayClosure
-          ? { temporaryClosure: temporaryClosureToolContext(awayClosure) }
-          : {}),
-        note: stateNote,
-      };
+      return await this.addNearbyDates(
+        {
+          service: result.service.name,
+          date: result.date,
+          slots, // [{ time: "1:10 PM", value: "13:10" }] — within business hours only
+          salonOpenThatDay: hours.salonOpenThatDay,
+          hoursThatDay: hours.hoursThatDay,
+          closedRightNow: hours.closedRightNow,
+          nextOpen: hours.nextOpen,
+          ...(awayClosure
+            ? { temporaryClosure: temporaryClosureToolContext(awayClosure) }
+            : {}),
+          note: stateNote,
+        },
+        payload.searchNearby,
+        payload.preferredTime
+      );
     } catch (error) {
       logger.error(
         { tool: 'suggest_availability', error: this.formatError(error) },

@@ -11,6 +11,7 @@ export const TOOL_SCHEMAS = {
     serviceName: z.string(),
     date: z.string(),
     preferredTime: z.string().optional(),
+    searchNearby: z.boolean().optional(),
   }),
   book_appointment: z.object({
     serviceName: z.string(),
