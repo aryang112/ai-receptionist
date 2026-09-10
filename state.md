@@ -1,5 +1,33 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-10 — DEPLOYED nearby dates + eyebrow tattoo (current production)
+
+- Aryan authorized both changes together. Source `8533e61`, branch
+  `codex/nearby-dates-tattoo-2026-09-10`; Railway
+  `c71fcdd2-5ec2-4ed8-b353-bad1df386848` SUCCESS ~12:41 AM ET.
+  Rollback `0b70df6`; reopening cleanup retained. Never bulk-deploy main.
+- One entry in the existing matcher maps brow/eyebrow tattoo to full
+  Micro Blading/ Shading ($500 / 240 min), never threading or a touch-up.
+- Empty requested date searches next 7 calendar days, skips closures, returns
+  up to 3 dates, uses 2 concurrent reads and a 2.5s extra-wait budget. Real
+  service-duration/grid/hour filtering and fresh booking checks are retained.
+  Explicit date restrictions use optional searchNearby:false and are respected.
+- Main prompt: one line replaced, 1 character shorter, no added lines. Tool
+  description/result coaching supplies behavior. Warm added lookup cost ~0.3s;
+  deployed complete fallback 442ms. No extra reads when original date has slots.
+- 592 tests/51 files, build, formatting and exact-source CI passed. All 63 live
+  catalog identities preserved. Live model/audio probes passed; seven deployed
+  source hashes, real availability and restriction/reopening checks passed.
+  Health/admin good, no new warnings, full 4,187-client index. No real test call,
+  booking or owner message. First real caller use remains unobserved.
+- Evidence: `docs/reviews/NEARBY_TATTOO_RELEASE_2026-09-10.md` and
+  `outputs/nearby-2026-09-10/`. Worktree:
+  `/Users/aryangupta/Documents/Dev/ai-receptionist-nearby-2026-09-10`.
+- PENDING: booking readback/approval, broader microshading wording, reporting
+  fixes, selective main reconciliation and held PR #3 remain separate. Earlier
+  entries saying tattoo/nearby are undeployed are historical and superseded.
+
+
 ## 2026-09-09 late — DEPLOYED September 10 reopening cleanup (current production)
 
 - Aryan requested removal of the old away/closed story before September 10.
