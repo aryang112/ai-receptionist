@@ -3610,11 +3610,9 @@ export class TwilioRealtimeCall {
         // OWNER DECISION (2026-09-01): the key name and note are model-facing
         // text — a "vacations" field invites the word "vacation" aloud.
         temporaryClosures,
-        ...(temporaryClosures.length
-          ? {
-              note: "When a temporary closure affects the question, follow TEMPORARY CLOSURE POLICY and match the explanation to the caller's subject. Do not invent anyone's whereabouts.",
-            }
-          : {}),
+        note: temporaryClosures.length
+          ? "When a temporary closure affects the question, follow TEMPORARY CLOSURE POLICY and match the explanation to the caller's subject. Do not invent anyone's whereabouts."
+          : 'Use the regular hours and CURRENT STATUS. If the caller refers to a previous closure, clarify the current hours and whether Richa can take a call; do not speculate about the reason for past closures.',
       };
 
       logger.info(

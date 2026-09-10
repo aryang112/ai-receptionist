@@ -35,7 +35,8 @@ describe('September 10 reopening', () => {
   it('removes the expired notice and closure coaching at Eastern midnight', async () => {
     const hours = await hoursAt('2026-09-10T04:00:00Z');
     expect(hours.temporaryClosures).toEqual([]);
-    expect(hours).not.toHaveProperty('note');
+    expect(hours.note).toContain('CURRENT STATUS');
+    expect(hours.note).not.toContain('TEMPORARY CLOSURE POLICY');
     expect(JSON.stringify(hours)).not.toMatch(/Richa is away|2026-09-0[19]/);
     expect(hours.thursday).toBe('12:00-19:00');
     expect(hours.sunday).toBe('Closed');
