@@ -43,6 +43,8 @@ const TOKEN_SYNONYMS: Record<string, string> = {
 // Keys and values are compared AFTER normalization (see normalize()), so they
 // must themselves be in normalized form (lowercase, alnum, single-spaced).
 const SERVICE_ALIASES: Record<string, string> = {
+  // Owner-approved salon wording for the full treatment, not a touch-up.
+  'brow tattoo': 'micro blading shading',
   'lash lamination': 'lash lift',
   'lash laminations': 'lash lift',
   'lash laminate': 'lash lift',
