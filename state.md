@@ -1,5 +1,28 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-09 late — DEPLOYED September 10 reopening cleanup (current production)
+
+- Aryan requested removal of the old away/closed story before September 10.
+  Main prompt already expires that dated notice at midnight Eastern; fixed the
+  hours tool's separate leak of expired closure records and public reasons.
+- Exact production source `0b70df6`, branch `codex/reopening-cleanup-2026-09-09`;
+  Railway `24184059-17cf-4ba1-a80d-92aab7684013` SUCCESS about 11:44 PM ET.
+  Rollback `bc39b09`; source branch pushed. Five container hashes match release.
+- September 10: no expired notice in generated current-status prompt or hours
+  result; salon noon–7 PM, transfer eligibility 9 AM–9 PM. Both midnight and
+  normal daytime boundaries verified against compiled deployed code in an
+  isolated diagnostic process. No midnight restart required for new calls.
+- 572 tests / 49 files, build and formatting passed. Live-model checks returned
+  tomorrow's correct hours and used simulated transfer; no real test call or SMS.
+  Zero active calls before clean-archive deployment; health/admin 200 and zero
+  new warnings, complete 4,187-client index. business.json, session/model/voice,
+  base prompt, matching, booking and transfer code unchanged.
+- Release evidence and limitations: `docs/reviews/REOPENING_RELEASE_2026-09-10.md`.
+  Isolated worktree: `/Users/aryangupta/Documents/Dev/ai-receptionist-reopening-2026-09-09`.
+- Pending: eyebrow-tattoo alias remains an UNDEPLOYED separate candidate;
+  nearby-date search remains design only. Booking approval and reporting fixes,
+  selective main reconciliation, and held PR #3 remain separate. Never bulk-deploy main.
+
 ## 2026-09-08 — DEPLOYED focused brow/lash synonyms (current production)
 
 - Aryan explicitly requested production deployment. Exact source `fcee0d8` on

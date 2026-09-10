@@ -1,5 +1,10 @@
 # CODEMAP — AI Receptionist (Erica)
 
+Current production: `0b70df6`, branch `codex/reopening-cleanup-2026-09-09`,
+Railway `24184059-17cf-4ba1-a80d-92aab7684013`, September 9 ~11:44 PM ET.
+See [reopening release](reviews/REOPENING_RELEASE_2026-09-10.md). Older production
+references below are historical; main application code remains unreleased.
+
 Orientation map so agents don't have to scan every file. See `state.md` for status
 and `tasks/lessons.md` for the gotchas.
 
