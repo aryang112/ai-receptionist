@@ -3583,6 +3583,20 @@ export class TwilioRealtimeCall {
         'Tool called: get_business_hours'
       );
 
+      // Expired closures must not reintroduce an old away notice after the
+      // date-dependent system prompt has already returned to normal hours.
+      const todayISO = DateTime.now().setZone(env.TIMEZONE).toISODate() ?? '';
+      const temporaryClosures = (businessHours.vacations ?? [])
+        .filter((v) => v.to >= todayISO)
+        .map((v) => ({
+          from: v.from,
+          through: v.to,
+          reopens: DateTime.fromISO(v.to, { zone: env.TIMEZONE })
+            .plus({ days: 1 })
+            .toISODate(),
+          publicExplanation: sanitiseClosurePublicExplanation(v.note),
+        }));
+
       const formattedHours = {
         monday: businessHours.hours.mon.join(', ') || 'Closed',
         tuesday: businessHours.hours.tue.join(', ') || 'Closed',
@@ -3595,15 +3609,12 @@ export class TwilioRealtimeCall {
         address: `${businessHours.location.address}, ${businessHours.location.city}, ${businessHours.location.state} ${businessHours.location.zip}`,
         // OWNER DECISION (2026-09-01): the key name and note are model-facing
         // text — a "vacations" field invites the word "vacation" aloud.
-        temporaryClosures: (businessHours.vacations ?? []).map((v) => ({
-          from: v.from,
-          through: v.to,
-          reopens: DateTime.fromISO(v.to, { zone: env.TIMEZONE })
-            .plus({ days: 1 })
-            .toISODate(),
-          publicExplanation: sanitiseClosurePublicExplanation(v.note),
-        })),
-        note: "When a temporary closure affects the question, follow TEMPORARY CLOSURE POLICY and match the explanation to the caller's subject. Do not invent anyone's whereabouts.",
+        temporaryClosures,
+        ...(temporaryClosures.length
+          ? {
+              note: "When a temporary closure affects the question, follow TEMPORARY CLOSURE POLICY and match the explanation to the caller's subject. Do not invent anyone's whereabouts.",
+            }
+          : {}),
       };
 
       logger.info(
