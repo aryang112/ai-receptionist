@@ -29,11 +29,11 @@ Workers post their own `tasks/handoffs/<role>.md` with decisions, files, test ev
 
 - [x] Verified production baseline and isolated worktree.
 - [x] P0 simulated side-effect boundary.
-- [ ] P1 Live adapter, prompts, actual API and audio checks.
+- [x] P1 Live adapter, prompts, actual API and synthetic audio checks (human listening pending).
 - [x] P2 caller context.
 - [x] P3 canonical service IDs.
 - [x] P4 simulated proposals/messages and evidence.
-- [ ] P5 hosted owner-ready test and comparison evidence (human acceptance pending).
+- [x] P5 hosted owner-ready test and comparison evidence (human acceptance pending).
 
 ## Integration review and real-model findings
 
@@ -45,3 +45,11 @@ Workers post their own `tasks/handoffs/<role>.md` with decisions, files, test ev
 - New authenticated bearer-only /admin/voice-test endpoints switch idle calls among Terra, Luna and Realtime and reset the simulated overlay. Settings are in-memory and restart returns to deployment defaults.
 - Test records have separate admin test views and are excluded from normal ROI/digests; optional post-call Responses summaries are completely suppressed in test mode.
 - Before deployment, actual Railway runtime is still the recorded 8533e61 release. Twilio has no in-progress calls; its number still points to the existing Railway webhook. External forwarding is not changed.
+
+## Completed engineering handoff — September 12
+
+- Final validation: 662 tests / 61 files, TypeScript build and whitespace checks pass.
+- Runtime `254499c` deployed as Railway `8d932448-3b96-4c7d-9bca-40ed46aa6519`; six local/container hashes agree. Documentation-only commits after this source do not require another release.
+- Hosted synthetic Terra, Luna and Realtime comparisons all quoted the correct $23 brow/lip bundle. Default restored to Terra; simulated overlay reset; zero active calls; two approved callers. Unauthorized variant requests and unapproved callers rejected.
+- Ten normal synthetic greeting probes include recording disclosure; direct hours uses no backend; seven-second read delay recovers; bare Richa availability asks appointment vs. speaking clarification. Closing has explicit farewell evidence and playback drain guards. Final repeated partial goodbye fragment remains NEEDS LISTEN.
+- Owner handset/speakerphone acceptance remains pending. No real booking, SMS, transfer, or unsolicited owner call was made. Release report and guide contain the remaining scenarios and limitations.

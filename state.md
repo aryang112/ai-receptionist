@@ -1,15 +1,15 @@
 # STATE — AI Receptionist (Erica)
 
-## 2026-09-12 — GPT-Live owner taste-test implementation (active)
+## 2026-09-12 — GPT-Live owner taste test DEPLOYED; owner listening pending
 
 - Aryan authorized implementation, agent delegation and deployment. Worktree `/Users/aryangupta/Documents/Dev/ai-receptionist-live-2026-09-12`, branch `codex/gpt-live-taste-test`, derived from verified Railway production `8533e61`. Do not deploy the dirty main checkout.
 - Implemented Live adapter, split Live/backend prompts, Terra/Luna/Realtime idle-call switching, real Phorest reads with a process-wide simulated-write overlay, canonical service IDs, call-scoped prepare/confirm proposals, background caller context, isolated test telemetry, and a strict owner/tester allowlist.
 - No test appointment writes, messages, transfers, blocklist changes, digests or post-call summary model calls reach real side effects. Recording and ending an admitted test phone call remain real.
 - Current engineering validation: 662 tests across 61 files and TypeScript build pass. Actual API probes have exercised both backend models, bundle selection, real availability, direct hours, a seven-second tool stall and greeting interruption. Ten normal greeting probes all contain disclosure in their transcript; first speech 1.46–1.84 seconds. Audio/handset quality still needs owner listening.
-- Found and corrected early contact collection and the bare Richa-availability ambiguity. Closing required a distinct Live path: do not treat a backchannel as a farewell, do not force a duplicate farewell, wait for actual playback and abort if the caller speaks again. Final model recheck is running.
-- Railway next-deployment settings have been prepared with simulation, Live+Terra, and two explicit owner/tester numbers. No active calls were present. Deployment evidence will be appended after verification; do not infer deployment from this entry.
+- Found and corrected early contact collection and the bare Richa-availability ambiguity. Closing required a distinct Live path: do not treat a backchannel as a farewell, do not force a duplicate farewell, wait for actual playback and abort if the caller speaks again. Final synthetic closing check ended after playback drain; a partial repeated goodbye fragment remains NEEDS LISTEN.
+- Deployed runtime source `254499c` in Railway release `8d932448-3b96-4c7d-9bca-40ed46aa6519` (SUCCESS, September 12, approximately 2:27 PM ET). Six running source/build hashes match local. Hosted Terra, Luna and Realtime synthetic price checks all returned $23. Final status: Live+Terra, zero active calls, simulation enabled, two approved callers. Unauthorized admin switching returns 401; a signed unlisted incoming caller is rejected. Twilio webhook and external forwarding unchanged.
 - Durable handoffs: `tasks/coordination.md`, `tasks/handoffs/`. Owner scenarios: `docs/GPT_LIVE_OWNER_TASTE_TEST_GUIDE_2026-09-12.md`.
-- PENDING: finish hosted verification, report exact deployed release and test instructions; owner compares handset/speakerphone Terra, Luna and Realtime. Customer intake and real writes remain disabled until a separate acceptance decision.
+- Release evidence: `docs/reviews/GPT_LIVE_OWNER_TEST_RELEASE_2026-09-12.md`. PENDING: owner compares handset/speakerphone Terra, Luna and Realtime. Customer intake and real writes remain disabled until a separate acceptance decision.
 
 ## 2026-09-09 late — DEPLOYED September 10 reopening cleanup (current production)
 

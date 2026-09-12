@@ -1,19 +1,32 @@
 # Owner guide: compare Terra, Luna, and Realtime by phone
 
-Use this guide after the taste-test deployment and test line are confirmed ready. It is a call script and scorecard, not a report that any version has been deployed, tested, or heard by the owner.
+The owner-only taste test is deployed and ready as of September 12. Live + Terra is the default; Live + Luna and Realtime can be selected between calls. Hosted synthetic checks passed for all three. The owner has not yet completed the phone listening test. See [release evidence](reviews/GPT_LIVE_OWNER_TEST_RELEASE_2026-09-12.md).
 
 The comparison is between **Live + Terra**, **Live + Luna**, and the current **Realtime** version. Use the same approved test caller, test account, service names, requested date and time window, and spoken wording for all three. The Live variants use the same tools and salon policies; only the backend model changes. Realtime stays in the comparison as the current product baseline.
 
 ## Before calling
 
-Run the calls on the isolated taste-test deployment while customer intake is disabled. Its Twilio voice endpoint must point to that deployment. Do not point the public customer line at a test variant.
+The existing Erica Railway service now hosts the test build, with a strict allowlist of two owner/tester numbers. Customer intake remains disabled; the Twilio webhook and external forwarding were not changed. Call Erica’s existing number ending **6449** from an approved test phone. An operator can also use the explicit owner-call script when you are ready; no call was placed to you during implementation.
+
+The quickest operator controls, from `/Users/aryangupta/Documents/Dev/ai-receptionist-live-2026-09-12`, are:
+
+```sh
+node scripts/gpt-live/select-variant.mjs
+node scripts/gpt-live/select-variant.mjs terra
+node scripts/gpt-live/select-variant.mjs luna
+node scripts/gpt-live/select-variant.mjs realtime
+```
+
+The first command reads status; each subsequent command selects the next call’s version and resets simulated changes. These scripts load the existing local admin credentials without displaying them. Restore `terra` after comparison. For an explicitly requested callback, use `node scripts/gpt-live/owner-call.mjs +1XXXXXXXXXX` with the approved tester’s actual number.
+
+For a quick first taste, ask today’s hours, request eyebrow threading plus upper lip threading on a specific future date, ask “Is Richa available?”, and then say goodbye. Follow with the full comparison below.
 
 An operator with the admin token should check the test status first:
 
 ```sh
 curl --fail-with-body -sS \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  https://<TEST_HOST>/admin/voice-test
+  https://erica-production-f2e2.up.railway.app/admin/voice-test
 ```
 
 Continue only when `enabled` is `true`, `writes` is `simulate`, `ownerNotifications` is `simulate`, `activeCalls` is `0`, and `allowedCallerCount` is greater than zero. The status response reports a count, not the allowed phone numbers. Only call from an approved test number. In simulation mode, calls from numbers outside the allowlist are rejected.
@@ -25,7 +38,7 @@ curl --fail-with-body -sS -X POST \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"variant":"terra"}' \
-  https://<TEST_HOST>/admin/voice-test/variant
+  https://erica-production-f2e2.up.railway.app/admin/voice-test/variant
 ```
 
 Repeat with `"luna"` and `"realtime"`. Check that the response names the intended engine/model and says `overlayReset: true`. The setting is in memory only: after a process restart it returns to the deployment's environment defaults, and the simulated overlay is empty. An empty allowlist rejects every taste-test caller.
@@ -53,7 +66,11 @@ Score each version after reviewing the phone audio. Use **P** for pass, **F** fo
 | 7   | **Simulated message, goodbye, and interruption.** Use made-up test wording: “Please tell Richa I’ll call her tomorrow.” After the acknowledgement, start the goodbye, then interrupt with: “Actually, what time do you close today?” | The message result is acknowledged truthfully without claiming an SMS was sent. Erica yields to the new question, answers it, and does not clip or repeat the goodbye. Confirm in the test record that no owner SMS or transfer occurred.                                                                                 | NR    | NR   | NR       |                  |
 | 8   | **Safe tool failure/no match.** “Do you offer a dragon manicure?”                                                                                                                                                                    | Erica uses the available service lookup if needed, says the salon cannot confirm or offer that service when the result has no match, and does not substitute an unrelated service or start a booking.                                                                                                                     | NR    | NR   | NR       |                  |
 
-The variant endpoint does not inject a provider outage or force a tool error. Scenario 8 is the safe no-match recovery check, not proof of behavior during a network outage. Do not try to create a real Phorest failure or use a booking action to test failure handling. A true transient tool-failure replay stays unscored until an operator provides a controlled, read-only failure method.
+The variant endpoint does not inject a provider outage or force a tool error. Scenario 8 is the safe no-match recovery check, not proof of behavior during a network outage. Do not try to create a real Phorest failure or use a booking action to test failure handling. A local synthetic check with a controlled seven-second read delay recovered successfully. The harness supports `PROBE_STALL_MS`; this is not an owner phone control and does not prove recovery from every provider outage.
+
+## Known listening item
+
+One final synthetic goodbye check ended safely after output drained but its approximate transcript contained “Goodb- Goodbye, and take care.” Replay and score farewell fluency, especially when interrupting. Do not treat transcript evidence as proof that speech was unclipped. Complex paired appointments and identity changes also remain owner acceptance scenarios.
 
 ## Phone listening is required
 
