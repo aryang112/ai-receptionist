@@ -307,3 +307,14 @@ warning/cap hangup · `📨` owner SMS accepted (warn lines: skipped/failed/unce
 `🚫` blocked spam caller (webhook reject) · "Transfer suppressed — temporary
 salon closure is active" · "rejected — time no longer available on fresh
 re-check" (A1).
+
+## GPT-Live owner taste-test path (September 12, 2026)
+
+- `src/voice/liveSession.ts`, `liveProtocol.ts`, `mulawAudio.ts`: continuous Live transport, delegated tools, usage snapshots, approximate fragments and bounded pacing/close.
+- `src/voice/livePrompts.ts`: public speech prompt and policy/catalog backend prompt.
+- `src/voice/appointmentProposals.ts`: simulated prepare/confirm and per-call retry deduplication.
+- `src/voice/testAccess.ts`, `testControl.ts`, `src/routes/voiceTest.ts`: allowed callers and authenticated idle variant switches/reset.
+- `src/services/phorest.simulated.ts`: real-read/simulated-write overlay including client/read continuity.
+- `src/services/liveTestTelemetry.ts`: voice seconds plus deduplicated backend costs; test-only admin view via `?testView=true`.
+- `scripts/gpt-live/controller-probe.mjs`: actual-model synthetic audio through local controller or authenticated hosted WebSocket. Not a carrier/handset test.
+- `scripts/gpt-live/select-variant.mjs`, `owner-call.mjs`: operator comparison controls and explicitly invoked owner call.

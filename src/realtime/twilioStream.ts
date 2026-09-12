@@ -866,7 +866,7 @@ export function liveToolDefinitions(): ToolDefinition[] {
       return {
         ...tool,
         description:
-          'After the Live speech model has said one short farewell or spam decline, close the phone call silently. Call this alone only when the caller is clearly done or the call is clear spam. The application drains current speech playback before hanging up. An ending:true result means produce no further speech or text. Never close mid-task or for silence alone.',
+          'Close the phone connection when the caller clearly says they are done, or for clear spam. Call this alone. Follow its note: if it requests a farewell, give exactly that one closing line; otherwise emit no further speech or text. The application waits for speech playback before hanging up. Never close mid-task or for silence alone.',
       };
     if (tool.name !== 'leave_message_for_owner') return tool;
     return {
@@ -1211,6 +1211,7 @@ export class TwilioRealtimeCall {
   private releaseVoiceCall: (() => void) | undefined;
   private liveOutputActive = false;
   private liveLastOutputStartedAt = 0;
+  private liveClosingText: Array<{ ts: number; text: string }> = [];
   private liveOutputCommittedClosed = false;
   private markSequence = 0;
   private readonly proposals = new AppointmentProposals(
@@ -1673,6 +1674,12 @@ export class TwilioRealtimeCall {
     fragment: { delta: string; startMs?: number; endMs?: number }
   ) {
     if (!fragment.delta) return;
+    if (role === 'erica') {
+      this.liveClosingText.push({ ts: Date.now(), text: fragment.delta });
+      this.liveClosingText = this.liveClosingText.filter(
+        (part) => Date.now() - part.ts < 15000
+      );
+    }
     const previous = this.transcript[this.transcript.length - 1];
     if (previous?.role === role && Date.now() - previous.ts < 2000)
       previous.text += fragment.delta;
@@ -1682,6 +1689,18 @@ export class TwilioRealtimeCall {
       ...fragment,
       approximate: true,
     });
+  }
+
+  private liveHasCurrentFarewell(): boolean {
+    const text = this.liveClosingText
+      .filter((part) => part.ts >= this.lastCallerSpeechStoppedAt)
+      .map((part) => part.text)
+      .join('');
+    // A backchannel such as "okay" is not a farewell. This conservative check
+    // supplements audio/mark evidence; a miss leaves the phone open safely.
+    return /\b(?:goodbye|bye|take care|have a (?:good|great|nice|lovely) (?:day|evening|night|weekend))\b/i.test(
+      text
+    );
   }
 
   private async handleLiveMessage(args: unknown) {
@@ -5185,6 +5204,20 @@ export class TwilioRealtimeCall {
       });
       return { status: 'aborted' };
     }
+    if (
+      this.voiceEngine === 'live' &&
+      opts?.modelRequestedClose &&
+      !this.liveHasCurrentFarewell()
+    ) {
+      this.transferring = false;
+      CallStore.recordToolCall(this.callSid, {
+        name: 'end_call',
+        ok: false,
+        error:
+          'Live close aborted: no current farewell transcript evidence after playback',
+      });
+      return { status: 'aborted' };
+    }
     // Caller interrupted the goodbye ("oh wait—") → the barge-in cleared the
     // mark queue, which is why the drain resolved. Don't hang up on them.
     // (opts.ignoreBargeIn: the duration cap's FINAL attempt hangs up
@@ -5308,49 +5341,42 @@ export class TwilioRealtimeCall {
         (this.liveOutputActive ||
           this.markQueue.length > 0 ||
           Date.now() - this.liveLastOutputStartedAt < 10000);
-      if (!recentCurrentSpeech) {
-        CallStore.recordToolCall(this.callSid, {
-          name: 'end_call',
-          ok: false,
-          error: 'Live close aborted: no current farewell audio segment',
-        });
-        return {
-          aborted: true,
-          note: 'Give one brief farewell if the caller is done, then delegate the close again. Do not hang up silently.',
-        };
-      }
-      const epoch = this.callerSpeechEpoch;
-      const previousOutcome = this.outcome;
-      this.modelEndCallPending = true;
-      this.modelEndCallTimer = setTimeout(() => {
-        this.modelEndCallTimer = undefined;
-        if (this.closed || this.callerSpeechEpoch !== epoch) {
-          this.modelEndCallPending = false;
-          return;
-        }
-        if (reason === 'spam') this.outcome = 'spam';
-        void this.endCallNow(
-          reason === 'spam' ? 'spam decline' : 'caller confirmed done',
-          { modelRequestedClose: true, speechEpochAtRequest: epoch }
-        )
-          .then((result) => {
-            if (result.status !== 'ended') {
+      if (recentCurrentSpeech && this.liveHasCurrentFarewell()) {
+        const epoch = this.callerSpeechEpoch;
+        const previousOutcome = this.outcome;
+        this.modelEndCallPending = true;
+        this.modelEndCallTimer = setTimeout(() => {
+          this.modelEndCallTimer = undefined;
+          if (this.closed || this.callerSpeechEpoch !== epoch) {
+            this.modelEndCallPending = false;
+            return;
+          }
+          if (reason === 'spam') this.outcome = 'spam';
+          void this.endCallNow(
+            reason === 'spam' ? 'spam decline' : 'caller confirmed done',
+            { modelRequestedClose: true, speechEpochAtRequest: epoch }
+          )
+            .then((result) => {
+              if (result.status !== 'ended') {
+                if (reason === 'spam') this.outcome = previousOutcome;
+                this.modelEndCallPending = false;
+                this.liveOutputCommittedClosed = false;
+              }
+            })
+            .catch(() => {
               if (reason === 'spam') this.outcome = previousOutcome;
               this.modelEndCallPending = false;
+              this.transferring = false;
               this.liveOutputCommittedClosed = false;
-            }
-          })
-          .catch(() => {
-            if (reason === 'spam') this.outcome = previousOutcome;
-            this.modelEndCallPending = false;
-            this.transferring = false;
-            this.liveOutputCommittedClosed = false;
-          });
-      }, 0);
-      return {
-        ending: true,
-        note: 'The farewell has been spoken. Emit no further speech or text; the application will close after playback drains.',
-      };
+            });
+        }, 0);
+        return {
+          ending: true,
+          note: 'The farewell has been spoken. Emit no further speech or text; the application will close after playback drains.',
+        };
+      }
+      // No current spoken farewell: the normal post-tool audio wait below
+      // asks for exactly one and refuses a silent hangup if none arrives.
     }
 
     // AUDIT FIX (2026-08-22, P1): remember the pre-spam outcome so an ABORTED

@@ -488,3 +488,12 @@ Full evidence: `docs/GPT_LIVE_1_EVALUATION_2026-09-10.md`; probes: `scripts/gpt-
   Live probes still produced lookup narration after multiple prompt refinements.
   Keep failing evidence, report the gap, and never claim it fixed or deploy on
   green unit tests alone. See the isolated focused-cleanup candidate review.
+
+## 2026-09-12 — Live migration findings
+
+- Live continuous audio includes silence and lacks Realtime response completion. Do not mark every frame or use the first empty mark queue as utterance completion. Keep unique segment marks plus acoustic output state; preserve the stream on native interruptions rather than clear-and-resume.
+- Closing a phone call is a backend action. A spoken goodbye alone may not trigger delegation. State that capability explicitly and test natural closing phrases against the real API. A current audio segment may only be “okay”; it is not farewell evidence. Avoid duplicate post-tool farewells when one already played, and fail open when current farewell/playback evidence is missing.
+- Caller context is backend-only, preserved whole. Loading, lookup failure and a clean miss are different states. Do not truncate away identity/privacy rules to fit Live's small frontend append limit.
+- Transfer eligibility means a permitted dialing window, not proof Richa is personally available. Keep that internal flag out of Live's public facts; clarify a bare availability question.
+- Simulation must guard optional post-call Responses summaries before any model request, as well as SMS, digest, blocklist and emergency transfer paths.
+- Use a fixed built artifact for actual-model probes; compiling a worker's half-edited file can produce a transient runtime failure. Check build exit status, not a piped tail status.

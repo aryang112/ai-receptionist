@@ -135,11 +135,13 @@ describe('GPT-Live native end_call', () => {
     call.voiceEngine = 'live';
     call.lastCallerSpeechStoppedAt = Date.now() - 4_000;
     call.liveLastOutputStartedAt = Date.now();
+    call.liveClosingText = [{ ts: Date.now(), text: 'Take care.' }];
     call.liveOutputActive = active;
     call.markQueue = active ? [] : ['live-1'];
   }
 
-  it('aborts when no current farewell segment exists', async () => {
+  it('waits for a requested farewell and refuses a silent hangup when none arrives', async () => {
+    vi.useFakeTimers();
     const { call } = buildCall();
     call.voiceEngine = 'live';
     call.lastCallerSpeechStoppedAt = Date.now();
@@ -147,10 +149,24 @@ describe('GPT-Live native end_call', () => {
 
     const result = await call.handleEndCall({ reason: 'done' });
 
-    expect(result).toMatchObject({ aborted: true });
+    expect(result).toMatchObject({ ending: true });
+    expect(call.modelEndCallPending).toBe(true);
+    await vi.advanceTimersByTimeAsync(15000);
     expect(call.modelEndCallPending).toBe(false);
     expect(call.session.requestResponse).not.toHaveBeenCalled();
     expect(call.closed).toBe(false);
+  });
+
+  it('does not mistake a current okay backchannel for the farewell', async () => {
+    vi.useFakeTimers();
+    const { call } = buildCall();
+    stageCurrentFarewell(call, false);
+    call.liveClosingText = [{ ts: Date.now(), text: 'Okay.' }];
+    const result = await call.handleEndCall({ reason: 'done' });
+    expect(result).toMatchObject({ ending: true });
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(call.closed).toBe(false);
+    expect(call.modelEndCallPending).toBe(false);
   });
 
   it('drains the current farewell and closes without requesting a second response', async () => {

@@ -109,30 +109,24 @@ describe('Live speech prompt', () => {
     const backendPrompt = buildBackendPrompt(instructions, CATALOG);
 
     expect(livePrompt).toContain(
-      'When the caller clearly says they are done, say one short, warm farewell, then delegate the done-close to the backend'
+      'Ending the phone connection is an application action: always delegate'
     );
-    expect(livePrompt).toContain(
-      'For clear spam, say one short, polite decline and farewell, then delegate the spam-close'
-    );
+    expect(livePrompt).toContain('For clear spam, delegate the spam-close');
     expect(backendPrompt).toContain(
-      "call end_call({reason:'done'}) for a caller who is clearly done"
+      "Call end_call({reason:'done'}) for a caller who is clearly done"
     );
+    expect(backendPrompt).toContain("end_call({reason:'spam'}) for clear spam");
+    expect(backendPrompt).toContain('Do not generate a pre-tool farewell');
+    expect(backendPrompt).toContain('Follow the result note');
     expect(backendPrompt).toContain(
-      "end_call({reason:'spam'}) for clear spam"
-    );
-    expect(backendPrompt).toContain(
-      'After Live has spoken the single closing line'
-    );
-    expect(backendPrompt).toContain(
-      'This is a silent terminal action'
-    );
-    expect(backendPrompt).toContain(
-      'If the result says ending:true, emit no speech or text'
+      'otherwise ending:true means emit no speech or text'
     );
     expect(backendPrompt).toContain(
       'Live gives one polite decline and farewell'
     );
-    expect(backendPrompt).not.toContain('tool result owns the only closing line');
+    expect(backendPrompt).not.toContain(
+      'tool result owns the only closing line'
+    );
     expect(backendPrompt).toContain(
       'not call end_call mid-task or for silence alone'
     );
