@@ -129,3 +129,82 @@ describe('GPT-Live Twilio control boundaries', () => {
     expect(resolved).toBe(true);
   });
 });
+
+describe('GPT-Live native end_call', () => {
+  function stageCurrentFarewell(call: any, active: boolean) {
+    call.voiceEngine = 'live';
+    call.lastCallerSpeechStoppedAt = Date.now() - 4_000;
+    call.liveLastOutputStartedAt = Date.now();
+    call.liveOutputActive = active;
+    call.markQueue = active ? [] : ['live-1'];
+  }
+
+  it('aborts when no current farewell segment exists', async () => {
+    const { call } = buildCall();
+    call.voiceEngine = 'live';
+    call.lastCallerSpeechStoppedAt = Date.now();
+    call.liveLastOutputStartedAt = Date.now() - 1_000;
+
+    const result = await call.handleEndCall({ reason: 'done' });
+
+    expect(result).toMatchObject({ aborted: true });
+    expect(call.modelEndCallPending).toBe(false);
+    expect(call.session.requestResponse).not.toHaveBeenCalled();
+    expect(call.closed).toBe(false);
+  });
+
+  it('drains the current farewell and closes without requesting a second response', async () => {
+    vi.useFakeTimers();
+    const { call } = buildCall();
+    stageCurrentFarewell(call, false);
+
+    const result = await call.handleEndCall({ reason: 'done' });
+    expect(result).toMatchObject({ ending: true });
+    expect(call.session.requestResponse).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(call.transferring).toBe(true);
+    await call.handleMessage(
+      Buffer.from(JSON.stringify({ event: 'mark', mark: { name: 'live-1' } }))
+    );
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(call.closed).toBe(true);
+    expect(call.session.requestResponse).not.toHaveBeenCalled();
+    expect(call.session.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts when the caller starts a new turn during farewell drain', async () => {
+    vi.useFakeTimers();
+    const { call } = buildCall();
+    stageCurrentFarewell(call, true);
+
+    await call.handleEndCall({ reason: 'done' });
+    await vi.advanceTimersByTimeAsync(0);
+    call.handleCallerSpeechStarted();
+    call.handleCallerSpeechStopped();
+    call.liveOutputActive = false;
+    call.markQueue = [];
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(call.closed).toBe(false);
+    expect(call.transferring).toBe(false);
+    expect(call.modelEndCallPending).toBe(false);
+    expect(call.liveOutputCommittedClosed).toBe(false);
+  });
+
+  it('leaves the call open when Live playback does not drain by the cap', async () => {
+    vi.useFakeTimers();
+    const { call } = buildCall();
+    stageCurrentFarewell(call, true);
+
+    await call.handleEndCall({ reason: 'done' });
+    await vi.advanceTimersByTimeAsync(6_050);
+
+    expect(call.closed).toBe(false);
+    expect(call.transferring).toBe(false);
+    expect(call.modelEndCallPending).toBe(false);
+    expect(call.liveOutputCommittedClosed).toBe(false);
+    expect(call.session.close).not.toHaveBeenCalled();
+  });
+});
