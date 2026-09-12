@@ -1,0 +1,13 @@
+# Live prompt builder handoff
+
+Implemented the isolated prompt builders in `src/voice/livePrompts.ts` without importing the controller. The Live prompt accepts the released rendered instructions, a `Service[]`, and a context whose `publicFacts` are limited to public salon facts plus a greeting mode. It includes the named backchannel, interruption, and delegation policies; straightforward hours/address/current-status answers are direct, while account and appointment work is delegated. The normal render is below the 900-token starting budget.
+
+The backend builder filters the Realtime greeting, audio-turn/VAD-related behavior, preamble instructions, and function-only goodbye mechanism, while retaining salon scope, privacy, closure facts, retry policy, and caller identity rules. New bookings resolve the requested service/date and offer public availability before collecting contact details. Reschedule/cancel still require verified identity before appointment reads. Phone consent remains a separate turn before missing name parts. Name/contact answers do not approve a write.
+
+For appointment changes the prompt follows the parent contract: prepare with `{ action, arguments }`, return/read back the proposal summary, wait for approval of that exact proposal, then confirm with `{ proposalId, confirmed: true }`. It prepares one appointment action at a time and calls no raw write tool. The catalog prints canonical ID, name, price, duration, and aliases when the caller supplies alias metadata on a service or through `BackendPromptContext.serviceAliases`; the current `Service` contract does not itself provide aliases, so integration must pass that metadata to retain them.
+
+The renderer is `scripts/render-live-prompts.ts`; it reads the salon catalog and current rendered production instructions, and is run with `node --env-file=.env --import tsx scripts/render-live-prompts.ts`. I did not execute it because it makes a real Phorest read; `npm run build` compiles it. No Live API probe, write, call, deployment, or prompt behavior guarantee is claimed.
+
+Validation: `npx vitest run src/tests/livePrompts.test.ts` (8 passed), `npm run build`, and full `npm test` (642 passed / 58 files). A SHA-256 snapshot test confirms the released Realtime prompt renders unchanged before and after extraction.
+
+Owned files: `src/voice/livePrompts.ts`, `src/tests/livePrompts.test.ts`, `scripts/render-live-prompts.ts`, and this handoff.
