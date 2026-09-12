@@ -88,12 +88,18 @@ export type ServiceMatch =
 //      matched-token ratio (tie-break: shortest name)
 // If the top two scored candidates are close and different -> ambiguous.
 // If nothing scores -> notOffered with the closest few (by shared-token count).
-export async function resolveService(name: string, serviceId?: string): Promise<ServiceMatch> {
+export async function resolveService(
+  name: string,
+  serviceId?: string
+): Promise<ServiceMatch> {
   const services = await phorest.listServices();
   if (serviceId) {
     const service = services.find((entry) => entry.id === serviceId);
-    if (!service) throw new Error("Unknown service ID; refresh the catalog before trying again");
-    return { kind: "match", service };
+    if (!service)
+      throw new Error(
+        'Unknown service ID; refresh the catalog before trying again'
+      );
+    return { kind: 'match', service };
   }
   const q = normalize(name);
   if (!q) return { kind: 'notOffered', closest: services.slice(0, 3) };

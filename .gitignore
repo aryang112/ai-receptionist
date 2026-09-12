@@ -7,3 +7,6 @@ dist/
 logs.md
 data/
 *.jsonl
+
+# Also ignore a local dependency symlink in isolated worktrees.
+node_modules

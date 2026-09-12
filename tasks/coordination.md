@@ -28,9 +28,20 @@ Workers post their own `tasks/handoffs/<role>.md` with decisions, files, test ev
 ## Progress
 
 - [x] Verified production baseline and isolated worktree.
-- [ ] P0 simulated side-effect boundary.
+- [x] P0 simulated side-effect boundary.
 - [ ] P1 Live adapter, prompts, actual API and audio checks.
-- [ ] P2 caller context.
-- [ ] P3 canonical service IDs.
-- [ ] P4 simulated proposals/messages and evidence.
+- [x] P2 caller context.
+- [x] P3 canonical service IDs.
+- [x] P4 simulated proposals/messages and evidence.
 - [ ] P5 hosted owner-ready test and comparison evidence (human acceptance pending).
+
+## Integration review and real-model findings
+
+- Full source suite at milestone: 655 tests, 61 files, TypeScript build passing.
+- Both Terra and Luna have completed actual Live backend delegations through the full controller and real read-only Phorest. Terra resolved the brow/lip bundle and offered real dates/times; Luna quoted its $23 price. Hours answered directly without backend usage.
+- Fixed observed premature contact collection before availability. Goodbye-only probe exposed missing frontend delegation; prompt worker is correcting it before final phone checks.
+- Live keeps its continuous stream during interruption; it does not clear Twilio then resume the same segment. Acoustic segment boundaries plus unique Twilio marks govern playback; these are not proof of complete semantic turns.
+- Caller account context goes only to backend; loading, clean miss and failed lookup remain distinct. Raw transcript fragments retain timing offsets and are approximate; simulated messages are model-relayed.
+- New authenticated bearer-only /admin/voice-test endpoints switch idle calls among Terra, Luna and Realtime and reset the simulated overlay. Settings are in-memory and restart returns to deployment defaults.
+- Test records have separate admin test views and are excluded from normal ROI/digests; optional post-call Responses summaries are completely suppressed in test mode.
+- Before deployment, actual Railway runtime is still the recorded 8533e61 release. Twilio has no in-progress calls; its number still points to the existing Railway webhook. External forwarding is not changed.

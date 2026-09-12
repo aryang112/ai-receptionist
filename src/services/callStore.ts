@@ -101,7 +101,13 @@ function append(record: Record<string, unknown>): void {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       dirEnsured = true;
     }
-    fs.appendFileSync(file, JSON.stringify({ ...record, ...(isVoiceTestMode() ? { testMode: true, simulated: true } : {}) }) + '\n');
+    fs.appendFileSync(
+      file,
+      JSON.stringify({
+        ...record,
+        ...(isVoiceTestMode() ? { testMode: true, simulated: true } : {}),
+      }) + '\n'
+    );
   } catch (err) {
     // Swallow — persistence must never break a live call. Don't log the caller's
     // phone number (it may be in `record.from`); log only the failure + type.
@@ -113,8 +119,12 @@ function append(record: Record<string, unknown>): void {
 }
 
 export const CallStore = {
-  recordVoiceEvent(callSid: string, event: string, detail: Record<string, unknown>): void {
-    append({ type: "voice", callSid, ts: Date.now(), event, detail });
+  recordVoiceEvent(
+    callSid: string,
+    event: string,
+    detail: Record<string, unknown>
+  ): void {
+    append({ type: 'voice', callSid, ts: Date.now(), event, detail });
   },
 
   startCall(meta: StartMeta): void {
@@ -127,7 +137,12 @@ export const CallStore = {
       recognizedClientId: meta.recognizedClientId,
       stirVerstat: meta.stirVerstat,
       voiceEngine: env.VOICE_ENGINE,
-      ...(env.VOICE_ENGINE === "live" ? { backendModel: env.OPENAI_LIVE_BACKEND_MODEL, backendEffort: env.OPENAI_LIVE_BACKEND_EFFORT ?? "default" } : {}),
+      ...(env.VOICE_ENGINE === 'live'
+        ? {
+            backendModel: env.OPENAI_LIVE_BACKEND_MODEL,
+            backendEffort: env.OPENAI_LIVE_BACKEND_EFFORT ?? 'default',
+          }
+        : {}),
     });
   },
 
