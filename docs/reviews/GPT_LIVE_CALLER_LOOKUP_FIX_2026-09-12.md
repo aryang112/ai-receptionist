@@ -40,3 +40,13 @@ Appointment changes remain simulated. This correction does not enable real booki
 - A second corrected local simulation supplied only the caller-ID lookup request: the tool used the actual calling number, returned no match, and Erica asked for first and last name. She did not claim caller ID was unavailable.
 - Hosted post-deployment replay `CA_probe_1789251733479` ran two successful lookup tools and replied: “I found an account for Aryan Gupta. To confirm it's yours, what phone number is on the account?” This supports the lookup fallback; it is not a handset audio acceptance test. Private evidence: `/tmp/erica-aryan-lookup-hosted-fixed/hosted-evidence.json`.
 - Final hosted status: zero active calls, Live+Terra, simulation retained. No Phorest profile or appointment was changed.
+
+## Follow-up: owner call reported around 6:58 PM
+
+Call `CAc24b53b6c1c4cce9632a02761214f613` began at 6:56:39 PM Eastern, September 12. The corrected release `6f211b18-0e1a-4281-ae75-0c8e737f63e1` was already active.
+
+- VERIFIED: hosted prefetch logged a clean miss (not a timeout). Direct uncached GET of the Aryan Gupta profile still returned mobile ending 7474. A separate fresh-process full phone-index build also returned no match for the caller ending 5169. The proposed stale-cache explanation is not supported; restarting would reload the same mismatch.
+- VERIFIED in approximate text/tool evidence: caller requested Monday brow threading, chose 2:30 PM, confirmed the calling number, and the transcript ended after Erica asked for a first name. No full name was supplied in this call; no explicit profile lookup was requested. The name-search fallback was therefore not exercised.
+- VERIFIED: only suggest_availability ran; no appointment proposal/write or new client creation occurred. The perceived setup flow was contact collection after an unmatched calling number. All real writes remain disabled.
+- The latest QA report available remained September 12 AM and did not cover this call. No claim about the transcript's apparent sigh, interruption quality, or physical hangup initiator is made without listening.
+- No service restart, deployment or Phorest data edit was performed. 666 baseline tests passed. Remaining data action: replace the mobile on the correct Phorest profile if 5169 is intended to be its current number; otherwise test name fallback by supplying the full name.
