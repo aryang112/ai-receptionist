@@ -350,3 +350,141 @@ resolved calls and routine non-client solicitations `No action needed`, but do
 not suppress a genuine message, callback request, or unresolved client issue.
 Accept generated identity/affiliation text only when it is literally grounded in
 the caller transcript.
+
+## 2026-09-03 — Deploy Railway from a tracked snapshot when the workspace is dirty
+`railway up` respects `.gitignore`, but it can upload untracked files that are not
+ignored. This workspace had an untracked `AGENTS.md` and 4.4 MB `outputs/` folder;
+deploying the current directory would have put unrelated local artifacts into the
+build context. For production, create a temporary directory with `mktemp -d`,
+extract `git archive <exact-commit>` into it, and pass that directory to
+`railway up --path-as-root`. Record the exact commit, deployment ID, and image
+digest so rollback does not depend on the mutable IDE working tree.
+
+## 2026-09-03 — Automated call QA is a lead generator, not an oracle
+The cloud reviewer can see call metadata, generated transcripts, coarse tool
+status, and a restart-local warning ring. It cannot hear recordings, and the
+call-list API intentionally omits tool arguments/results. Therefore it cannot
+confirm interruption, clipping, exact spoken times/names, who hung up, or the
+reason a tool returned `ok: false`. A caller asking about booking without a
+booking outcome is also not automatically a failure—they may decline, change
+their mind, or disconnect before confirming.
+
+**Rule:** every daily call review must also inspect the latest available
+`erica-call-qa` report and independently disposition each claim as VERIFIED,
+LIKELY, NEEDS LISTEN, or FALSE POSITIVE. Audio-dependent claims stay NEEDS
+LISTEN until the recording is heard. Treat precomputed flags and server logs as
+leads, correlate them to caller impact and expected fallback behavior, and never
+ship a fix from the automated email alone. Keep the reviewer's operational
+rubric synchronized with current code/config—especially the independent
+9 AM–9 PM transfer window and the stronger active-closure gate.
+
+## 2026-09-03 — Prompt vocabulary becomes speech; an unfulfillable rule is a conflict
+Real calls this week spoke the prompt's own jargon: "closed for the
+**salon-wide** closure", "unavailable for a **live call**", "I need a clear yes
+or no to **confirm your identity**". Every label the model reads is a word it
+may say. **Rule:** write model-facing prose in the words you would be happy to
+hear on the phone; grep the rendered prompt AND the caller-context notes for
+internal labels before shipping (`scripts/render-prompt.ts`).
+Second pattern: "empty/noise turns get no response" sat in the prompt for a
+week while a real caller heard three Erica lines before speaking. Under
+server VAD every detected turn creates a response, so the model *cannot* obey
+— it must emit something, and it emits a menu. A rule the runtime makes
+impossible is a conflict, not a style problem. **Rule:** when a prompt rule
+asks the model to do nothing, give it a tool that does nothing
+(`wait_for_user`, silent result path, no `response.create`). And after a
+prompt change, run `scripts/probe-prompt-live.ts` — it caught the booking
+read-back being skipped that two production test calls had already shown.
+Third: yesterday's closure commit re-introduced a quoted assistant line with a
+"varied naturally" tag. One example + "vary" is still one example. The 🦜
+lesson stands — describe, don't quote — and the prompt test now asserts it.
+
+## 2026-09-08 — Phorest's live tenant REJECTS a client with no email (docs say optional)
+`POST /client` without `email` returns **400 `EMAIL_REQUIRED` "Email is Required"**
+on this tenant even though the published ClientCreateRequest marks only
+firstName/lastName required. Removing the placeholder (2026-09-02, to keep fake
+addresses out of marketing) silently broke EVERY first-time caller's booking
+(live 2026-09-07 1:03 PM ET). Recognized callers never hit the create path, so
+test calls from known numbers looked fine. **Rule (reverses 2026-09-02):** always
+send a placeholder (`PLACEHOLDER_EMAIL_DOMAIN`) and opt it out with
+`emailMarketingConsent: false` + `emailReminderConsent: false` (both verified in
+Phorest's createClient reference); downstream consumers skip it via
+`isPlaceholderEmail()`. Verify any change to the create body with
+`scripts/diag-create-client.ts` before deploying.
+
+## 2026-09-08 — A mock catalog RICHER than the real one hides matcher bugs
+The mock had an "Eyebrow Threading" entry the salon doesn't have, so "eyebrow
+threading" passed every test and dead-ended live (the catalog says "Brow").
+Keep the mock's NAMES aligned with Phorest's, and run
+`scripts/probe-service-phrases.ts` against the LIVE catalog after any service
+rename or matcher change.
+
+## 2026-09-08 — GitHub main must track local main, or cloud agents build on ghosts
+GitHub `main` sat at `72aae0f` (Aug 24) while local `main` ran 100 commits
+ahead and was what production was built from. A cloud Fable session and two
+Codex PRs were then built on the stale tree: their prompt edits targeted text
+that no longer existed, their "fix" re-added a placeholder the stale base still
+had, and merging any of them would have deleted ~4,200 lines of local docs.
+**Rule:** `git push origin main` after every deploy record, and before handing a
+task to a cloud/remote agent. When a remote branch shares no history with local
+main, port `git diff main <branch> -- src/` as a patch instead of merging.
+
+
+## 2026-09-08 — Scope name confirmation separately from booking approval
+
+The booking name parameter said “continue without a ritual” after a clear name.
+Live model probes sometimes treated that as permission to skip the existing
+service/date/time read-back and booking approval. Name answers supply contact
+data; they are not booking approval. Keep reuse/missing-name guidance in the
+existing name contract, and explicitly preserve ask → WAIT → approved write.
+When testing non-repetition, also assert that required confirmations remain.
+
+Closing notes must follow the shared CLOSE decision instead of independently
+asking another question. A clear goodbye remains settled even after a successful
+message result. Keep retry limits aligned with per-tool recovery notes and current
+transfer availability. Never retry an uncertain write to satisfy a generic limit.
+
+Live synthetic probes share the production account's TPM limit. Run substantial
+voice conversations sequentially with spacing; retain failed runs and rerun the
+affected scenario after correcting the cause. Automated audio assessment is useful
+evidence, but must not be described as an owner/PSTN listening test.
+
+## 🟢 GPT-Live-1 (`v1/live/sessions`) gotchas — validated live 2026-09-10
+Full evidence: `docs/GPT_LIVE_1_EVALUATION_2026-09-10.md`; probes: `scripts/gpt-live/`.
+- It is a **different API**, not a model id: first message is `session.start`,
+  audio in is `session.input_audio.append`, audio out is a **continuous ~1x
+  stream including silence** with no `response.done`. Derive "Erica speaking"
+  from output energy, never from delta presence.
+- **No `audio.input.*` at all** (noise_reduction, turn_detection, keywords,
+  transcription all `unknown_parameter`). Live `instructions` and voice are
+  immutable after start; context goes in via `session.instructions/thinking/
+  commentary.append` (≤500 tokens each, `delegation_id:null`).
+- **Greeting**: putting it in `instructions` never speaks first. Use
+  `instructions.append` + `commentary.append("Begin the conversation now…")`
+  (4/4 in <1 s); append alone is 3/4 at 3–4.5 s. Treat it as requested, not
+  guaranteed — add a fallback timer.
+- **Tool loop**: after `response.item.create{function_call_output}` you MUST
+  send `response.create`, or the model narrates "let me check" and never
+  answers. Backend calls arrive inside the `response.event` envelope.
+- Mid-call `session.update` of `delegation.responses.{instructions,tools,model,
+  reasoning}` works but the payload must include `delegation.type` (the docs'
+  example omits it → `missing_required_parameter`).
+- A bad backend option (e.g. `reasoning.effort:'minimal'` on gpt-5.6-luna) is
+  accepted at `session.start` and only fails at the **first delegation** →
+  validate with a real delegation, not just `session.started`.
+- Voices `marin`/`cedar` still work on Live. Sessions expire at 120 min.
+  Send `store:false` explicitly. September 12 documentation correction: storage
+  now defaults to false; the earlier evaluation's default-on claim is superseded.
+  Enabling stored sessions is a separate choice. See OpenAI's live-conversations
+  guide and `docs/GPT_LIVE_SYSTEM_DESIGN_2026-09-12.md`.
+
+
+## 2026-09-10 — Keep cleanup small; verify voice behavior beyond prompt tests
+
+- Aryan explicitly prefers the smallest effective fix and no overengineering.
+  Conversational dates need wording guidance, not new date labels or formatters.
+- Failed-transfer state must override every greeting/status/context/tool path.
+  Recognized-caller context can otherwise reintroduce the standard greeting.
+- Silent-tool instructions and unit tests do not guarantee silent model behavior.
+  Live probes still produced lookup narration after multiple prompt refinements.
+  Keep failing evidence, report the gap, and never claim it fixed or deploy on
+  green unit tests alone. See the isolated focused-cleanup candidate review.
