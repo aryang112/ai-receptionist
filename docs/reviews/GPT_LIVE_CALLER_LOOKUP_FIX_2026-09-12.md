@@ -50,3 +50,7 @@ Call `CAc24b53b6c1c4cce9632a02761214f613` began at 6:56:39 PM Eastern, September
 - VERIFIED: only suggest_availability ran; no appointment proposal/write or new client creation occurred. The perceived setup flow was contact collection after an unmatched calling number. All real writes remain disabled.
 - The latest QA report available remained September 12 AM and did not cover this call. No claim about the transcript's apparent sigh, interruption quality, or physical hangup initiator is made without listening.
 - No service restart, deployment or Phorest data edit was performed. 666 baseline tests passed. Remaining data action: replace the mobile on the correct Phorest profile if 5169 is intended to be its current number; otherwise test name fallback by supplying the full name.
+
+## Resolved after owner corrected Phorest mobile (7:05 PM)
+
+Owner updated the actual profile; direct uncached GET now matches calling number ending 5169. Restarted the existing release with zero active app/Twilio calls; full client index loaded at 23:05:11 UTC. Hosted synthetic probe `CA_probe_1789254339661` recorded recognized:true and Erica asked “Am I speaking with Aryan?” without the caller supplying a name. Evidence: `/tmp/erica-phone-refreshed-probe/hosted-evidence.json`. Final active calls zero, Live+Terra, simulation retained. No source or Phorest mutation by Codex. Runtime client TTL override is unset, so the one-hour lazy/background refresh default applies; restart forces immediate consumption of the external update.

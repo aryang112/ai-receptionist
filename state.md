@@ -1,5 +1,13 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-12 7:05 PM — Owner phone corrected in Phorest; cache refreshed
+
+- Aryan updated his own Phorest mobile. Direct client GET now verifies the number ending 5169 matches Aryan Gupta. Earlier 7474 mismatch is resolved.
+- Restarted existing Railway release `6f211b18-0e1a-4281-ae75-0c8e737f63e1` after both application and Twilio showed zero active calls. No rebuild or source change. Boot completed full 4,189-entry client phone index at 23:05:11 UTC.
+- Hosted synthetic call `CA_probe_1789254339661` is recognized:true. Caller supplied no name; Erica asked “Am I speaking with Aryan?” This verifies caller-ID prefetch after refresh. Final active calls zero; Live+Terra and simulated write/notification boundaries retained.
+- Client-index TTL is the one-hour default (runtime override unset); refresh is lazy/background on lookup. Restart forces immediate reload after an external profile change. Before the owner corrected Phorest, restart would only reload the same wrong number.
+- Remaining: owner actual phone test and separately scoped real-write pilot. No real profile/appointment edits were made by Codex.
+
 ## 2026-09-12 evening — Live caller lookup correction DEPLOYED
 
 - Runtime `9851e8a`, Railway `6f211b18-0e1a-4281-ae75-0c8e737f63e1` SUCCESS. Four source/build hashes match; 666 tests / 61 files and build pass. Live+Terra default, two allowed callers, all writes/notifications still simulated; final active calls zero.
