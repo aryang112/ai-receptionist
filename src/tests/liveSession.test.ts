@@ -417,7 +417,122 @@ describe('continuous audio and transcript mapping', () => {
     expect(onAssistantTranscript).not.toHaveBeenCalled();
   });
 
-  it('fails visibly instead of dropping speech when the paced queue overruns', async () => {
+  it('preserves a 420 ms speech burst above the soft queue target', async () => {
+    vi.useFakeTimers();
+    const onError = vi.fn();
+    const onAudioChunk = vi.fn();
+    const { session, socket } = buildSession({ onError, onAudioChunk });
+    await connect(session, socket);
+    await configure(session, socket);
+    socket.sent.length = 0;
+
+    const speech = Buffer.alloc(21 * 160, 0x00);
+    await fire(session, {
+      type: 'session.output_audio.delta',
+      delta: speech.toString('base64'),
+    });
+    await vi.advanceTimersByTimeAsync(400);
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(socket.sent.some((event) => event.type === 'session.close')).toBe(
+      false
+    );
+    expect(
+      Buffer.concat(
+        onAudioChunk.mock.calls.map(([frame]) => Buffer.from(frame, 'base64'))
+      )
+    ).toEqual(speech);
+  });
+
+  it('reassembles arbitrary delta fragments into byte-exact 20 ms frames', async () => {
+    vi.useFakeTimers();
+    const onAudioChunk = vi.fn();
+    const { session, socket } = buildSession({ onAudioChunk });
+    await connect(session, socket);
+    await configure(session, socket);
+
+    const audio = Buffer.from(
+      Array.from({ length: 3 * 160 }, (_, index) => index % 251)
+    );
+    const fragments = [
+      audio.subarray(0, 79),
+      audio.subarray(79, 80),
+      audio.subarray(80, 241),
+      audio.subarray(241),
+    ];
+
+    await fire(session, {
+      type: 'session.output_audio.delta',
+      delta: fragments[0].toString('base64'),
+    });
+    await fire(session, {
+      type: 'session.output_audio.delta',
+      delta: fragments[1].toString('base64'),
+    });
+    expect(onAudioChunk).not.toHaveBeenCalled();
+
+    for (const fragment of fragments.slice(2)) {
+      await fire(session, {
+        type: 'session.output_audio.delta',
+        delta: fragment.toString('base64'),
+      });
+    }
+    await vi.advanceTimersByTimeAsync(40);
+
+    expect(onAudioChunk).toHaveBeenCalledTimes(3);
+    expect(
+      Buffer.concat(
+        onAudioChunk.mock.calls.map(([frame]) => Buffer.from(frame, 'base64'))
+      )
+    ).toEqual(audio);
+    expect((session as any).outputRemainder).toHaveLength(0);
+  });
+
+  it('keeps 150 seconds of output anchored across consistently late wakes', () => {
+    const onAudioChunk = vi.fn();
+    const { session } = buildSession({ onAudioChunk });
+    const internals = session as any;
+    const frame = Buffer.alloc(160, 0x00).toString('base64');
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+
+    internals.nextOutputAt = 0;
+    for (let wake = 0; wake < 1_500; wake += 1) {
+      internals.outputQueue.push(frame, frame, frame, frame, frame);
+      // Each callback arrives 80 ms behind the oldest frame's deadline. Five
+      // due frames must catch up without moving the underlying audio clock.
+      now = wake * 100 + 80;
+      internals.drainOneOutputFrame();
+      clearTimeout(internals.outputTimer);
+      internals.outputTimer = undefined;
+      expect(internals.outputQueue).toHaveLength(0);
+    }
+
+    expect(onAudioChunk).toHaveBeenCalledTimes(7_500);
+    expect(internals.nextOutputAt).toBe(150_000);
+    internals.stopOutputPacer();
+    nowSpy.mockRestore();
+  });
+
+  it('limits one overdue catch-up wake to five frames', () => {
+    const onAudioChunk = vi.fn();
+    const { session } = buildSession({ onAudioChunk });
+    const internals = session as any;
+    const frame = Buffer.alloc(160, 0x00).toString('base64');
+    const nowSpy = vi.spyOn(performance, 'now').mockReturnValue(200);
+
+    internals.nextOutputAt = 0;
+    internals.outputQueue.push(frame, frame, frame, frame, frame, frame);
+    internals.drainOneOutputFrame();
+
+    expect(onAudioChunk).toHaveBeenCalledTimes(5);
+    expect(internals.outputQueue).toHaveLength(1);
+    expect(internals.nextOutputAt).toBe(100);
+    internals.stopOutputPacer();
+    nowSpy.mockRestore();
+  });
+
+  it('fails once when speech exceeds the five-second hard queue bound', async () => {
     vi.useFakeTimers();
     const onError = vi.fn();
     const { session, socket } = buildSession({ onError });
@@ -427,17 +542,56 @@ describe('continuous audio and transcript mapping', () => {
 
     await fire(session, {
       type: 'session.output_audio.delta',
-      delta: Buffer.alloc(21 * 160, 0x00).toString('base64'),
+      delta: Buffer.alloc(252 * 160, 0x00).toString('base64'),
     });
 
+    expect(onError).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: expect.stringContaining('outbound queue bound'),
+        message: expect.stringContaining('5s outbound queue bound'),
       })
     );
-    expect(socket.sent.some((event) => event.type === 'session.close')).toBe(
-      true
-    );
+    expect((session as any).outputQueue).toHaveLength(0);
+    expect(
+      socket.sent.filter((event) => event.type === 'session.close')
+    ).toHaveLength(1);
+
+    await fire(session, {
+      type: 'session.output_audio.delta',
+      delta: Buffer.alloc(160, 0x00).toString('base64'),
+    });
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    socket.serverEvent({ type: 'session.closed', reason: 'close_requested' });
+    await Promise.resolve();
+  });
+
+  it('clears a partial-frame remainder on close and emits no late audio', async () => {
+    const onAudioChunk = vi.fn();
+    const { session, socket } = buildSession({ onAudioChunk });
+    await connect(session, socket);
+    await configure(session, socket);
+
+    await fire(session, {
+      type: 'session.output_audio.delta',
+      delta: Buffer.alloc(79, 0x00).toString('base64'),
+    });
+    expect((session as any).outputRemainder).toHaveLength(79);
+    expect(onAudioChunk).not.toHaveBeenCalled();
+
+    const closing = session.close();
+    expect((session as any).outputRemainder).toHaveLength(0);
+    expect((session as any).outputQueue).toHaveLength(0);
+    expect((session as any).outputTimer).toBeUndefined();
+
+    await fire(session, {
+      type: 'session.output_audio.delta',
+      delta: Buffer.alloc(81, 0x00).toString('base64'),
+    });
+    expect(onAudioChunk).not.toHaveBeenCalled();
+
+    socket.serverEvent({ type: 'session.closed', reason: 'close_requested' });
+    await closing;
   });
 });
 
