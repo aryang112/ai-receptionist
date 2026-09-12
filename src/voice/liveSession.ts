@@ -105,6 +105,8 @@ export class OpenAILiveSession {
   private connected = false;
   private started = false;
   private closing = false;
+  private sessionCloseSent = false;
+  private closePromise: Promise<void> | undefined;
   private closeNotified = false;
   private sessionClosedReceived = false;
   private finalUsageEmitted = false;
@@ -211,6 +213,8 @@ export class OpenAILiveSession {
     if (this.isWritable()) return;
     if (this.ws) this.releaseSocket();
     this.closing = false;
+    this.sessionCloseSent = false;
+    this.closePromise = undefined;
     this.sessionClosedReceived = false;
 
     const ws = this.webSocketFactory('wss://api.openai.com/v1/live/sessions', {
@@ -406,9 +410,13 @@ export class OpenAILiveSession {
     return null;
   }
 
-  async close(): Promise<void> {
-    if (!this.ws) return;
-    if (this.closeAck) return this.waitForAck(this.closeAck, false);
+  close(): Promise<void> {
+    if (!this.ws) return Promise.resolve();
+    if (!this.closePromise) this.closePromise = this.closeSession();
+    return this.closePromise;
+  }
+
+  private async closeSession(): Promise<void> {
     this.closing = true;
     this.clearGreetingTimers();
     this.stopOutputPacer();
@@ -451,6 +459,7 @@ export class OpenAILiveSession {
       this.closeTimeoutMs
     );
     this.closeAck = ack;
+    this.sessionCloseSent = true;
     this.sendRaw({
       type: 'session.close',
       event_id: this.nextEventId('session_close'),
@@ -757,7 +766,12 @@ export class OpenAILiveSession {
         output: await this.runTool(call),
       }))
     );
-    if (!this.isWritable() || this.sessionClosedReceived) return;
+    if (
+      !this.isWritable() ||
+      this.sessionClosedReceived ||
+      this.sessionCloseSent
+    )
+      return;
 
     for (const result of results) {
       this.sendRaw({
@@ -860,10 +874,11 @@ export class OpenAILiveSession {
       this.greetingSpoken = this.greetingRequested || this.greetingSpoken;
       this.clearGreetingTimers();
       this.onOutputSpeechStarted?.();
-    } else if (transition === 'stopped') {
-      this.onOutputSpeechStopped?.();
     }
     this.handlers.onAudioChunk?.(frame);
+    // A controller may place a Twilio mark in this callback. Emit it after the
+    // quiet boundary frame so the mark covers every frame in the segment.
+    if (transition === 'stopped') this.onOutputSpeechStopped?.();
 
     this.outputTimer = setTimeout(() => {
       this.outputTimer = undefined;

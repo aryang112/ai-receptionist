@@ -274,6 +274,56 @@ describe('GPT-Live session lifecycle and configuration', () => {
     expect(socket.sent.map((event) => event.type)).toEqual(['session.start']);
     expect(socket.readyState).toBe(WebSocket.CLOSED);
   });
+
+  it('sends close once and suppresses late tool output after the close command', async () => {
+    vi.useFakeTimers();
+    const { session, socket } = buildSession({ closeTimeoutMs: 25 });
+    await connect(session, socket);
+    await configure(session, socket);
+    socket.sent.length = 0;
+
+    let resolveTool!: (value: unknown) => void;
+    session.registerTool(
+      'slow_tool',
+      () => new Promise((resolve) => (resolveTool = resolve))
+    );
+    await fire(session, {
+      type: 'response.event',
+      delegation_id: 'deleg_close',
+      event: {
+        type: 'response.output_item.done',
+        response_id: 'resp_close',
+        item: {
+          type: 'function_call',
+          call_id: 'call_slow',
+          name: 'slow_tool',
+          arguments: '{}',
+        },
+      },
+    });
+    await fire(session, {
+      type: 'response.event',
+      delegation_id: 'deleg_close',
+      event: {
+        type: 'response.completed',
+        response: { id: 'resp_close', output: [] },
+      },
+    });
+
+    const firstClose = session.close();
+    const secondClose = session.close();
+    expect(firstClose).toBe(secondClose);
+    await vi.advanceTimersByTimeAsync(25);
+    expect(socket.sent.map((event) => event.type)).toEqual(['session.close']);
+
+    resolveTool({ ok: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(socket.sent.map((event) => event.type)).toEqual(['session.close']);
+
+    socket.serverEvent({ type: 'session.closed', reason: 'close_requested' });
+    await firstClose;
+  });
 });
 
 describe('continuous audio and transcript mapping', () => {
@@ -294,9 +344,10 @@ describe('continuous audio and transcript mapping', () => {
 
   it('forwards paced silence but emits output activity only around speech', async () => {
     vi.useFakeTimers();
-    const onAudioChunk = vi.fn();
-    const onOutputSpeechStarted = vi.fn();
-    const onOutputSpeechStopped = vi.fn();
+    const callbackOrder: string[] = [];
+    const onAudioChunk = vi.fn(() => callbackOrder.push('audio'));
+    const onOutputSpeechStarted = vi.fn(() => callbackOrder.push('start'));
+    const onOutputSpeechStopped = vi.fn(() => callbackOrder.push('stop'));
     const { session, socket } = buildSession({
       onAudioChunk,
       onOutputSpeechStarted,
@@ -319,6 +370,9 @@ describe('continuous audio and transcript mapping', () => {
     expect(onAudioChunk).toHaveBeenCalledTimes(31);
     expect(onOutputSpeechStarted).toHaveBeenCalledTimes(1);
     expect(onOutputSpeechStopped).toHaveBeenCalledTimes(1);
+    expect(callbackOrder[0]).toBe('start');
+    expect(callbackOrder[1]).toBe('audio');
+    expect(callbackOrder.slice(-2)).toEqual(['audio', 'stop']);
   });
 
   it('preserves time-ranged transcript fragments without claiming final turns', async () => {

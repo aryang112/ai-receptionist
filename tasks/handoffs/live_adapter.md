@@ -41,7 +41,9 @@
 - Input and output energy gates report activity only. Input stop hangover is
   200 ms; output stop hangover is 600 ms so ordinary phrase pauses do not split
   greetings/farewells. Neither transition means a final turn or completed
-  playback; the controller owns Twilio marks and drain.
+  playback; the controller owns Twilio marks and drain. Output-start fires
+  before its first speech frame, while output-stop fires after its quiet
+  boundary frame, so a controller mark covers the complete acoustic segment.
 - Greeting uses the verified pattern B (instruction append plus commentary),
   retries commentary once after 2.5 seconds without speech, and fails/closes at
   5 seconds. `requestResponse` uses a frontend commentary nudge for application
@@ -53,6 +55,24 @@
 - Cleanup before `session.started` closes the WebSocket locally and rejects an
   in-flight configuration waiter. It never sends `session.close` as an invalid
   first protocol command.
+- Close is single-flight. If its bounded wait expires while a tool is still
+  running, a late result is discarded after `session.close` rather than being
+  written into a closing session.
+
+## Controller integration review limits
+
+- Live barge-in now preserves the continuous stream and only advances the
+  interruption epoch. Focused controller tests keep Realtime truncate/clear
+  behavior unchanged.
+- Greeting completion is still acoustic. A speech segment plus Twilio drain
+  does not prove that the required recording disclosure was spoken; pilot
+  evidence must check the output transcript or recording.
+- A model-requested goodbye requires a new post-tool speech segment. This
+  prevents continuous silence from authorizing a hangup, but it can leave the
+  call open if the farewell continues inside an already-active segment.
+- Live transcript callbacks are fragments with approximate backend offsets.
+  Raw fragment events are the audit evidence; merged transcript text is a
+  convenience view and is not exact turn ordering.
 
 ## Files
 
@@ -60,15 +80,14 @@
 - `src/voice/liveProtocol.ts`
 - `src/voice/mulawAudio.ts`
 - `src/tests/liveSession.test.ts`
+- `src/tests/twilioStream.liveIntegration.test.ts`
 
 ## Verification
 
-- `npx vitest run src/tests/liveSession.test.ts`: 18/18 passed.
+- `npx vitest run src/tests/liveSession.test.ts src/tests/twilioStream.liveIntegration.test.ts`:
+  23/23 passed (19 adapter and 4 focused controller tests).
 - `npm run build`: passed with the integrated worktree.
-- `npm test`: adapter tests passed; full run reached 639 passed and one
-  concurrent prompt-worker exact-wording failure in `livePrompts.test.ts`.
-  That failure was reported to the prompt worker and parent; no adapter-owned
-  failure occurred.
+- `npm test`: 61 files and 655 tests passed.
 - Parent-run first full-controller Terra probe reported success at
   `/tmp/erica-live-terra-first`: 36-second final usage, greeting at about 1.8 s
   with recording disclosure, two backend responses with usage/cache data, and
