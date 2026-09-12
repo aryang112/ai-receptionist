@@ -12,6 +12,7 @@ const phrase =
   'I want eyebrow threading and upper lip threading next Friday afternoon.';
 const seconds = Number(process.env.PROBE_SECONDS || 35);
 const inputAt = Number(process.env.PROBE_INPUT_AT_MS || 10000);
+const turnsFile = process.env.PROBE_TURNS_FILE;
 const engine = process.env.PROBE_ENGINE || 'live';
 const remoteUrl = process.env.PROBE_URL;
 const callerPhone = process.env.PROBE_CALLER_PHONE || '+12025550198';
@@ -36,7 +37,6 @@ Object.assign(process.env, {
   LOG_LEVEL: 'warn',
 });
 const key = process.env.OPENAI_REALTIME_API_KEY || process.env.OPENAI_API_KEY;
-const cache = `/tmp/erica-probe-${crypto.createHash('sha256').update(phrase).digest('hex').slice(0, 12)}.ulaw`;
 function encode(sample) {
   let sign = sample < 0 ? 128 : 0;
   let v = Math.min(32635, Math.abs(sample)) + 132;
@@ -44,10 +44,40 @@ function encode(sample) {
   for (let mask = 16384; exponent > 0 && !(v & mask); exponent--, mask >>= 1) {}
   return ~(sign | (exponent << 4) | ((v >> (exponent + 3)) & 15)) & 255;
 }
-let caller;
-if (process.env.PROBE_GREETING_ONLY === 'true') caller = Buffer.alloc(0);
-else if (fs.existsSync(cache)) caller = fs.readFileSync(cache);
-else {
+function configuredTurns() {
+  if (!turnsFile) return [{ atMs: inputAt, text: phrase }];
+
+  let value;
+  try {
+    value = JSON.parse(fs.readFileSync(turnsFile, 'utf8'));
+  } catch (error) {
+    throw new Error(
+      `Unable to read PROBE_TURNS_FILE: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (!Array.isArray(value) || value.length === 0)
+    throw new Error('PROBE_TURNS_FILE must contain a non-empty JSON array');
+
+  return value.map((turn, index) => {
+    if (
+      !turn ||
+      typeof turn !== 'object' ||
+      !Number.isFinite(turn.atMs) ||
+      turn.atMs < 0 ||
+      typeof turn.text !== 'string' ||
+      !turn.text.trim()
+    ) {
+      throw new Error(
+        `PROBE_TURNS_FILE turn ${index} must have a non-negative numeric atMs and non-empty text`
+      );
+    }
+    return { atMs: turn.atMs, text: turn.text };
+  });
+}
+
+async function callerAudio(text) {
+  const cache = `/tmp/erica-probe-${crypto.createHash('sha256').update(text).digest('hex').slice(0, 12)}.ulaw`;
+  if (fs.existsSync(cache)) return fs.readFileSync(cache);
   const response = await fetch('https://api.openai.com/v1/audio/speech', {
     method: 'POST',
     headers: {
@@ -57,13 +87,13 @@ else {
     body: JSON.stringify({
       model: 'gpt-4o-mini-tts',
       voice: 'alloy',
-      input: phrase,
+      input: text,
       response_format: 'pcm',
     }),
   });
   if (!response.ok) throw new Error(`TTS failed: ${response.status}`);
   const pcm = Buffer.from(await response.arrayBuffer());
-  caller = Buffer.alloc(Math.floor(pcm.length / 6));
+  const caller = Buffer.alloc(Math.floor(pcm.length / 6));
   for (let i = 0; i < caller.length; i++)
     caller[i] = encode(
       Math.round(
@@ -74,6 +104,20 @@ else {
       )
     );
   fs.writeFileSync(cache, caller);
+  return caller;
+}
+
+const turns = configuredTurns();
+const callerTurns = [];
+for (const turn of turns) {
+  // Keep generation serial so a long soak never creates a burst of TTS calls.
+  callerTurns.push({
+    ...turn,
+    audio:
+      process.env.PROBE_GREETING_ONLY === 'true'
+        ? Buffer.alloc(0)
+        : await callerAudio(turn.text),
+  });
 }
 const { TwilioRealtimeCall } = await import(
   '../../dist/realtime/twilioStream.js'
@@ -95,6 +139,11 @@ let speak = false;
 let silenceRun = 0;
 let callerStartedAt;
 let callerEndedAt;
+const turnReplay = turns.map((turn) => ({
+  scheduledAtMs: turn.atMs,
+  actualStartMs: null,
+  actualEndMs: null,
+}));
 const started = Date.now();
 class Socket extends EventEmitter {
   readyState = 1;
@@ -164,16 +213,35 @@ socket.emit(
     })
   )
 );
-let index = 0;
+let nextTurn = 0;
+let activeTurn;
 const timer = setInterval(() => {
   if (socket.readyState !== 1) return;
   let b = Buffer.alloc(160, 255);
-  // Allow a full greeting before the caller speaks; never replay input at >1x.
-  if (Date.now() - started > inputAt && index < caller.length) {
-    if (!callerStartedAt) callerStartedAt = Date.now() - started;
-    caller.copy(b, 0, index, index + 160);
-    index += 160;
-    if (index >= caller.length) callerEndedAt = Date.now() - started;
+  const elapsed = Date.now() - started;
+  // Start each turn no earlier than its schedule. A later scheduled turn waits
+  // for the prior audio to finish, so caller audio stays at 1x and never overlaps.
+  while (!activeTurn && nextTurn < callerTurns.length) {
+    const turn = callerTurns[nextTurn];
+    if (!turn.audio.length) {
+      nextTurn++;
+      continue;
+    }
+    if (elapsed < turn.atMs) break;
+    activeTurn = { ...turn, index: 0, replay: turnReplay[nextTurn] };
+    activeTurn.replay.actualStartMs = elapsed;
+    if (callerStartedAt === undefined) callerStartedAt = elapsed;
+  }
+  if (activeTurn) {
+    activeTurn.audio.copy(b, 0, activeTurn.index, activeTurn.index + 160);
+    activeTurn.index += 160;
+    if (activeTurn.index >= activeTurn.audio.length) {
+      const endedAt = Date.now() - started;
+      activeTurn.replay.actualEndMs = endedAt;
+      callerEndedAt = endedAt;
+      nextTurn++;
+      activeTurn = undefined;
+    }
   }
   mediaClock += 20;
   socket.emit(
@@ -196,7 +264,8 @@ const result = {
   engine,
   model,
   remote: !!remoteUrl,
-  phrase,
+  ...(turnsFile ? {} : { phrase }),
+  turns: turnReplay,
   callerStartedAt,
   callerEndedAt,
   speech,
