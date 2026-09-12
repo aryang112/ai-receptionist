@@ -87,3 +87,29 @@
   snapshot. `backendCostUsd` is absent until a recognized backend model and a
   complete token usage payload are available; this avoids presenting missing
   billing data as a no-cost call.
+
+## Final safety review
+
+- Added the derived test-mode guard to `maybeSendPostCallSummary`. It returns
+  `{ sent: false, reason: 'simulated' }` before an optional post-call
+  `Responses` request, SMS delivery, or owner-notification ledger write. This
+  closes the one source-level escape found during the final audit.
+- Added a `/twilio/voice` route integration test proving that an unlisted
+  caller receives `<Reject>` with no `<Connect><Stream>` in simulation mode.
+  The WebSocket start handler independently repeats the allowlist check before
+  session creation, covering a signed `/twilio/dial-status` reconnect too.
+- All Phorest business-write callsites go through the singleton overlay;
+  `/api` metadata routes read services/hours only. Owner SMS, digest,
+  blocklist, and post-call summaries now all respect the derived test mode.
+  Recording and call completion remain intentionally real only for an
+  admitted test call; simulated fatal failover ends that test call and never
+  dials the owner.
+
+### Final verification
+
+- `npm test`: 61 files / 655 tests passed. `npm run build`, Prettier check,
+  and `git diff --check` passed.
+- Hosted configuration remains a deployment gate: verify
+  `PHOREST_WRITE_MODE=simulate`, exact nonempty test-phone allowlist,
+  `USE_MOCK_PHOREST=false` for real reads, nonempty `ADMIN_TOKEN`, and a
+  production `WS_AUTH_SECRET`. Source review cannot verify deployed values.

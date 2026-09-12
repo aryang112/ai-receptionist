@@ -44,6 +44,32 @@ describe('twilio voice route', () => {
     );
   });
 
+  it('rejects an unlisted caller before emitting a stream in simulated voice-test mode', async () => {
+    const previous = {
+      mode: env.PHOREST_WRITE_MODE,
+      allowed: env.VOICE_TEST_ALLOWED_PHONES,
+    };
+    try {
+      env.PHOREST_WRITE_MODE = 'simulate';
+      env.VOICE_TEST_ALLOWED_PHONES = '2025550198';
+      const res = await request(app)
+        .post('/twilio/voice')
+        .set('Host', 'example.ngrok.app')
+        .set('X-Forwarded-Proto', 'https')
+        .type('form')
+        .send({ From: '+12025550199', CallSid: 'CA_unlisted_test' });
+
+      expect(res.status).toBe(200);
+      expect(res.text).toMatch(/<Reject/i);
+      expect(res.text).not.toMatch(/<Connect>/i);
+      expect(res.text).not.toMatch(/<Stream/i);
+      expect(isBlocked).not.toHaveBeenCalled();
+    } finally {
+      env.PHOREST_WRITE_MODE = previous.mode;
+      env.VOICE_TEST_ALLOWED_PHONES = previous.allowed;
+    }
+  });
+
   // Transfer failback (2026-08-24): handleTransferToOwner has no Express
   // `req`, so /voice hands the public host down to the media stream — that's
   // the only way the <Dial> can carry an absolute action URL.

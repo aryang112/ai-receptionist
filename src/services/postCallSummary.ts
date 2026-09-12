@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { env } from '../config/env.js';
+import { env, isVoiceTestMode } from '../config/env.js';
 import { logger } from '../core/logger.js';
 import { CallStore, readCalls, type TranscriptEntry } from './callStore.js';
 import { sendOwnerSms, type OwnerSmsResult } from './ownerSms.js';
@@ -34,7 +34,12 @@ export type PostCallSummaryResult =
   | { sent: true; body: string }
   | {
       sent: false;
-      reason: 'disabled' | 'excluded' | 'already_notified' | 'delivery_failed';
+      reason:
+        | 'disabled'
+        | 'simulated'
+        | 'excluded'
+        | 'already_notified'
+        | 'delivery_failed';
     };
 
 let openaiClient: OpenAI | null = null;
@@ -291,6 +296,12 @@ export async function maybeSendPostCallSummary(
   input: PostCallSummaryInput,
   deps: SummaryDependencies = {}
 ): Promise<PostCallSummaryResult> {
+  // A comparison call already pays for its selected voice/backend engine.
+  // Never add an unrelated Responses request, owner-notification ledger row,
+  // or simulated recap while the derived test boundary is active.
+  if (isVoiceTestMode()) {
+    return { sent: false, reason: 'simulated' };
+  }
   if (env.OWNER_CALL_SUMMARY_ENABLED !== 'true') {
     return { sent: false, reason: 'disabled' };
   }

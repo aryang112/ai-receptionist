@@ -146,6 +146,23 @@ describe('post-call owner summaries', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('does not generate, send, or audit a post-call recap in voice test mode', async () => {
+    const previous = env.PHOREST_WRITE_MODE;
+    env.PHOREST_WRITE_MODE = 'simulate';
+    const send = vi.fn();
+    const generate = vi.fn();
+    try {
+      await expect(
+        maybeSendPostCallSummary(input, { send, generate })
+      ).resolves.toEqual({ sent: false, reason: 'simulated' });
+      expect(generate).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+      expect(CallStore.recordOwnerNotification).not.toHaveBeenCalled();
+    } finally {
+      env.PHOREST_WRITE_MODE = previous;
+    }
+  });
+
   it('normalizes and excludes internal test callers before generation', async () => {
     env.OWNER_CALL_SUMMARY_EXCLUDE_PHONES = ['443-555-5404'];
     const send = vi.fn();
