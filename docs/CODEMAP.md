@@ -184,10 +184,11 @@ Caller dials Twilio number
   the same public closure context for ANY affected date (feeds the
   suggest_availability note). `nextOpen` names the date when the next opening
   is 7+ days out (2026-09-01: bare "Thursday" pointed at a closed day).
-  `isWithinTransferWindow(now?)` — the HUMAN transfer window (2026-08-24, the
-  Holly fix): live-transfer gate follows Richa's waking hours
-  (`TRANSFER_WINDOW_START/END`, default 09:00–21:00 salon TZ, end-exclusive),
-  ignoring the salon calendar entirely — her cell rings, not the front desk.
+  `isWithinTransferWindow(now?)` — owner calling window, default 09:00–20:00
+  salon TZ, end-exclusive, on working days only. Reuses business.json weekday
+  hours, closedDates and vacations for the single-provider working-day calendar.
+  The window can extend before opening/after closing on those days. Shared by
+  prompt status, normal transfer and technical-error failover.
 - **slots.ts** — `snapSlotsToGrid(slots, gridMin)` / `ceilToGrid`. Snaps Phorest's
   re-anchored odd-minute availability starts UP to a clean clock grid before Erica
   offers them (see lessons.md). Called in `handleSuggestAvailability`.
@@ -230,8 +231,8 @@ Caller dials Twilio number
   `OWNER_CALL_SUMMARY_EXCLUDE_PHONES` (comma-separated normalized caller
   numbers, used to suppress test/internal calls), `OPENAI_CALL_SUMMARY_MODEL`
   (`gpt-4.1-mini`),
-  `TRANSFER_WINDOW_START`/`TRANSFER_WINDOW_END` ('09:00'/'21:00' — Richa's
-  live-transfer calling hours, decoupled from salon hours),
+  `TRANSFER_WINDOW_START`/`TRANSFER_WINDOW_END` ('09:00'/'20:00' — Richa's
+  calling window on working days, distinct from public opening times),
   `TRANSFER_DIAL_TIMEOUT_S` (15 — how long her phone rings before the dial
   hands back to /twilio/dial-status; deliberately under the ~20–25s carrier
   voicemail pickup)). Defaults are sensible.

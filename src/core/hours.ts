@@ -157,9 +157,8 @@ export function getHoursStatus(
 
 /**
  * Is the salon open at this instant? Salon-TZ, respects weekday hours,
- * closedDates, AND vacation ranges (all via rangesForDate). Used to gate
- * live transfers to Richa: outside open hours her phone must not ring —
- * Erica takes a message instead (2026-08-23, Aryan-confirmed behavior).
+ * closedDates, AND vacation ranges (all via rangesForDate). Public opening
+ * status only; owner transfers use the separate working-day window below.
  * `now` injectable for tests.
  */
 export function isOpenNow(now: DateTime = DateTime.now()): boolean {
@@ -183,21 +182,18 @@ function parseHHMM(value: string, fallback: number): number {
 }
 
 /**
- * Human transfer window (2026-08-24, Aryan-decided after the Holly call):
- * live transfers ring Richa's PERSONAL cell, so the gate is her waking hours
- * — NOT the salon's opening hours. A recognized regular calling Sunday
- * morning and asking for Richa should ring through even though the salon is
- * closed; a 10:30 PM caller should not. Every day of the week, ignoring
- * closedDates: the salon calendar is irrelevant to whether her phone may
- * ring. Defaults 09:00–20:00 salon TZ (end exclusive), env-tunable via
- * TRANSFER_WINDOW_START/END — read at CALL time so tests can reassign env.
- * Vacation mode is a separate, earlier gate in handleTransferToOwner and is
- * deliberately NOT considered here. `now` injectable for tests.
+ * Owner transfer eligibility: 09:00–20:00 on working days only (salon TZ,
+ * end exclusive). For this single-provider salon, business.json supplies the
+ * working-day calendar, including closed weekdays, closedDates and vacations.
+ * The daily clock window may start before the salon opens or end after it closes.
+ * The normal handler retains its earlier vacation gate for specific caller guidance.
+ * Env values are read at call time; `now` is injectable for tests.
  */
 export function isWithinTransferWindow(
   now: DateTime = DateTime.now()
 ): boolean {
   const nowDt = now.setZone(TZ);
+  if (!rangesForDate(nowDt).length) return false;
   const start = parseHHMM(env.TRANSFER_WINDOW_START, 9 * 60);
   const end = parseHHMM(env.TRANSFER_WINDOW_END, 20 * 60);
   const minutes = nowDt.hour * 60 + nowDt.minute;

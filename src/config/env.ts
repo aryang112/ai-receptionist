@@ -241,13 +241,9 @@ export const env = {
   OPENAI_CALL_SUMMARY_MODEL:
     process.env.OPENAI_CALL_SUMMARY_MODEL || 'gpt-4.1-mini',
 
-  // Human transfer window (2026-08-24, Aryan-decided after the Holly call):
-  // live transfers ring Richa's PERSONAL cell, so the right clock is her
-  // waking hours, not the salon's opening hours — a Sunday-morning caller who
-  // asks for Richa should ring through even though the salon is closed.
-  // 24h "HH:mm" in salon TZ; end is exclusive. Garbage values fall back to
-  // the defaults (same defensive-parse convention as DIGEST_TIME). Vacation
-  // mode still suppresses transfers entirely (checked first in the handler).
+  // Owner calling hours on working days only, using the salon calendar.
+  // May extend before/after public opening hours. 24h HH:mm in salon TZ;
+  // end exclusive. Invalid values fall back to the defaults in hours.ts.
   TRANSFER_WINDOW_START: process.env.TRANSFER_WINDOW_START || '09:00',
   TRANSFER_WINDOW_END: process.env.TRANSFER_WINDOW_END || '20:00',
 

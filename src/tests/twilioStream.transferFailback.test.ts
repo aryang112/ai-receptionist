@@ -323,6 +323,9 @@ describe('fatal failover respects owner transfer hours', () => {
     ['2026-09-14T19:59:00-04:00', true],
     ['2026-09-14T20:00:00-04:00', false],
     ['2026-09-14T23:00:00-04:00', false],
+    ['2026-09-13T13:00:00-04:00', false],
+    ['2026-12-25T13:00:00-05:00', false],
+    ['2026-09-02T13:00:00-04:00', false],
   ])('uses the same cutoff for %s', async (time, permitted) => {
     vi.setSystemTime(new Date(time));
     const call = buildCall('CA_failover_hours');

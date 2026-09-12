@@ -158,15 +158,17 @@ describe('isWithinTransferWindow (human transfer window, 2026-08-24)', () => {
     expect(isWithinTransferWindow(at('2026-08-25T20:00'))).toBe(false);
   });
 
-  it('ignores the salon calendar — the Holly regression cases', () => {
-    // Sunday 11:46 AM (salon closed all day) — Holly's actual call time.
-    expect(isWithinTransferWindow(at('2026-08-23T11:46'))).toBe(true);
+  it('allows before/after opening on working days but blocks days off', () => {
+    // Sunday is a day off, even inside the daily calling window.
+    expect(isWithinTransferWindow(at('2026-08-23T11:46'))).toBe(false);
     // Weekday 9:30 AM, salon not open until noon.
     expect(isWithinTransferWindow(at('2026-08-25T09:30'))).toBe(true);
     // Weekday 7:59 PM: salon closed at 7, but Richa still takes calls.
     expect(isWithinTransferWindow(at('2026-08-25T19:59'))).toBe(true);
-    // Christmas (a closedDate) mid-day: her phone may still ring.
-    expect(isWithinTransferWindow(at('2026-12-25T13:00'))).toBe(true);
+    // Closed dates and recorded away days also suppress transfers.
+    expect(isWithinTransferWindow(at('2026-12-25T13:00'))).toBe(false);
+    expect(isWithinTransferWindow(at('2026-09-02T13:00'))).toBe(false);
+    expect(isWithinTransferWindow(at('2026-09-10T09:00'))).toBe(true);
     // Late night is out regardless of anything else.
     expect(isWithinTransferWindow(at('2026-08-25T22:30'))).toBe(false);
   });

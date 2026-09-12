@@ -310,6 +310,13 @@ describe("buildInstructions — transfer window (RICHA'S LINE)", () => {
     expect(instructions).toMatch(/At this moment we are CLOSED/);
   });
 
+  it('Sunday midday: line is unavailable despite being between 9 AM and 8 PM', () => {
+    const instructions = buildInstructions(at('2026-09-13T13:00'));
+    expect(instructions).toMatch(
+      /Richa is UNAVAILABLE to take a call right now/
+    );
+  });
+
   it('outside the window (Tue 10pm): line says UNAVAILABLE', () => {
     const instructions = buildInstructions(at('2026-08-25T22:00'));
     expect(instructions).toMatch(

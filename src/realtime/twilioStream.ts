@@ -566,11 +566,8 @@ export function buildInstructions(
     ? getHoursStatus(tomorrowISO, now).hoursThatDay
     : null;
   const openNow = isOpenNow(now);
-  // Transfer-window fix (2026-08-24, the Holly call): live transfers ring
-  // Richa's CELL, so their availability follows her waking hours (the
-  // env-tunable transfer window), not the salon's opening hours. Precomputed
-  // server-side and handed over as a finished fact — same never-re-derive
-  // principle as TODAY'S STATUS above.
+  // Working-day eligibility and the broader owner calling window are computed
+  // server-side, using the same gate as normal transfers and fatal failover.
   const transferPossibleNow = isWithinTransferWindow(now);
   const todayStatusLine = todayStatus
     ? `TODAY'S STATUS (precomputed — trust this verbatim, do NOT re-derive it from the weekly table): today is ${now.toFormat('cccc')} and the salon is ${
@@ -5025,15 +5022,9 @@ export class TwilioRealtimeCall {
         };
       }
 
-      // TRANSFER-WINDOW gate (2026-08-24, Aryan-decided after the Holly
-      // call — replaces the 2026-08-23 salon-hours gate): live transfers
-      // ring Richa's PERSONAL mobile, so the right clock is her waking
-      // hours (default 9 AM–8 PM salon TZ, env-tunable), NOT the salon's
-      // opening hours. Holly asked for Richa at 11:46 AM — 14 minutes
-      // before the salon's noon opening — and the old gate blocked the
-      // dial; under this one it rings through.
-      // Outside the window: offer the separate exact-transcript message path.
-      // Fatal-error failover below uses this same hours gate.
+      // Working days only, 9 AM–8 PM by default. The window includes time
+      // before salon opening on those days. Days off use the message path.
+      // Fatal-error failover below uses the same calendar and clock gate.
       if (!isWithinTransferWindow()) {
         logger.info(
           { tool: 'transfer_to_owner', callSid: this.callSid },

@@ -9,13 +9,8 @@ import {
 } from 'vitest';
 import WebSocket from 'ws';
 
-// 2026-08-24 (Aryan-decided after the Holly call — replaces the 2026-08-23
-// salon-hours gate): live transfers ring Richa's PERSONAL mobile, so the gate
-// is her waking hours (the transfer window, default 09:00–20:00 salon TZ),
-// NOT the salon's opening hours. Inside the window the dial happens even when
-// the salon is closed (Sunday mid-day, weekday mornings/evenings). Outside
-// it, transfer_to_owner offers the separate exact-transcript message path.
-// Fatal failover observes the same cutoff.
+// Owner transfers use 9 AM–8 PM on working days. On days off or outside
+// the window, offer the separate caller-authored message path without dialing.
 
 process.env.OPENAI_REALTIME_API_KEY ||= 'test-key';
 
@@ -49,6 +44,23 @@ function buildCall() {
 describe('transfer_to_owner — transfer-window gate', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+
+  it.each(['2026-09-13T13:00:00-04:00', '2026-12-25T13:00:00-05:00'])(
+    'day off %s offers a message instead of dialing',
+    async (time) => {
+      vi.setSystemTime(new Date(time));
+      const call = buildCall();
+      call.notifyOwnerSms = vi.fn();
+      const result = await call.handleTransferToOwner({
+        reason: 'wants to speak with Richa',
+      });
+      expect(result).toMatchObject({
+        transferred: false,
+        messageRequired: true,
+      });
+      expect(call.notifyOwnerSms).not.toHaveBeenCalled();
+    }
+  );
 
   it('OUTSIDE WINDOW (Tue 8pm): no dial or synthesized SMS; requests a real message', async () => {
     vi.setSystemTime(new Date('2026-08-25T20:00:00-04:00'));
@@ -177,7 +189,6 @@ describe('transfer_to_owner — transfer-window gate', () => {
     for (const time of [
       '2026-08-25T09:30:00-04:00', // before the salon opens at noon
       '2026-08-25T19:59:00-04:00', // after the salon closed at 7pm
-      '2026-08-23T13:00:00-04:00', // Sunday mid-day (salon closed all day)
     ]) {
       vi.setSystemTime(new Date(time));
       const call = buildCall();
