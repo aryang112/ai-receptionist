@@ -1,5 +1,13 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-12 evening — Three-time availability presentation DEPLOYED
+
+- Runtime `52610e0`, Railway `da9b8e45-4d13-472b-a6ba-be75a7ca76e6` SUCCESS (created 7:40 PM Eastern). Four running source/build hashes match. 676 tests / 61 files and TypeScript build pass.
+- Shared availability result now instructs at most three spoken options per reply, spread across the day or near the caller preference; exact requested available time gets one confirmation. Live speech prompt reinforces the cap. Existing returned slots retained for follow-up; an unlisted requested time is rechecked with preferredTime rather than incorrectly declared unavailable.
+- Local and hosted actual Live + Terra replays passed initial three-choice, three different alternatives, and exact 12:15 Monday confirmation. Hosted used one successful availability lookup and no appointment actions. Final status healthy, zero active calls, Live + Terra, two allowed callers, writes/notifications simulated.
+- Evidence: `docs/reviews/GPT_LIVE_AVAILABILITY_PRESENTATION_2026-09-12.md` in `/Users/aryangupta/Documents/Dev/ai-receptionist-live-2026-09-12`. Continue in that worktree; do not deploy the older main checkout.
+- PENDING: owner handset listening; separate checking-narration / name-spelling replay items and separately scoped real-write pilot remain. Earlier long-call audio and transfer-hours fixes retained.
+
 ## 2026-09-12 evening — Long-call disconnect and transfer-hours fix DEPLOYED
 
 - Current runtime `79f5363`, Railway `7a0c5978-53a6-4e43-88cf-77699608efcd` SUCCESS (created7:27 PM Eastern). Seven running source/build hashes match. 676 tests /61 files and TypeScript build pass.
