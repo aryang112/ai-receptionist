@@ -113,6 +113,48 @@ describe('buildDailyDigest / buildWeeklyDigest (M4)', () => {
     expect(buildDailyDigest(QUIET_DAY)).toBeNull();
   });
 
+  it('excludes persisted simulated calls from daily and weekly production digests', () => {
+    const start = tsAt(DAY, '15:00');
+    fs.writeFileSync(
+      tmpCallStore,
+      [
+        {
+          type: 'start',
+          callSid: 'CA_simulated_digest',
+          ts: start,
+          testMode: true,
+          simulated: true,
+        },
+        {
+          type: 'booking',
+          callSid: 'CA_simulated_digest',
+          ts: start + 1_000,
+          testMode: true,
+          simulated: true,
+          service: 'Comparison only',
+          price: 999,
+          date: DAY,
+          time: '15:15',
+        },
+        {
+          type: 'end',
+          callSid: 'CA_simulated_digest',
+          ts: start + 2_000,
+          testMode: true,
+          simulated: true,
+          durationMs: 60_000,
+          outcome: 'booked',
+          estCostUsd: 99,
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join('\n') + '\n'
+    );
+
+    expect(buildDailyDigest(DAY)).toBeNull();
+    expect(buildWeeklyDigest(DAY)).toBeNull();
+  });
+
   it('returns null on a webhook-blocked-only day (S2 reject, never opened a session)', () => {
     const sid = nextCallSid();
     CallStore.recordBlocked(sid, '4105551234');

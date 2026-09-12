@@ -66,6 +66,12 @@ function callsForDate(rows: AnyRow[], dateISO: string): DigestCall[] {
 
   const out: DigestCall[] = [];
   for (const group of byCall.values()) {
+    // A comparison run is persisted for operator inspection, but it is never
+    // evidence of production ROI. CallStore tags every row; checking the
+    // whole group also keeps this safe if a partial write is recovered.
+    if (group.some((row) => row.testMode === true || row.simulated === true)) {
+      continue;
+    }
     const start = group.find((r) => r.type === 'start');
     const blockedRow = group.find((r) => r.type === 'blocked');
 

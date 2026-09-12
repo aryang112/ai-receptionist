@@ -20,6 +20,10 @@ import { DateTime } from 'luxon';
 import { env } from '../config/env.js';
 import { logger } from '../core/logger.js';
 import { readCalls } from '../services/callStore.js';
+import {
+  deriveLiveTestTelemetry,
+  type LiveTestTelemetry,
+} from '../services/liveTestTelemetry.js';
 import { getOpenClose } from '../core/hours.js';
 import { recentWarnings } from '../core/logRing.js';
 
@@ -169,6 +173,11 @@ type StartRow = {
   from?: string;
   recognizedClientId?: string;
   stirVerstat?: string;
+  testMode?: boolean;
+  simulated?: boolean;
+  voiceEngine?: string;
+  backendModel?: string;
+  backendEffort?: string;
 };
 type ToolRow = {
   type: 'tool';
@@ -287,8 +296,22 @@ export type CallSummary = {
   hasRecording: boolean;
   hasTranscript: boolean;
   blocked: boolean;
+  /** Comparison calls are deliberately excluded from normal ROI views. */
+  testMode: boolean;
+  simulated: boolean;
+  voiceEngine?: string | undefined;
+  backendModel?: string | undefined;
+  backendEffort?: string | undefined;
+  liveTelemetry?: LiveTestTelemetry | undefined;
   flags: string[];
 };
+
+function isTestGroup(rows: AnyRow[]): boolean {
+  return rows.some((row) => {
+    const value = row as Record<string, unknown>;
+    return value.testMode === true || value.simulated === true;
+  });
+}
 
 /** Grep-target: the exact endReason strings the code actually writes (see
  * twilioStream.ts setEndReasonOnce call sites) — matched loosely (includes)
@@ -352,6 +375,7 @@ function buildCallSummaries(rows: AnyRow[]): CallSummary[] {
     const blocked = group.find((r) => r.type === 'blocked') as
       | BlockedRow
       | undefined;
+    const testMode = isTestGroup(group);
 
     if (!start && blocked) {
       // S2: webhook-rejected before any OpenAI session — its own entry.
@@ -367,6 +391,8 @@ function buildCallSummaries(rows: AnyRow[]): CallSummary[] {
         hasRecording: false,
         hasTranscript: false,
         blocked: true,
+        testMode,
+        simulated: testMode,
         flags: [],
       });
       continue;
@@ -410,6 +436,10 @@ function buildCallSummaries(rows: AnyRow[]): CallSummary[] {
     // never lands in start.recognizedClientId — check for a 'recognized'
     // row too (see twilioStream.ts's adoptRecognizedCaller).
     const recognizedRow = group.some((r) => r.type === 'recognized');
+    const liveTelemetry =
+      start.voiceEngine === 'live'
+        ? deriveLiveTestTelemetry(group, start.backendModel)
+        : undefined;
 
     const outcome = end?.outcome ?? 'none';
     const endReason = end?.endReason;
@@ -430,6 +460,12 @@ function buildCallSummaries(rows: AnyRow[]): CallSummary[] {
       hasRecording,
       hasTranscript,
       blocked: false,
+      testMode,
+      simulated: testMode,
+      ...(start.voiceEngine ? { voiceEngine: start.voiceEngine } : {}),
+      ...(start.backendModel ? { backendModel: start.backendModel } : {}),
+      ...(start.backendEffort ? { backendEffort: start.backendEffort } : {}),
+      ...(liveTelemetry ? { liveTelemetry } : {}),
       flags: computeFlags({ outcome, endReason, tools }),
     });
   }
@@ -442,6 +478,10 @@ function daysParam(req: Request, fallback: number): number {
   const raw = req.query.days;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function testViewParam(req: Request): boolean {
+  return req.query.testView === 'true';
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -468,15 +508,21 @@ adminRouter.get('/api/calls', (req, res) => {
   const days = daysParam(req, 7);
   const since = Date.now() - days * 24 * 60 * 60 * 1000;
   const rows = readCalls() as AnyRow[];
-  const calls = buildCallSummaries(rows).filter((c) => c.startTs >= since);
-  res.json({ days, calls });
+  const testView = testViewParam(req);
+  const calls = buildCallSummaries(rows).filter(
+    (c) => c.startTs >= since && (testView ? c.testMode : !c.testMode)
+  );
+  res.json({ days, testView, calls });
 });
 
 adminRouter.get('/api/stats', (req, res) => {
   const days = daysParam(req, 30);
   const since = Date.now() - days * 24 * 60 * 60 * 1000;
   const rows = readCalls() as AnyRow[];
-  const calls = buildCallSummaries(rows).filter((c) => c.startTs >= since);
+  const testView = testViewParam(req);
+  const calls = buildCallSummaries(rows).filter(
+    (c) => c.startTs >= since && (testView ? c.testMode : !c.testMode)
+  );
 
   type DayBucket = {
     date: string;
@@ -563,6 +609,7 @@ adminRouter.get('/api/stats', (req, res) => {
 
   res.json({
     days,
+    testView,
     daily: daysList,
     totals: {
       // ANALYTICS AUDIT FIX (2026-08-22, P1): excludes webhook-blocked rows

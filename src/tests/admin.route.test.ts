@@ -393,6 +393,95 @@ describe('admin — GET /admin/api/calls joins per callSid', () => {
     const ts = res.body.calls.map((c: { startTs: number }) => c.startTs);
     expect(ts).toEqual([...ts].sort((a, b) => b - a));
   });
+
+  it('keeps simulated Live comparisons out of the default ROI view, while exposing their derived telemetry in testView', async () => {
+    const simulatedRows = [
+      {
+        type: 'start',
+        callSid: 'CA_live_test',
+        ts: recentTs + 100,
+        testMode: true,
+        simulated: true,
+        voiceEngine: 'live',
+        backendModel: 'gpt-5.6-terra',
+        backendEffort: 'default',
+      },
+      {
+        type: 'voice',
+        callSid: 'CA_live_test',
+        ts: recentTs + 200,
+        testMode: true,
+        simulated: true,
+        event: 'live_usage',
+        detail: {
+          voiceSeconds: 60,
+          responseId: 'resp_live_1',
+          backendUsage: {
+            inputTokens: 1_000_000,
+            cachedTokens: 500_000,
+            outputTokens: 1_000_000,
+          },
+          final: true,
+          finalConfirmed: false,
+        },
+      },
+      {
+        type: 'end',
+        callSid: 'CA_live_test',
+        ts: recentTs + 300,
+        testMode: true,
+        simulated: true,
+        durationMs: 60_000,
+        outcome: 'booked',
+      },
+    ];
+    writeFixture([...fullCallRows, ...simulatedRows]);
+
+    const production = await request(app).get('/admin/api/calls?days=1');
+    expect(production.body.testView).toBe(false);
+    expect(
+      production.body.calls.map((c: { callSid: string }) => c.callSid)
+    ).not.toContain('CA_live_test');
+
+    const testView = await request(app).get(
+      '/admin/api/calls?days=1&testView=true'
+    );
+    expect(testView.body.testView).toBe(true);
+    expect(testView.body.calls).toHaveLength(1);
+    expect(testView.body.calls[0]).toMatchObject({
+      callSid: 'CA_live_test',
+      testMode: true,
+      simulated: true,
+      voiceEngine: 'live',
+      backendModel: 'gpt-5.6-terra',
+      backendEffort: 'default',
+      liveTelemetry: {
+        voiceSeconds: 60,
+        backendResponseCount: 1,
+        finalConfirmed: false,
+      },
+    });
+    expect(testView.body.calls[0].liveTelemetry.audioCostUsd).toBeCloseTo(
+      0.05,
+      10
+    );
+    expect(testView.body.calls[0].liveTelemetry.backendCostUsd).toBeCloseTo(
+      13.1,
+      10
+    );
+    expect(testView.body.calls[0].liveTelemetry.totalCostUsd).toBeCloseTo(
+      13.15,
+      10
+    );
+
+    const productionStats = await request(app).get('/admin/api/stats?days=1');
+    expect(productionStats.body.totals.calls).toBe(1);
+    const testStats = await request(app).get(
+      '/admin/api/stats?days=1&testView=true'
+    );
+    expect(testStats.body.testView).toBe(true);
+    expect(testStats.body.totals.calls).toBe(1);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────

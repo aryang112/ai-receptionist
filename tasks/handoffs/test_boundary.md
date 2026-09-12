@@ -61,3 +61,29 @@
 - Follow-up evidence: the focused proposal/canonical/overlay suite passed 19
   tests, and `npm run build` passed after the owning Live workers repaired
   their transient exact-optional-property errors.
+
+## Follow-up delivery — simulated Live telemetry
+
+- Added `liveTestTelemetry.ts`, a pure CallStore-row aggregator for comparison
+  calls. It selects the newest cumulative `voiceSeconds`, deduplicates
+  backend usage by `responseId`, derives Live audio cost at `$0.05/min`, and
+  derives Terra/Luna backend cost from uncached input, cached input, and
+  output tokens. Missing usage or an unknown model remains absent rather than
+  being represented as `$0`.
+- `admin.ts` now includes test/simulated labels plus voice engine/backend
+  metadata and `liveTelemetry` for Live entries. `/admin/api/calls` and
+  `/admin/api/stats` are production-only by default; `?testView=true` returns
+  the simulated comparison set. Transcript retrieval remains unfiltered.
+- `digest.ts` filters a call group when any persisted row is marked
+  `testMode` or `simulated`, so a past comparison cannot appear in a later
+  production daily or weekly digest.
+
+### Evidence and limits
+
+- `npx vitest run src/tests/liveTestTelemetry.test.ts src/tests/admin.route.test.ts src/tests/digest.test.ts`: 50 tests passed.
+- Full `npm test`: 60 files / 648 tests passed. `npm run build` and
+  `git diff --check` passed.
+- `finalConfirmed` is reported only when Live persisted a final usage
+  snapshot. `backendCostUsd` is absent until a recognized backend model and a
+  complete token usage payload are available; this avoids presenting missing
+  billing data as a no-cost call.
