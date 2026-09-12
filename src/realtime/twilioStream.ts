@@ -3506,7 +3506,7 @@ export class TwilioRealtimeCall {
             ? `Already closed for today (hours were ${hours.hoursThatDay}) — say so and offer the next opening (${hours.nextOpen ?? 'tomorrow'}). Never call it fully booked.`
             : slots.length === 0
               ? 'Open that day but genuinely fully booked — say so and offer another day.'
-              : 'Offer only times from slots, nearest to what the caller asked for. If they want a time not in slots, it is not open — offer the nearest listed times instead, never invent one.';
+              : 'Offer only times from slots: at most three choices TOTAL per reply, then ask which works and wait. If their exact requested time is listed, confirm just that one. Otherwise choose near their stated time or part of day; with no preference, spread the choices across the returned day rather than reading adjacent starts. Give individual start times, never imply a continuous available range. Keep other returned slots for follow-up; offer different choices only if asked or the first choices do not work. This is a selection of times, not the entire calendar: if they request an unlisted time, check again with preferredTime before declaring it unavailable; never invent a time.';
 
       return await this.addNearbyDates(
         {
