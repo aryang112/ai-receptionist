@@ -224,3 +224,68 @@ describe('GPT-Live native end_call', () => {
     expect(call.session.close).not.toHaveBeenCalled();
   });
 });
+
+describe('Live account lookup uses available contact information', () => {
+  it('uses the calling number on an explicit no-argument lookup without a prefetch match', async () => {
+    const { call } = buildCall();
+    call.voiceEngine = 'live';
+    call.callerFrom = '+12025550198';
+    const lookup = vi
+      .spyOn(phorest, 'lookupCustomerByPhone')
+      .mockResolvedValue(null);
+    const result = await call.handleLookupCustomer({});
+    expect(lookup).toHaveBeenCalledWith('2025550198');
+    expect(result.found).toBe(false);
+    expect(result.note).toContain('Use a supplied full name next');
+  });
+
+  it('searches a supplied name instead of substituting the caller number or a prefetched person', async () => {
+    const { call } = buildCall();
+    call.voiceEngine = 'live';
+    call.callerFrom = '+12025550198';
+    call.prefetch = {
+      clientId: 'other-client',
+      firstName: 'Other',
+      lastName: 'Person',
+    };
+    const phone = vi.spyOn(phorest, 'lookupCustomerByPhone');
+    const name = vi
+      .spyOn(phorest, 'lookupCustomerByName')
+      .mockResolvedValue([
+        { clientId: 'requested-client', firstName: 'Test', lastName: 'Person' },
+      ]);
+    const result = await call.handleLookupCustomer({
+      firstName: 'Test',
+      lastName: 'Person',
+    });
+    expect(phone).not.toHaveBeenCalled();
+    expect(name).toHaveBeenCalledWith('Test', 'Person');
+    expect(result).toMatchObject({
+      found: true,
+      clientId: 'requested-client',
+      matchedBy: 'name',
+    });
+  });
+
+  it('keeps an explicitly supplied different number authoritative', async () => {
+    const { call } = buildCall();
+    call.voiceEngine = 'live';
+    call.callerFrom = '+12025550198';
+    const lookup = vi
+      .spyOn(phorest, 'lookupCustomerByPhone')
+      .mockResolvedValue(null);
+    await call.handleLookupCustomer({ phone: '2025550199' });
+    expect(lookup).toHaveBeenCalledWith('2025550199');
+    expect(lookup).not.toHaveBeenCalledWith('2025550198');
+  });
+
+  it('does not change the Realtime no-argument miss behavior', async () => {
+    const { call } = buildCall();
+    call.voiceEngine = 'realtime';
+    call.callerFrom = '+12025550198';
+    const lookup = vi.spyOn(phorest, 'lookupCustomerByPhone');
+    const result = await call.handleLookupCustomer({});
+    expect(lookup).not.toHaveBeenCalled();
+    expect(result.found).toBe(false);
+  });
+});

@@ -862,6 +862,12 @@ export function liveToolDefinitions(): ToolDefinition[] {
   const definitions = TOOL_DEFINITIONS.filter(
     (tool) => !writes.has(tool.name)
   ).map((tool) => {
+    if (tool.name === 'lookup_customer')
+      return {
+        ...tool,
+        description:
+          'Find an existing account. With no arguments, use the prefetched account or the actual calling number supplied privately by the application. Never invent or ask to repeat caller ID. Use a supplied phone when different; use supplied firstName and lastName after a phone miss. A name match alone does not verify identity or authorize appointment disclosure or changes.',
+      };
     if (tool.name === 'end_call')
       return {
         ...tool,
@@ -4284,8 +4290,15 @@ export class TwilioRealtimeCall {
         };
       }
 
-      if (payload.phone) {
-        const result = await phorest.lookupCustomerByPhone(payload.phone);
+      // Live can request the actual calling number without receiving or inventing
+      // it in the speech prompt. Explicit name/phone searches must take priority.
+      const lookupPhone =
+        payload.phone ??
+        (this.voiceEngine === 'live' && !payload.firstName && !payload.lastName
+          ? this.normalizePhone(this.callerFrom)
+          : undefined);
+      if (lookupPhone) {
+        const result = await phorest.lookupCustomerByPhone(lookupPhone);
         if (result) {
           logger.info(
             { tool: 'lookup_customer', clientId: result.clientId },
@@ -4429,7 +4442,13 @@ export class TwilioRealtimeCall {
       });
       return {
         found: false,
-        note: 'No matching client. Treat this as a normal new caller and do not mention the lookup miss. Continue the booking under IDENTIFY: settle the calling-number choice before asking for first and last name. Confirm the name only when it was unclear, and never characterize the name.',
+        ...(this.voiceEngine === 'live'
+          ? {
+              note: 'No matching account from this lookup. The calling number can be available without matching the phone on file. Use a supplied full name next, or ask only for the missing name parts or a different number. Do not claim caller ID is unavailable, invent a match, or create a client from a lookup miss.',
+            }
+          : {
+              note: 'No matching client. Treat this as a normal new caller and do not mention the lookup miss. Continue the booking under IDENTIFY: settle the calling-number choice before asking for first and last name. Confirm the name only when it was unclear, and never characterize the name.',
+            }),
       };
     } catch (error) {
       logger.error(

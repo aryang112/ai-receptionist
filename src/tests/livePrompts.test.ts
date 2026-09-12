@@ -183,11 +183,9 @@ describe('backend prompt extraction', () => {
       'If yes, ask for any missing name parts next, one question at a time'
     );
     expect(prompt).toContain(
-      'For an unrecognized existing client who wants appointment records or an account-specific action, ask for their phone number and wait'
+      'If the caller asks to use the calling number, call lookup_customer with no arguments'
     );
-    expect(prompt).toContain(
-      'if no match, ask for first and last name and wait'
-    );
+    expect(prompt).toContain('if no match, use the supplied full name');
     expect(prompt).toContain(
       'A confirmed name is contact data, not action approval'
     );

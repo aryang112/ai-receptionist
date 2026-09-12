@@ -31,7 +31,7 @@ Object.assign(process.env, {
   TWILIO_ACCOUNT_SID: '',
   TWILIO_AUTH_TOKEN: '',
   WS_AUTH_SECRET: '',
-  VOICE_TEST_ALLOWED_PHONES: '2025550198',
+  VOICE_TEST_ALLOWED_PHONES: callerPhone,
   CALL_STORE_PATH: path.join(output, 'calls.jsonl'),
   LOG_LEVEL: 'warn',
 });
