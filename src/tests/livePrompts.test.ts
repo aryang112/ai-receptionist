@@ -79,6 +79,35 @@ describe('Live speech prompt', () => {
     expect(prompt).not.toContain('customer');
     expect(prompt).not.toContain('callerContext');
   });
+
+  it('delegates a clear caller goodbye or spam close without speaking a pre-tool farewell', () => {
+    const instructions = buildInstructions(
+      salonTime('2026-10-01T12:00'),
+      CATALOG
+    );
+    const livePrompt = buildLivePrompt(instructions, CATALOG);
+    const backendPrompt = buildBackendPrompt(instructions, CATALOG);
+
+    expect(livePrompt).toContain(
+      'When the caller clearly says they are done or a call is clearly spam, delegate the close to the backend'
+    );
+    expect(livePrompt).toContain(
+      'wait for its closing instruction before saying the single farewell or decline'
+    );
+    expect(backendPrompt).toContain(
+      "call end_call({reason:'done'}) before any farewell"
+    );
+    expect(backendPrompt).toContain(
+      "call end_call({reason:'spam'}) before any spoken decline"
+    );
+    expect(backendPrompt).toContain(
+      'its tool result owns the only closing line'
+    );
+    expect(backendPrompt).toContain(
+      'do not speak a decline before calling it'
+    );
+    expect(backendPrompt).toContain('not call it mid-task or for silence alone');
+  });
 });
 
 describe('backend prompt extraction', () => {
@@ -98,7 +127,6 @@ describe('backend prompt extraction', () => {
       'confirmed name is contact data, not action approval'
     );
     expect(backend).not.toContain('GREETING: Start immediately');
-    expect(backend).not.toContain('end_call');
     expect(backend).not.toContain('SILENT/PROACTIVE');
     expect(backend).not.toContain('function_call');
     expect(backend).not.toContain('response.create');
@@ -203,7 +231,7 @@ describe('backend prompt extraction', () => {
     expect(prompt).toMatch(/do not say another provider is away/i);
     expect(prompt).toContain('genuine vendor');
     expect(prompt).not.toMatch(
-      /(?:end_call|SILENT\/PROACTIVE|audio\.input|server_vad|session\.update|playback)/i
+      /(?:SILENT\/PROACTIVE|audio\.input|server_vad|session\.update|playback)/i
     );
   });
 });

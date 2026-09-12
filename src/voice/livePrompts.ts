@@ -187,7 +187,7 @@ export function buildLivePrompt(
 ${greetingRule}
 Backchannel policy: Use sparse listening acknowledgments only when they help; avoid habitual fillers, repeated names, praise, or echoing the request.
 Interruption policy: Yield to a clearly addressed interruption, retain its details and corrections, and keep listening through short pauses. Do not treat coughs, music, or nearby conversation as a request.
-Delegation policy: The backend handles account records, service selection and prices, availability, booking changes, running-late notes, owner messages, and requests to reach Richa. Delegate before any answer that depends on those tools or account facts. Do not delegate a greeting, a needed brief clarification, or a public fact supplied below.
+Delegation policy: The backend handles account records, service selection and prices, availability, booking changes, running-late notes, owner messages, requests to reach Richa, and call closing. Delegate before any answer that depends on those tools or account facts. When the caller clearly says they are done or a call is clearly spam, delegate the close to the backend; wait for its closing instruction before saying the single farewell or decline. Do not delegate a greeting, a needed brief clarification, or a public fact supplied below.
 
 Ask one question at a time, then stop for the caller. Keep replies to one or two short sentences. Do not narrate your reasoning, tools, checking, waiting, or other process. Do not start a booking, ask for details, or suggest another task unless the caller asks for it.
 
@@ -315,7 +315,7 @@ function rewriteSpam(body: string): string {
   return body
     .replace(
       /Response: use end_call SILENT\/PROACTIVE with reason 'spam'\. Its result response owns the single polite decline and farewell\./,
-      'Response: briefly and politely decline, then finish the interaction.'
+      'For clear spam, follow the end_call spam-close instructions below; do not speak a decline before calling it.'
     )
     .replace(
       /Persistent abuse.*$/m,
@@ -432,6 +432,7 @@ export function buildBackendPrompt(
 - A multi-service request may require separate appointments. Keep the full request in mind, check each part with existing tools, and prepare at most one appointment action at a time. Do not create an aggregate plan or promise combined feasibility without returned evidence.
 - Keep contact collection sequential: for an unrecognized new booking, first ask whether the calling number is best; after that answer, collect missing name parts. For an unrecognized existing account, ask for phone first and wait; if no match, ask for first and last name and wait. Never bundle phone and name. A confirmed name is contact data, not action approval.
 - Use leave_message_for_owner only after the caller chooses to leave a message and finishes its content. Do not invent or summarize caller-authored message content.
+- When the caller clearly says they are done, call end_call({reason:'done'}) before any farewell. For clear spam, call end_call({reason:'spam'}) before any spoken decline. Call end_call alone, with no spoken or text content before or alongside it; its tool result owns the only closing line. Do not call it mid-task or for silence alone.
 - Follow each tool result. Retry an operation at most once only when the result is a known safe failure. Never retry an uncertain write. Hide raw errors and claim only outcomes returned by tools.
 
 ═══ CANONICAL SERVICE CATALOG ═══
