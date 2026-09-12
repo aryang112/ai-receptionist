@@ -862,6 +862,12 @@ export function liveToolDefinitions(): ToolDefinition[] {
   const definitions = TOOL_DEFINITIONS.filter(
     (tool) => !writes.has(tool.name)
   ).map((tool) => {
+    if (tool.name === 'end_call')
+      return {
+        ...tool,
+        description:
+          'After the Live speech model has said one short farewell or spam decline, close the phone call silently. Call this alone only when the caller is clearly done or the call is clear spam. The application drains current speech playback before hanging up. An ending:true result means produce no further speech or text. Never close mid-task or for silence alone.',
+      };
     if (tool.name !== 'leave_message_for_owner') return tool;
     return {
       ...tool,
@@ -1204,6 +1210,8 @@ export class TwilioRealtimeCall {
   private readonly liveBackendEffort = env.OPENAI_LIVE_BACKEND_EFFORT;
   private releaseVoiceCall: (() => void) | undefined;
   private liveOutputActive = false;
+  private liveLastOutputStartedAt = 0;
+  private liveOutputCommittedClosed = false;
   private markSequence = 0;
   private readonly proposals = new AppointmentProposals(
     (action, args) =>
@@ -1590,6 +1598,7 @@ export class TwilioRealtimeCall {
               : {}),
             onOutputSpeechStarted: () => {
               this.liveOutputActive = true;
+              this.liveLastOutputStartedAt = Date.now();
               this.lastActivityAt = Date.now();
               this.outboundAudioEpoch += 1;
             },
@@ -2262,7 +2271,8 @@ export class TwilioRealtimeCall {
   }
 
   private sendAudioToTwilio(base64Mulaw: string, responseId?: string) {
-    if (!this.streamSid || this.closed) return;
+    if (!this.streamSid || this.closed || this.liveOutputCommittedClosed)
+      return;
 
     if (this.voiceEngine === 'realtime') this.outboundAudioEpoch += 1;
     this.lastOutboundAudioResponseId = responseId ?? null;
@@ -5162,6 +5172,19 @@ export class TwilioRealtimeCall {
     const speechEpochAtRequest =
       opts?.speechEpochAtRequest ?? this.callerSpeechEpoch;
     await this.waitForPlaybackToDrain(6000);
+    if (
+      this.voiceEngine === 'live' &&
+      opts?.modelRequestedClose &&
+      (this.liveOutputActive || this.markQueue.length > 0)
+    ) {
+      this.transferring = false;
+      CallStore.recordToolCall(this.callSid, {
+        name: 'end_call',
+        ok: false,
+        error: 'Live playback drain timed out; call left open',
+      });
+      return { status: 'aborted' };
+    }
     // Caller interrupted the goodbye ("oh wait—") → the barge-in cleared the
     // mark queue, which is why the drain resolved. Don't hang up on them.
     // (opts.ignoreBargeIn: the duration cap's FINAL attempt hangs up
@@ -5186,6 +5209,7 @@ export class TwilioRealtimeCall {
       });
       return { status: 'aborted' };
     }
+    if (this.voiceEngine === 'live') this.liveOutputCommittedClosed = true;
     if (!client || !this.callSid) {
       // No REST client (misconfig): tear down our side; Twilio ends the call
       // when the <Connect><Stream> socket closes. The farewell wait/drain above
@@ -5222,6 +5246,7 @@ export class TwilioRealtimeCall {
         { tool: 'end_call', error: this.formatError(error) },
         'Hangup failed'
       );
+      this.liveOutputCommittedClosed = false;
       // Mirror F10c: the hangup didn't happen, so a later fatal error must
       // still be able to failover to the owner.
       this.transferring = false;
@@ -5266,7 +5291,66 @@ export class TwilioRealtimeCall {
       };
     }
     if (this.modelEndCallPending) {
-      return { ending: true, note: goodbyeNote };
+      return {
+        ending: true,
+        note:
+          this.voiceEngine === 'live'
+            ? 'Say nothing further. The application is closing the call.'
+            : goodbyeNote,
+      };
+    }
+    if (this.voiceEngine === 'live') {
+      // Live owns the single spoken farewell before delegating the hangup.
+      // Require current-turn audio, then drain actual Twilio playback; do not
+      // manufacture a second Realtime-style post-tool farewell.
+      const recentCurrentSpeech =
+        this.liveLastOutputStartedAt > this.lastCallerSpeechStoppedAt &&
+        (this.liveOutputActive ||
+          this.markQueue.length > 0 ||
+          Date.now() - this.liveLastOutputStartedAt < 10000);
+      if (!recentCurrentSpeech) {
+        CallStore.recordToolCall(this.callSid, {
+          name: 'end_call',
+          ok: false,
+          error: 'Live close aborted: no current farewell audio segment',
+        });
+        return {
+          aborted: true,
+          note: 'Give one brief farewell if the caller is done, then delegate the close again. Do not hang up silently.',
+        };
+      }
+      const epoch = this.callerSpeechEpoch;
+      const previousOutcome = this.outcome;
+      this.modelEndCallPending = true;
+      this.modelEndCallTimer = setTimeout(() => {
+        this.modelEndCallTimer = undefined;
+        if (this.closed || this.callerSpeechEpoch !== epoch) {
+          this.modelEndCallPending = false;
+          return;
+        }
+        if (reason === 'spam') this.outcome = 'spam';
+        void this.endCallNow(
+          reason === 'spam' ? 'spam decline' : 'caller confirmed done',
+          { modelRequestedClose: true, speechEpochAtRequest: epoch }
+        )
+          .then((result) => {
+            if (result.status !== 'ended') {
+              if (reason === 'spam') this.outcome = previousOutcome;
+              this.modelEndCallPending = false;
+              this.liveOutputCommittedClosed = false;
+            }
+          })
+          .catch(() => {
+            if (reason === 'spam') this.outcome = previousOutcome;
+            this.modelEndCallPending = false;
+            this.transferring = false;
+            this.liveOutputCommittedClosed = false;
+          });
+      }, 0);
+      return {
+        ending: true,
+        note: 'The farewell has been spoken. Emit no further speech or text; the application will close after playback drains.',
+      };
     }
 
     // AUDIT FIX (2026-08-22, P1): remember the pre-spam outcome so an ABORTED
@@ -5700,12 +5784,10 @@ export class TwilioRealtimeCall {
       if (testClient && this.callSid && !this.closed && !this.transferring) {
         this.transferring = true;
         try {
-          await testClient
-            .calls(this.callSid)
-            .update({
-              twiml:
-                '<Response><Say>The test encountered a connection problem. Please try again.</Say><Hangup/></Response>',
-            });
+          await testClient.calls(this.callSid).update({
+            twiml:
+              '<Response><Say>The test encountered a connection problem. Please try again.</Say><Hangup/></Response>',
+          });
         } catch {
           /* cleanup below */
         }

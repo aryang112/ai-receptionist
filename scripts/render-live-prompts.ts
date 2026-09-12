@@ -24,7 +24,7 @@ async function main() {
   console.log(backend);
   console.log('=== BACKEND PROTOCOL CHECK ===');
   const protocolTerms =
-    /server_vad|end_call|SILENT\/PROACTIVE|function_call|response\.create|session\.update|playback|\bVAD\b/i;
+    /server_vad|SILENT\/PROACTIVE|function_call|response\.create|session\.update|playback|\bVAD\b/i;
   console.log(
     `Realtime-only protocol terms: ${protocolTerms.test(backend) ? 'FOUND' : 'none'}`
   );
