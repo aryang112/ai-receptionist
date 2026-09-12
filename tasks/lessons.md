@@ -497,3 +497,7 @@ Full evidence: `docs/GPT_LIVE_1_EVALUATION_2026-09-10.md`; probes: `scripts/gpt-
 - Transfer eligibility means a permitted dialing window, not proof Richa is personally available. Keep that internal flag out of Live's public facts; clarify a bare availability question.
 - Simulation must guard optional post-call Responses summaries before any model request, as well as SMS, digest, blocklist and emergency transfer paths.
 - Use a fixed built artifact for actual-model probes; compiling a worker's half-edited file can produce a transient runtime failure. Check build exit status, not a piped tail status.
+
+## 2026-09-12 — A caller-ID miss is not missing caller ID
+
+The owner’s number did not match the mobile on the real Phorest profile. Separately, Live asked for contact details instead of delegating even when the caller supplied a full name. Give the speech layer the capability contract (the application can use the calling number), keep the actual number private, and let a no-argument Live lookup use the server’s caller number. Explicit supplied names/numbers take priority. After a phone miss, search an already-supplied full name rather than asking again. A name match is a candidate, not verified identity; never silently rewrite a client’s mobile to force recognition. Validate real data and model/tool behavior independently.

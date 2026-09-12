@@ -1,5 +1,14 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-12 evening — Live caller lookup correction DEPLOYED
+
+- Runtime `9851e8a`, Railway `6f211b18-0e1a-4281-ae75-0c8e737f63e1` SUCCESS. Four source/build hashes match; 666 tests / 61 files and build pass. Live+Terra default, two allowed callers, all writes/notifications still simulated; final active calls zero.
+- Owner’s calling number ending 5169 has no real Phorest phone match. Aryan Gupta exists with mobile ending 7474. No profile data changed. Automatic recognition from 5169 will continue to miss until the actual record is corrected separately.
+- Fixed an independent Live flow defect: explicit caller-ID lookup delegates before asking for contact details; no-argument lookup uses the server’s calling number, and a supplied full name is searched after a phone miss. Explicit different names/numbers retain priority. Name matches require identity confirmation before appointment disclosure/actions.
+- Before-fix hosted replay asked for a number and ran no lookup despite supplied name. After-fix local and hosted actual-model replays found Aryan Gupta by name and asked for the account phone to confirm identity. Caller-ID-only local replay asks for full name after a clean miss, without claiming caller ID is unavailable.
+- Evidence: `docs/reviews/GPT_LIVE_CALLER_LOOKUP_FIX_2026-09-12.md` in the implementation worktree `/Users/aryangupta/Documents/Dev/ai-receptionist-live-2026-09-12`. Continue there; do not deploy the older main checkout.
+- PENDING: owner next-call confirmation; separately resolve the Phorest mobile mismatch and real-write pilot scope. No actual booking/rescheduling/cancellation enabled by this correction.
+
 ## 2026-09-12 — GPT-Live owner taste test DEPLOYED; owner listening pending
 
 - Aryan authorized implementation, agent delegation and deployment. Worktree `/Users/aryangupta/Documents/Dev/ai-receptionist-live-2026-09-12`, branch `codex/gpt-live-taste-test`, derived from verified Railway production `8533e61`. Do not deploy the dirty main checkout.

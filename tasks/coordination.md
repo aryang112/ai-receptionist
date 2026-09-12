@@ -53,3 +53,7 @@ Workers post their own `tasks/handoffs/<role>.md` with decisions, files, test ev
 - Hosted synthetic Terra, Luna and Realtime comparisons all quoted the correct $23 brow/lip bundle. Default restored to Terra; simulated overlay reset; zero active calls; two approved callers. Unauthorized variant requests and unapproved callers rejected.
 - Ten normal synthetic greeting probes include recording disclosure; direct hours uses no backend; seven-second read delay recovers; bare Richa availability asks appointment vs. speaking clarification. Closing has explicit farewell evidence and playback drain guards. Final repeated partial goodbye fragment remains NEEDS LISTEN.
 - Owner handset/speakerphone acceptance remains pending. No real booking, SMS, transfer, or unsolicited owner call was made. Release report and guide contain the remaining scenarios and limitations.
+
+## Owner lookup follow-up — September 12 evening
+
+Parent fixed and deployed `9851e8a` after reproducing the owner call. Source data mismatch (calling mobile ending 5169 vs. Phorest 7474) is separate from a Live delegation/lookup bug. Hosted corrected simulation finds Aryan Gupta by supplied name and asks for identity confirmation. 666 tests pass. No profile edits or real appointment writes. Release and evidence: `docs/reviews/GPT_LIVE_CALLER_LOOKUP_FIX_2026-09-12.md`.
