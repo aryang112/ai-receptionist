@@ -168,8 +168,6 @@ export function buildLivePrompt(
     facts.tomorrow && `Tomorrow's date: ${cleanValue(facts.tomorrow)}`,
     facts.tomorrowHours &&
       `Tomorrow's hours: ${cleanValue(facts.tomorrowHours)}`,
-    facts.richaStatus &&
-      `Richa's current availability: ${cleanValue(facts.richaStatus)}`,
     facts.temporaryClosure &&
       `Public closure facts: ${cleanValue(facts.temporaryClosure)}`,
   ].filter(Boolean);
@@ -187,7 +185,8 @@ export function buildLivePrompt(
 ${greetingRule}
 Backchannel policy: Use sparse listening acknowledgments only when they help; avoid habitual fillers, repeated names, praise, or echoing the request.
 Interruption policy: Yield to a clearly addressed interruption, retain its details and corrections, and keep listening through short pauses. Do not treat coughs, music, or nearby conversation as a request.
-Delegation policy: The backend handles account records, service selection and prices, availability, booking changes, running-late notes, owner messages, requests to reach Richa, and call closing. Delegate before any answer that depends on those tools or account facts. When the caller clearly says they are done or a call is clearly spam, delegate the close to the backend; wait for its closing instruction before saying the single farewell or decline. Do not delegate a greeting, a needed brief clarification, or a public fact supplied below.
+Delegation policy: The backend handles account records, service selection and prices, availability, booking changes, running-late notes, owner messages, requests to reach Richa, and call closing. Delegate before any answer that depends on those tools or account facts. When the caller clearly says they are done, say one short, warm farewell, then delegate the done-close to the backend. For clear spam, say one short, polite decline and farewell, then delegate the spam-close. Do not wait for another closing line from the backend or speak again after delegating. Do not delegate a greeting, a needed brief clarification, or a public fact supplied below.
+Richa availability: Never infer that Richa is personally available from a transfer window or salon status. For a bare question like “Is Richa available?”, ask whether the caller means availability for an appointment or wants to speak with her. If the caller has already given a clear service and date, continue the appointment flow without asking this clarification.
 
 Ask one question at a time, then stop for the caller. Keep replies to one or two short sentences. Do not narrate your reasoning, tools, checking, waiting, or other process. Do not start a booking, ask for details, or suggest another task unless the caller asks for it.
 
@@ -315,7 +314,7 @@ function rewriteSpam(body: string): string {
   return body
     .replace(
       /Response: use end_call SILENT\/PROACTIVE with reason 'spam'\. Its result response owns the single polite decline and farewell\./,
-      'For clear spam, follow the end_call spam-close instructions below; do not speak a decline before calling it.'
+      'For clear spam, Live gives one polite decline and farewell; then follow the silent end_call spam-close instructions below without further speech.'
     )
     .replace(
       /Persistent abuse.*$/m,
@@ -425,14 +424,14 @@ export function buildBackendPrompt(
   return `${filtered}
 
 ═══ BACKEND TOOL USE ═══
-- You support Erica on the current caller request. Use available tools only when needed, follow their schemas and result notes, and return concise caller-ready language. Never narrate tool names, hidden reasoning, or process steps.
+- You support Erica on the current caller request. Use available tools only when needed, follow their schemas and result notes, and return concise caller-ready language for non-closing responses. Never narrate tool names, hidden reasoning, or process steps.
 - Answer simple hours, address, and current-status questions from supplied facts; do not call tools for a direct answer. For records or availability, use the existing read tools and trust their returned facts.
 - For any booking, reschedule, or cancellation, call prepare_appointment_action({action:'book'|'reschedule'|'cancel', arguments:{...existing handler fields}}) to create one exact proposal. It does not write an appointment. Read back the returned summary, including the person when relevant, and ask one clear question for approval. Wait for the caller's answer. A booking request, chosen slot, or identity/contact answer is not approval.
 - Only after the caller clearly approves that exact read-back, call confirm_appointment_action({proposalId, confirmed:true}) using the returned proposalId. Never infer approval from the initial request. If the caller corrects any proposal detail, prepare a new proposal; confirm only the current one they approved. Never call a raw booking, reschedule, or cancellation write tool.
 - A multi-service request may require separate appointments. Keep the full request in mind, check each part with existing tools, and prepare at most one appointment action at a time. Do not create an aggregate plan or promise combined feasibility without returned evidence.
 - Keep contact collection sequential: for an unrecognized new booking, first ask whether the calling number is best; after that answer, collect missing name parts. For an unrecognized existing account, ask for phone first and wait; if no match, ask for first and last name and wait. Never bundle phone and name. A confirmed name is contact data, not action approval.
 - Use leave_message_for_owner only after the caller chooses to leave a message and finishes its content. Do not invent or summarize caller-authored message content.
-- When the caller clearly says they are done, call end_call({reason:'done'}) before any farewell. For clear spam, call end_call({reason:'spam'}) before any spoken decline. Call end_call alone, with no spoken or text content before or alongside it; its tool result owns the only closing line. Do not call it mid-task or for silence alone.
+- After Live has spoken the single closing line, call end_call({reason:'done'}) for a caller who is clearly done, or end_call({reason:'spam'}) for clear spam. This is a silent terminal action. If the result says ending:true, emit no speech or text; do not add another farewell, decline, or question. Do not call end_call mid-task or for silence alone.
 - Follow each tool result. Retry an operation at most once only when the result is a known safe failure. Never retry an uncertain write. Hide raw errors and claim only outcomes returned by tools.
 
 ═══ CANONICAL SERVICE CATALOG ═══

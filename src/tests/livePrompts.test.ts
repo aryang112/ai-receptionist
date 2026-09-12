@@ -80,7 +80,27 @@ describe('Live speech prompt', () => {
     expect(prompt).not.toContain('callerContext');
   });
 
-  it('delegates a clear caller goodbye or spam close without speaking a pre-tool farewell', () => {
+  it('does not mistake Richa’s transfer window for her personal availability', () => {
+    const prompt = buildLivePrompt('', CATALOG, {
+      publicFacts: {
+        richaStatus: 'Available for transfer until 5 PM',
+      },
+    });
+
+    expect(prompt).not.toContain("Richa's current availability");
+    expect(prompt).not.toContain('Available for transfer until 5 PM');
+    expect(prompt).toContain(
+      'Never infer that Richa is personally available from a transfer window or salon status'
+    );
+    expect(prompt).toContain(
+      'ask whether the caller means availability for an appointment or wants to speak with her'
+    );
+    expect(prompt).toContain(
+      'If the caller has already given a clear service and date, continue the appointment flow'
+    );
+  });
+
+  it('speaks one goodbye or spam decline before a silent backend close', () => {
     const instructions = buildInstructions(
       salonTime('2026-10-01T12:00'),
       CATALOG
@@ -89,24 +109,33 @@ describe('Live speech prompt', () => {
     const backendPrompt = buildBackendPrompt(instructions, CATALOG);
 
     expect(livePrompt).toContain(
-      'When the caller clearly says they are done or a call is clearly spam, delegate the close to the backend'
+      'When the caller clearly says they are done, say one short, warm farewell, then delegate the done-close to the backend'
     );
     expect(livePrompt).toContain(
-      'wait for its closing instruction before saying the single farewell or decline'
+      'For clear spam, say one short, polite decline and farewell, then delegate the spam-close'
     );
     expect(backendPrompt).toContain(
-      "call end_call({reason:'done'}) before any farewell"
+      "call end_call({reason:'done'}) for a caller who is clearly done"
     );
     expect(backendPrompt).toContain(
-      "call end_call({reason:'spam'}) before any spoken decline"
+      "end_call({reason:'spam'}) for clear spam"
     );
     expect(backendPrompt).toContain(
-      'its tool result owns the only closing line'
+      'After Live has spoken the single closing line'
     );
     expect(backendPrompt).toContain(
-      'do not speak a decline before calling it'
+      'This is a silent terminal action'
     );
-    expect(backendPrompt).toContain('not call it mid-task or for silence alone');
+    expect(backendPrompt).toContain(
+      'If the result says ending:true, emit no speech or text'
+    );
+    expect(backendPrompt).toContain(
+      'Live gives one polite decline and farewell'
+    );
+    expect(backendPrompt).not.toContain('tool result owns the only closing line');
+    expect(backendPrompt).toContain(
+      'not call end_call mid-task or for silence alone'
+    );
   });
 });
 
