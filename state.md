@@ -1,5 +1,14 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-12 evening — Long-call disconnect and transfer-hours fix DEPLOYED
+
+- Current runtime `79f5363`, Railway `7a0c5978-53a6-4e43-88cf-77699608efcd` SUCCESS (created7:27 PM Eastern). Seven running source/build hashes match. 676 tests /61 files and TypeScript build pass.
+- Owner call at7:09 PM (`CA3059bfa27891d40fbfbdb8746ecfe1b0`) was ended by our400ms audio-queue fatal guard at140.6 seconds. Not a model end_call or recorded OpenAI session timeout. Fixed cumulative timer drift/arbitrary-chunk pacing with complete frames, monotonic deadlines and bounded catch-up.400ms is now a soft jitter target; pathological5s backlog guard retained without dropping speech.
+- Transfers now use reusable9 AM inclusive–8 PM exclusive gate, independent of salon opening. Normal and technical-error failover obey it. Public questions about Richa's salon schedule use published business hours without personal-schedule claims. Eligible test transfers report simulation rather than personal unavailability.
+- Local195-second actual-model replay completed a simulated booking. Hosted195-second replay stayed connected throughout, correctly described simulation and gave public Monday hours. Hosted booking did not complete: fixed TTS script did not answer requested first-name spelling; keep that as a separate conversation replay item. Caller-ID prefetch was recognized:true.
+- Final status Live+Terra, zero active calls, two approved callers, all writes/notifications simulated. No real dial or appointment change made. Details: `docs/reviews/GPT_LIVE_AUDIO_AND_TRANSFER_FIX_2026-09-12.md` in `/Users/aryangupta/Documents/Dev/ai-receptionist-live-2026-09-12`; continue there, not older main.
+- PENDING: owner handset/speakerphone taste test; identity-spelling replay; separately scoped real-write pilot. Do not enable customer intake or real writes based on these synthetic checks.
+
 ## 2026-09-12 7:05 PM — Owner phone corrected in Phorest; cache refreshed
 
 - Aryan updated his own Phorest mobile. Direct client GET now verifies the number ending 5169 matches Aryan Gupta. Earlier 7474 mismatch is resolved.

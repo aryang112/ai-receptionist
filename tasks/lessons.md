@@ -501,3 +501,9 @@ Full evidence: `docs/GPT_LIVE_1_EVALUATION_2026-09-10.md`; probes: `scripts/gpt-
 ## 2026-09-12 — A caller-ID miss is not missing caller ID
 
 The owner’s number did not match the mobile on the real Phorest profile. Separately, Live asked for contact details instead of delegating even when the caller supplied a full name. Give the speech layer the capability contract (the application can use the calling number), keep the actual number private, and let a no-argument Live lookup use the server’s caller number. Explicit supplied names/numbers take priority. After a phone miss, search an already-supplied full name rather than asking again. A name match is a candidate, not verified identity; never silently rewrite a client’s mobile to force recognition. Validate real data and model/tool behavior independently.
+
+## 2026-09-12 — Do not turn ordinary audio jitter into a fatal call error
+
+The first Live adapter's 400 ms speech queue guard killed a real owner call after 140.6 seconds. Relative 20 ms timers accumulate callback delay; arbitrary API event tails are not necessarily complete 20 ms frames. Reassemble full audio frames, use a monotonic sample clock with bounded catch-up, keep a soft jitter target separate from the pathological memory/backlog cap, and preserve speech bytes. A short one-turn probe cannot validate a long-call pacing loop. Run longer than the observed failure and exercise real tools. The original API/timing cause of jitter was not captured; our fatal guard and resulting hangup were verified directly.
+
+A simulated transfer must not be described as the owner being unavailable or failing to answer. Evaluate real hours/closure gates before simulating. The 9 AM–8 PM transfer window is separate from published salon hours; technical-error fallback must respect the same late-night cutoff.

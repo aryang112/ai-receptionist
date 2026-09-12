@@ -57,3 +57,8 @@ Workers post their own `tasks/handoffs/<role>.md` with decisions, files, test ev
 ## Owner lookup follow-up — September 12 evening
 
 Parent fixed and deployed `9851e8a` after reproducing the owner call. Source data mismatch (calling mobile ending 5169 vs. Phorest 7474) is separate from a Live delegation/lookup bug. Hosted corrected simulation finds Aryan Gupta by supplied name and asks for identity confirmation. 666 tests pass. No profile edits or real appointment writes. Release and evidence: `docs/reviews/GPT_LIVE_CALLER_LOOKUP_FIX_2026-09-12.md`.
+
+## Long-call audio and transfer-hours correction — September 12 evening
+
+- Terra changed the reusable transfer cutoff to 8 PM and public schedule wording; added multi-turn probe support (`3a7b2c1`, `51ef1dd`). Sol independently diagnosed pacing and added regression tests (`f87c26f`). Parent integrated clock/packetization/backlog corrections, simulated transfer truthfulness, and fatal-transfer cutoff (`79f5363`).
+- 676 tests / 61 files and build pass. Local195-second actual-model conversation finished with simulated booking. Railway release `7a0c5978-53a6-4e43-88cf-77699608efcd` SUCCESS; seven hashes match. Hosted long replay verification is recorded in `docs/reviews/GPT_LIVE_AUDIO_AND_TRANSFER_FIX_2026-09-12.md`.
