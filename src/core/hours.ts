@@ -189,7 +189,7 @@ function parseHHMM(value: string, fallback: number): number {
  * morning and asking for Richa should ring through even though the salon is
  * closed; a 10:30 PM caller should not. Every day of the week, ignoring
  * closedDates: the salon calendar is irrelevant to whether her phone may
- * ring. Defaults 09:00–21:00 salon TZ (end exclusive), env-tunable via
+ * ring. Defaults 09:00–20:00 salon TZ (end exclusive), env-tunable via
  * TRANSFER_WINDOW_START/END — read at CALL time so tests can reassign env.
  * Vacation mode is a separate, earlier gate in handleTransferToOwner and is
  * deliberately NOT considered here. `now` injectable for tests.
@@ -199,7 +199,7 @@ export function isWithinTransferWindow(
 ): boolean {
   const nowDt = now.setZone(TZ);
   const start = parseHHMM(env.TRANSFER_WINDOW_START, 9 * 60);
-  const end = parseHHMM(env.TRANSFER_WINDOW_END, 21 * 60);
+  const end = parseHHMM(env.TRANSFER_WINDOW_END, 20 * 60);
   const minutes = nowDt.hour * 60 + nowDt.minute;
   return minutes >= start && minutes < end;
 }

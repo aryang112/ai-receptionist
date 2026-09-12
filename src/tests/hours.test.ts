@@ -151,11 +151,11 @@ describe('isWithinTransferWindow (human transfer window, 2026-08-24)', () => {
     env.TRANSFER_WINDOW_END = savedEnd;
   });
 
-  it('default 09:00–21:00: boundaries are start-inclusive, end-exclusive', () => {
+  it('default 09:00–20:00: boundaries are start-inclusive, end-exclusive', () => {
     expect(isWithinTransferWindow(at('2026-08-25T08:59'))).toBe(false);
     expect(isWithinTransferWindow(at('2026-08-25T09:00'))).toBe(true);
-    expect(isWithinTransferWindow(at('2026-08-25T20:59'))).toBe(true);
-    expect(isWithinTransferWindow(at('2026-08-25T21:00'))).toBe(false);
+    expect(isWithinTransferWindow(at('2026-08-25T19:59'))).toBe(true);
+    expect(isWithinTransferWindow(at('2026-08-25T20:00'))).toBe(false);
   });
 
   it('ignores the salon calendar — the Holly regression cases', () => {
@@ -163,8 +163,8 @@ describe('isWithinTransferWindow (human transfer window, 2026-08-24)', () => {
     expect(isWithinTransferWindow(at('2026-08-23T11:46'))).toBe(true);
     // Weekday 9:30 AM, salon not open until noon.
     expect(isWithinTransferWindow(at('2026-08-25T09:30'))).toBe(true);
-    // Weekday 8 PM: salon closed at 7, but Richa still takes calls.
-    expect(isWithinTransferWindow(at('2026-08-25T20:00'))).toBe(true);
+    // Weekday 7:59 PM: salon closed at 7, but Richa still takes calls.
+    expect(isWithinTransferWindow(at('2026-08-25T19:59'))).toBe(true);
     // Christmas (a closedDate) mid-day: her phone may still ring.
     expect(isWithinTransferWindow(at('2026-12-25T13:00'))).toBe(true);
     // Late night is out regardless of anything else.
@@ -179,12 +179,12 @@ describe('isWithinTransferWindow (human transfer window, 2026-08-24)', () => {
     expect(isWithinTransferWindow(at('2026-08-25T18:00'))).toBe(false);
   });
 
-  it('garbage window values fall back to the 09:00/21:00 defaults', () => {
+  it('garbage window values fall back to the 09:00/20:00 defaults', () => {
     env.TRANSFER_WINDOW_START = 'not-a-time';
     env.TRANSFER_WINDOW_END = '25:99';
     expect(isWithinTransferWindow(at('2026-08-25T08:59'))).toBe(false);
     expect(isWithinTransferWindow(at('2026-08-25T09:00'))).toBe(true);
-    expect(isWithinTransferWindow(at('2026-08-25T20:59'))).toBe(true);
-    expect(isWithinTransferWindow(at('2026-08-25T21:00'))).toBe(false);
+    expect(isWithinTransferWindow(at('2026-08-25T19:59'))).toBe(true);
+    expect(isWithinTransferWindow(at('2026-08-25T20:00'))).toBe(false);
   });
 });

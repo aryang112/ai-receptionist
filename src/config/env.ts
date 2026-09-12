@@ -249,7 +249,7 @@ export const env = {
   // the defaults (same defensive-parse convention as DIGEST_TIME). Vacation
   // mode still suppresses transfers entirely (checked first in the handler).
   TRANSFER_WINDOW_START: process.env.TRANSFER_WINDOW_START || '09:00',
-  TRANSFER_WINDOW_END: process.env.TRANSFER_WINDOW_END || '21:00',
+  TRANSFER_WINDOW_END: process.env.TRANSFER_WINDOW_END || '20:00',
 
   // How long the live transfer rings Richa's phone before Twilio gives up and
   // hands control back to us (the <Dial timeout> + action callback in

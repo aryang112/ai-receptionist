@@ -80,7 +80,7 @@ describe('Live speech prompt', () => {
     expect(prompt).not.toContain('callerContext');
   });
 
-  it('does not mistake Richa’s transfer window for her personal availability', () => {
+  it('uses public salon hours for Richa schedule questions without inventing personal availability', () => {
     const prompt = buildLivePrompt('', CATALOG, {
       publicFacts: {
         richaStatus: 'Available for transfer until 5 PM',
@@ -90,7 +90,10 @@ describe('Live speech prompt', () => {
     expect(prompt).not.toContain("Richa's current availability");
     expect(prompt).not.toContain('Available for transfer until 5 PM');
     expect(prompt).toContain(
-      'Never infer that Richa is personally available from a transfer window or salon status'
+      "Treat public questions about when Richa works or is available as questions about the salon's public hours"
+    );
+    expect(prompt).toContain(
+      'do not invent or confirm a personal schedule or personal availability'
     );
     expect(prompt).toContain(
       'ask whether the caller means availability for an appointment or wants to speak with her'
