@@ -1,5 +1,12 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-12 evening — Owner transfer working-day correction DEPLOYED
+
+- Runtime `8607ef1`, Railway `4d6dc922-bc44-4bf1-8699-b31c7f51db1f` SUCCESS (created 7:47 PM Eastern). Four deployed source/build hashes match; 682 tests / 61 files and TypeScript build pass. Health 200, zero active calls, Live + Terra, two approved callers, writes/notifications simulated.
+- Owner clarified 9 AM–8 PM applies only on Richa's working days. Shared transfer helper now excludes Sundays, closedDates and recorded away closures using existing business.json calendar; before-opening and after-closing transfers within that window remain permitted on working days. This overrides earlier every-day/waking-hours policy. Calendar itself unchanged.
+- Prompt status, requested transfers and fatal-error fallback share the guard. Tests verify days off, holidays, away days, reopening and boundaries. This single-provider calendar is the working-day source; individual time off must be recorded there, not inferred from zero appointment slots.
+- Report: `docs/reviews/GPT_LIVE_TRANSFER_WORKDAYS_2026-09-12.md` in `/Users/aryangupta/Documents/Dev/ai-receptionist-live-2026-09-12`. Continue in that worktree, not older main. Previous three-choice availability and audio pacing fixes retained. Owner listening / identity-spelling replay / real-write pilot remain pending.
+
 ## 2026-09-12 evening — Three-time availability presentation DEPLOYED
 
 - Runtime `52610e0`, Railway `da9b8e45-4d13-472b-a6ba-be75a7ca76e6` SUCCESS (created 7:40 PM Eastern). Four running source/build hashes match. 676 tests / 61 files and TypeScript build pass.

@@ -8,4 +8,4 @@ The prompt's computed line status, normal transfer handler and technical-error f
 
 Validation: 682 tests across 61 files and TypeScript build pass. Cases cover Sunday and Christmas transfer refusal, away-day rejection including fatal failover, reopening, before-opening eligibility, and the exact 8 PM boundary. Sunday prompt status is unavailable. No actual phone call or SMS was sent. Real appointment changes and owner notifications remain simulated in the test deployment.
 
-Release verification pending.
+Runtime source `8607ef1`; Railway release `4d6dc922-bc44-4bf1-8699-b31c7f51db1f` SUCCESS, created September 12 at 7:47 PM Eastern. Four deployed source/build hashes match the tested worktree. No active application or Twilio calls before upload. After deployment: health 200, zero active calls, Live + Terra, two approved callers, writes/owner notifications simulated. Tests use injected dates; no real Sunday phone transfer was attempted.
