@@ -36,3 +36,28 @@
 - The overlay deliberately delegates ordinary Phorest reads. It has no
   persistence and clears on process restart.
 - No live API, Phorest write, phone call, or deployment was performed.
+
+## Follow-up review — proposals, canonical IDs, and overlay continuity
+
+- Added tests for `AppointmentProposals`: preparation causes no write,
+  unconfirmed and superseded proposals reject, concurrent confirms share one
+  mutation, and the supplied call-open guard prevents prepare/confirm after
+  close.
+- Added controller-level canonical-ID tests. `serviceId` survives
+  `parseToolArgs`, wins over an ambiguous `serviceName` for availability and
+  booking, and an unknown ID reaches neither availability nor a write. Legacy
+  name-only availability still resolves normally.
+- Fixed the simulated overlay for a real appointment already observed through
+  `listAppointments`: its simulated reschedule remains visible after the real
+  provider's next date-window query no longer returns its old record. Reset
+  clears this cache. Simulated occupied starts are now removed from subsequent
+  availability reads.
+- Follow-up integration review: Live now exposes only
+  `prepare_appointment_action` / `confirm_appointment_action`, excludes the
+  raw write tools, and registers the proposal handlers. Added an end-to-end
+  controller test that confirmation invokes the write handler once and a
+  closed call rejects the registered confirmation before a write. Test mode
+  transfer returns the simulated no-dial result.
+- Follow-up evidence: the focused proposal/canonical/overlay suite passed 19
+  tests, and `npm run build` passed after the owning Live workers repaired
+  their transient exact-optional-property errors.

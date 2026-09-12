@@ -23,6 +23,14 @@ type RealAppointmentOverlay = {
 const simulatedClients = new Map<string, SimulatedClient>();
 const simulatedAppointments = new Map<string, SimulatedAppointment>();
 const realAppointmentOverlays = new Map<string, RealAppointmentOverlay>();
+// A real appointment can be moved beyond the provider list query's original
+// date window. Retain only records already observed through a real read, so a
+// later overlay read can surface that simulated move without inventing unseen
+// provider data.
+const observedRealAppointments = new Map<
+  string,
+  { clientId?: string; summary: AppointmentSummary }
+>();
 let nextClientId = 1;
 let nextAppointmentId = 1;
 
@@ -75,9 +83,12 @@ function moveSummary(
     `${current.date}T${current.startTimeRaw}`,
     { zone: env.TIMEZONE }
   );
-  const originalEnd = DateTime.fromISO(`${current.date}T${current.endTimeRaw}`, {
-    zone: env.TIMEZONE,
-  });
+  const originalEnd = DateTime.fromISO(
+    `${current.date}T${current.endTimeRaw}`,
+    {
+      zone: env.TIMEZONE,
+    }
+  );
   const duration =
     originalStart.isValid && originalEnd.isValid
       ? Math.max(1, originalEnd.diff(originalStart, 'minutes').minutes)
@@ -100,7 +111,9 @@ function overlayForRealAppointment(id: string): RealAppointmentOverlay {
   return created;
 }
 
-function applyRealOverlay(summary: AppointmentSummary): AppointmentSummary | null {
+function applyRealOverlay(
+  summary: AppointmentSummary
+): AppointmentSummary | null {
   const overlay = realAppointmentOverlays.get(summary.appointmentId);
   if (!overlay || !overlay.cancelled) {
     return overlay?.newStartIso
@@ -124,11 +137,40 @@ function simulatedAppointmentsForClient(
     .map((appointment) => appointment.summary);
 }
 
+function appointmentStartKey(summary: AppointmentSummary): string {
+  return `${summary.date}T${summary.startTimeRaw}`;
+}
+
+function slotStartKey(slot: string): string | null {
+  const parsed = DateTime.fromISO(slot, { zone: env.TIMEZONE }).setZone(
+    env.TIMEZONE
+  );
+  return parsed.isValid ? parsed.toFormat("yyyy-MM-dd'T'HH:mm:ss") : null;
+}
+
+function simulatedOccupiedStartKeys(date: string): Set<string> {
+  const occupied = new Set<string>();
+  for (const appointment of simulatedAppointments.values()) {
+    if (!appointment.cancelled && appointment.summary.date === date) {
+      occupied.add(appointmentStartKey(appointment.summary));
+    }
+  }
+  for (const overlay of realAppointmentOverlays.values()) {
+    if (!overlay.newStartIso || overlay.cancelled) continue;
+    const start = DateTime.fromISO(overlay.newStartIso, { zone: env.TIMEZONE });
+    if (start.isValid && start.toISODate() === date) {
+      occupied.add(start.toFormat("yyyy-MM-dd'T'HH:mm:ss"));
+    }
+  }
+  return occupied;
+}
+
 /** Clear the process-wide comparison overlay between test variants. */
 export function resetSimulatedPhorestOverlay(): void {
   simulatedClients.clear();
   simulatedAppointments.clear();
   realAppointmentOverlays.clear();
+  observedRealAppointments.clear();
   nextClientId = 1;
   nextAppointmentId = 1;
 }
@@ -141,7 +183,14 @@ export function resetSimulatedPhorestOverlay(): void {
 export function simulatedWrites(real: PhorestPort): PhorestPort {
   return {
     listServices: () => real.listServices(),
-    getAvailability: (serviceId, date) => real.getAvailability(serviceId, date),
+    async getAvailability(serviceId, date) {
+      const slots = await real.getAvailability(serviceId, date);
+      const occupied = simulatedOccupiedStartKeys(date);
+      return slots.filter((slot) => {
+        const key = slotStartKey(slot);
+        return !key || !occupied.has(key);
+      });
+    },
     listStaffNames: () => real.listStaffNames?.() ?? Promise.resolve([]),
     preloadClients: () => real.preloadClients?.() ?? Promise.resolve(),
 
@@ -154,7 +203,9 @@ export function simulatedWrites(real: PhorestPort): PhorestPort {
       } else if (!resolvedClientId) {
         const id = `sim_client_${nextClientId++}`;
         const { firstName, lastName } = splitName(customer.name);
-        const phone = customer.phone ? normalizePhone(customer.phone) : undefined;
+        const phone = customer.phone
+          ? normalizePhone(customer.phone)
+          : undefined;
         simulatedClients.set(id, {
           clientId: id,
           firstName,
@@ -168,7 +219,8 @@ export function simulatedWrites(real: PhorestPort): PhorestPort {
       const service = (await real.listServices()).find(
         (candidate) => candidate.id === serviceId
       );
-      if (!service) throw new Error(`Service ${serviceId} not found in Phorest`);
+      if (!service)
+        throw new Error(`Service ${serviceId} not found in Phorest`);
       const appointmentId = `sim_appt_${nextAppointmentId++}`;
       simulatedAppointments.set(appointmentId, {
         clientId: resolvedClientId,
@@ -182,7 +234,8 @@ export function simulatedWrites(real: PhorestPort): PhorestPort {
     async updateAppointment(appointmentId, newStartIso) {
       const simulated = simulatedAppointments.get(appointmentId);
       if (simulated) {
-        if (simulated.cancelled) throw new Error(`Appointment ${appointmentId} is cancelled`);
+        if (simulated.cancelled)
+          throw new Error(`Appointment ${appointmentId} is cancelled`);
         simulated.summary = moveSummary(simulated.summary, newStartIso);
         return { appointmentId };
       }
@@ -223,7 +276,10 @@ export function simulatedWrites(real: PhorestPort): PhorestPort {
           client.firstName.toLowerCase() === normalizedFirst &&
           client.lastName.toLowerCase() === normalizedLast
       );
-      return [...simulated, ...(await real.lookupCustomerByName(firstName, lastName))];
+      return [
+        ...simulated,
+        ...(await real.lookupCustomerByName(firstName, lastName)),
+      ];
     },
 
     async listAppointments(clientId, fromDate) {
@@ -235,8 +291,23 @@ export function simulatedWrites(real: PhorestPort): PhorestPort {
           : [];
       }
       const realAppointments = await real.listAppointments(clientId, fromDate);
+      for (const appointment of realAppointments) {
+        observedRealAppointments.set(appointment.appointmentId, {
+          clientId,
+          summary: appointment,
+        });
+      }
+      const mergedReal = new Map<string, AppointmentSummary>();
+      for (const appointment of realAppointments) {
+        mergedReal.set(appointment.appointmentId, appointment);
+      }
+      for (const [appointmentId, observed] of observedRealAppointments) {
+        if (observed.clientId === clientId && !mergedReal.has(appointmentId)) {
+          mergedReal.set(appointmentId, observed.summary);
+        }
+      }
       return [
-        ...realAppointments
+        ...[...mergedReal.values()]
           .map(applyRealOverlay)
           .filter(
             (appointment): appointment is AppointmentSummary =>
@@ -244,7 +315,9 @@ export function simulatedWrites(real: PhorestPort): PhorestPort {
           ),
         ...simulatedAppointmentsForClient(clientId, minDate),
       ].sort((a, b) =>
-        `${a.date}T${a.startTimeRaw}`.localeCompare(`${b.date}T${b.startTimeRaw}`)
+        `${a.date}T${a.startTimeRaw}`.localeCompare(
+          `${b.date}T${b.startTimeRaw}`
+        )
       );
     },
 
@@ -263,6 +336,15 @@ export function simulatedWrites(real: PhorestPort): PhorestPort {
     async getTodayAppointments() {
       const today = DateTime.now().setZone(env.TIMEZONE).toISODate()!;
       const realAppointments = await real.getTodayAppointments();
+      const mergedReal = new Map<string, AppointmentSummary>();
+      for (const appointment of realAppointments) {
+        mergedReal.set(appointment.appointmentId, appointment);
+      }
+      for (const [appointmentId, observed] of observedRealAppointments) {
+        if (!mergedReal.has(appointmentId)) {
+          mergedReal.set(appointmentId, observed.summary);
+        }
+      }
       const simulated = [...simulatedAppointments.values()]
         .filter(
           (appointment) =>
@@ -270,7 +352,7 @@ export function simulatedWrites(real: PhorestPort): PhorestPort {
         )
         .map((appointment) => appointment.summary);
       return [
-        ...realAppointments
+        ...[...mergedReal.values()]
           .map(applyRealOverlay)
           .filter(
             (appointment): appointment is AppointmentSummary =>

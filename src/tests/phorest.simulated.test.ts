@@ -4,7 +4,10 @@ import {
   resetSimulatedPhorestOverlay,
   simulatedWrites,
 } from '../services/phorest.simulated.js';
-import type { AppointmentSummary, PhorestPort } from '../services/phorest.types.js';
+import type {
+  AppointmentSummary,
+  PhorestPort,
+} from '../services/phorest.types.js';
 
 const today = DateTime.now().setZone('America/New_York').toISODate()!;
 
@@ -30,14 +33,21 @@ function realPort(): PhorestPort & {
   addAppointmentNote: ReturnType<typeof vi.fn>;
   listAppointments: ReturnType<typeof vi.fn>;
   getTodayAppointments: ReturnType<typeof vi.fn>;
+  getAvailability: ReturnType<typeof vi.fn>;
 } {
   return {
-    listServices: vi.fn().mockResolvedValue([
-      { id: 'svc_brow', name: 'Brow Threading', price: 15, durationMin: 15 },
-    ]),
+    listServices: vi
+      .fn()
+      .mockResolvedValue([
+        { id: 'svc_brow', name: 'Brow Threading', price: 15, durationMin: 15 },
+      ]),
     getAvailability: vi.fn().mockResolvedValue([]),
-    createAppointment: vi.fn().mockResolvedValue({ appointmentId: 'real_write' }),
-    updateAppointment: vi.fn().mockResolvedValue({ appointmentId: 'real_write' }),
+    createAppointment: vi
+      .fn()
+      .mockResolvedValue({ appointmentId: 'real_write' }),
+    updateAppointment: vi
+      .fn()
+      .mockResolvedValue({ appointmentId: 'real_write' }),
     cancelAppointment: vi
       .fn()
       .mockResolvedValue({ appointmentId: 'real_write', cancelled: true }),
@@ -63,7 +73,11 @@ describe('simulated Phorest write overlay', () => {
     const created = await phorest.createAppointment(
       'svc_brow',
       `${today}T13:00:00`,
-      { name: 'Sim Client', phone: '+1 (410) 555-1010', email: 'sim@example.test' }
+      {
+        name: 'Sim Client',
+        phone: '+1 (410) 555-1010',
+        email: 'sim@example.test',
+      }
     );
 
     expect(created).toEqual({ appointmentId: 'sim_appt_1' });
@@ -74,16 +88,21 @@ describe('simulated Phorest write overlay', () => {
 
     // The generated client survives for subsequent calls in this process and
     // its simulated ID is never passed to any real read endpoint.
-    await expect(phorest.lookupCustomerByPhone('4105551010')).resolves.toMatchObject({
+    await expect(
+      phorest.lookupCustomerByPhone('4105551010')
+    ).resolves.toMatchObject({
       clientId: 'sim_client_1',
       firstName: 'Sim',
       lastName: 'Client',
     });
-    await expect(phorest.lookupCustomerByName('Sim', 'Client')).resolves.toEqual([
-      expect.objectContaining({ clientId: 'sim_client_1' }),
-    ]);
+    await expect(
+      phorest.lookupCustomerByName('Sim', 'Client')
+    ).resolves.toEqual([expect.objectContaining({ clientId: 'sim_client_1' })]);
     await expect(phorest.listAppointments('sim_client_1')).resolves.toEqual([
-      expect.objectContaining({ appointmentId: 'sim_appt_1', timeDisplay: '1:00 PM' }),
+      expect.objectContaining({
+        appointmentId: 'sim_appt_1',
+        timeDisplay: '1:00 PM',
+      }),
     ]);
     expect(real.listAppointments).not.toHaveBeenCalled();
   });
@@ -93,7 +112,9 @@ describe('simulated Phorest write overlay', () => {
     const phorest = simulatedWrites(real);
 
     await phorest.updateAppointment('real_appt', `${today}T11:30:00`);
-    await expect(phorest.listAppointments('real_client', today)).resolves.toEqual([
+    await expect(
+      phorest.listAppointments('real_client', today)
+    ).resolves.toEqual([
       expect.objectContaining({
         appointmentId: 'real_appt',
         date: today,
@@ -107,6 +128,40 @@ describe('simulated Phorest write overlay', () => {
     await expect(phorest.getTodayAppointments()).resolves.toEqual([]);
     expect(real.updateAppointment).not.toHaveBeenCalled();
     expect(real.cancelAppointment).not.toHaveBeenCalled();
+  });
+
+  it('retains an observed real appointment when its simulated reschedule moves it beyond the provider read window', async () => {
+    const yesterday = DateTime.now()
+      .setZone('America/New_York')
+      .minus({ days: 1 })
+      .toISODate()!;
+    const tomorrow = DateTime.now()
+      .setZone('America/New_York')
+      .plus({ days: 1 })
+      .toISODate()!;
+    const real = realPort();
+    real.listAppointments
+      .mockResolvedValueOnce([summary('real_observed', yesterday)])
+      .mockResolvedValueOnce([]);
+    real.getTodayAppointments.mockResolvedValue([]);
+    const phorest = simulatedWrites(real);
+
+    // First read is the ownership/read evidence a controller would have before
+    // allowing the action. The next provider response excludes the old record.
+    await phorest.listAppointments('real_client', yesterday);
+    await phorest.updateAppointment('real_observed', `${tomorrow}T15:00:00`);
+
+    await expect(
+      phorest.listAppointments('real_client', today)
+    ).resolves.toEqual([
+      expect.objectContaining({
+        appointmentId: 'real_observed',
+        date: tomorrow,
+        timeDisplay: '3:00 PM',
+      }),
+    ]);
+    await expect(phorest.getTodayAppointments()).resolves.toEqual([]);
+    expect(real.updateAppointment).not.toHaveBeenCalled();
   });
 
   it('keeps simulated client appointments writable and listable after an update, then hides them after cancel', async () => {
@@ -132,6 +187,23 @@ describe('simulated Phorest write overlay', () => {
       cancelled: true,
     });
     await expect(phorest.listAppointments('sim_client_1')).resolves.toEqual([]);
+  });
+
+  it('removes an exact simulated appointment start from subsequent availability reads', async () => {
+    const real = realPort();
+    real.getAvailability.mockResolvedValue([
+      `${today}T13:00:00`,
+      `${today}T13:15:00`,
+    ]);
+    const phorest = simulatedWrites(real);
+    await phorest.createAppointment('svc_brow', `${today}T13:00:00`, {
+      name: 'Booked Sim',
+    });
+
+    await expect(phorest.getAvailability('svc_brow', today)).resolves.toEqual([
+      `${today}T13:15:00`,
+    ]);
+    expect(real.getAvailability).toHaveBeenCalledWith('svc_brow', today);
   });
 
   it('does not delegate unknown simulated IDs or notes to real side-effect methods', async () => {
@@ -164,9 +236,13 @@ describe('simulated Phorest write overlay', () => {
     resetSimulatedPhorestOverlay();
 
     const second = simulatedWrites(real);
-    await expect(second.lookupCustomerByPhone('4105553030')).resolves.toBeNull();
-    await expect(second.createAppointment('svc_brow', `${today}T13:00:00`, {
-      name: 'Fresh Variant',
-    })).resolves.toEqual({ appointmentId: 'sim_appt_1' });
+    await expect(
+      second.lookupCustomerByPhone('4105553030')
+    ).resolves.toBeNull();
+    await expect(
+      second.createAppointment('svc_brow', `${today}T13:00:00`, {
+        name: 'Fresh Variant',
+      })
+    ).resolves.toEqual({ appointmentId: 'sim_appt_1' });
   });
 });
