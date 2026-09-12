@@ -9,12 +9,14 @@ import { z } from 'zod';
 export const TOOL_SCHEMAS = {
   suggest_availability: z.object({
     serviceName: z.string(),
+    serviceId: z.string().min(1).optional(),
     date: z.string(),
     preferredTime: z.string().optional(),
     searchNearby: z.boolean().optional(),
   }),
   book_appointment: z.object({
     serviceName: z.string(),
+    serviceId: z.string().min(1).optional(),
     date: z.string(),
     time: z.string(),
     // Optional: when a recognized/known caller is booked we pass their real

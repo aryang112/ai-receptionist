@@ -5,10 +5,16 @@ import {
   OpenAIRealtimeSession,
   type ToolDefinition,
   type RealtimeUsage,
+  type RealtimeHandlers,
 } from './openaiSession.js';
 import { parseToolArgs } from './toolSchemas.js';
 import { logger } from '../core/logger.js';
-import { env } from '../config/env.js';
+import { env, isVoiceTestMode } from '../config/env.js';
+import { OpenAILiveSession } from '../voice/liveSession.js';
+import { buildLivePrompt, buildBackendPrompt } from '../voice/livePrompts.js';
+import { AppointmentProposals } from '../voice/appointmentProposals.js';
+import { allowedTestCaller } from '../voice/testAccess.js';
+import { trackVoiceCall } from '../voice/testControl.js';
 import {
   suggestSlots,
   bookAppointment,
@@ -846,6 +852,20 @@ function editDistance(a: string, b: string): number {
   return dp[a.length]![b.length]!;
 }
 
+export function liveToolDefinitions(): ToolDefinition[] {
+  const writes = new Set(['book_appointment', 'reschedule_appointment', 'cancel_appointment']);
+  const definitions = TOOL_DEFINITIONS.filter((tool) => !writes.has(tool.name)).map((tool) => {
+    if (tool.name !== 'leave_message_for_owner') return tool;
+    return { ...tool, description: 'Capture the caller-approved test message for Richa. No actual SMS is sent. This is model-relayed text, not exact transcript capture.',
+      parameters: { type: 'object', properties: { message: { type: 'string', maxLength: 1200 } }, required: ['message'] } };
+  });
+  definitions.push({ type: 'function', name: 'prepare_appointment_action', description: 'Prepare a simulated booking, reschedule, or cancellation. No change occurs yet. Read the exact details back and wait for fresh caller approval.',
+    parameters: { type: 'object', properties: { action: { type: 'string', enum: ['book', 'reschedule', 'cancel'] }, arguments: { type: 'object', description: 'For book: serviceName, exact catalog serviceId, date YYYY-MM-DD, time HH:mm, customer {name, optional phone/email}, optional clientId. For reschedule: appointmentId, date, time. For cancel: appointmentId.' } }, required: ['action', 'arguments'] } });
+  definitions.push({ type: 'function', name: 'confirm_appointment_action', description: 'Execute the current simulated proposal only after the caller approves its exact read-back. Any changed detail requires preparation again.',
+    parameters: { type: 'object', properties: { proposalId: { type: 'string' }, confirmed: { type: 'boolean', enum: [true] } }, required: ['proposalId', 'confirmed'] } });
+  return definitions;
+}
+
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     type: 'function',
@@ -855,6 +875,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
+        serviceId: { type: 'string', description: 'Exact catalog ID if resolved. Never invent one. The server validates membership and uses this ID instead of fuzzy name matching.' },
         serviceName: {
           type: 'string',
           description:
@@ -883,6 +904,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
+        serviceId: { type: 'string', description: 'Exact catalog ID if resolved. Never invent one. The server validates membership and uses this ID instead of fuzzy name matching.' },
         serviceName: {
           type: 'string',
           description:
@@ -1125,7 +1147,17 @@ export class TwilioRealtimeCall {
   // Built on the Twilio "start" event (once streamSid is known) so the session's
   // logs carry a per-call tag (RT-9). Never touched before "start" — media can't
   // arrive first — so the definite-assignment `!` is safe; cleanup guards it too.
-  private session!: OpenAIRealtimeSession;
+  private session!: OpenAIRealtimeSession | OpenAILiveSession;
+  private readonly voiceEngine = env.VOICE_ENGINE;
+  private readonly liveBackendModel = env.OPENAI_LIVE_BACKEND_MODEL;
+  private readonly liveBackendEffort = env.OPENAI_LIVE_BACKEND_EFFORT;
+  private releaseVoiceCall: (() => void) | undefined;
+  private liveOutputActive = false;
+  private markSequence = 0;
+  private readonly proposals = new AppointmentProposals(
+    (action, args) => action === 'book' ? this.handleBookAppointment(args) : action === 'reschedule' ? this.handleReschedule(args) : this.handleCancel(args),
+    () => isVoiceTestMode() && !this.closed,
+  );
   private streamSid = '';
   private callSid = '';
   private closed = false;
@@ -1464,8 +1496,7 @@ export class TwilioRealtimeCall {
    * failover as a fatal error (RT-1). callTag is the tail of the streamSid.
    */
   private createSession(callTag: string) {
-    this.session = new OpenAIRealtimeSession({
-      callTag,
+    const handlers: RealtimeHandlers = {
       onAudioChunk: (chunk, _itemId, responseId) =>
         this.sendAudioToTwilio(chunk, responseId),
       onTextDelta: (delta) => this.handleAssistantText(delta),
@@ -1488,12 +1519,23 @@ export class TwilioRealtimeCall {
         this.handleCallerTranscript(text, itemId);
       },
       onAssistantTranscript: (text) => this.handleAssistantTranscript(text),
-      onUsage: (usage) => this.accumulateUsage(usage),
-    });
+      onUsage: (usage) => { if (this.voiceEngine === 'realtime') this.accumulateUsage(usage); },
+    };
+    this.session = this.voiceEngine === 'live'
+      ? new OpenAILiveSession({ ...handlers, callTag, backendModel: this.liveBackendModel,
+          ...(this.liveBackendEffort ? { backendEffort: this.liveBackendEffort } : {}),
+          onOutputSpeechStarted: () => { this.liveOutputActive = true; this.lastActivityAt = Date.now(); this.outboundAudioEpoch += 1; },
+          onOutputSpeechStopped: () => { this.liveOutputActive = false; this.lastActivityAt = Date.now(); this.sendMark(); },
+          onInputTranscriptFragment: (fragment) => this.recordLiveFragment('caller', fragment),
+          onOutputTranscriptFragment: (fragment) => this.recordLiveFragment('erica', fragment),
+          onLiveUsage: (usage) => CallStore.recordVoiceEvent(this.callSid, 'live_usage', { ...usage }),
+        })
+      : new OpenAIRealtimeSession({ ...handlers, callTag });
 
     this.registerTrackedTool('suggest_availability', (args) =>
       this.handleSuggestAvailability(args)
     );
+    if (this.voiceEngine === 'realtime') {
     this.registerTrackedTool('book_appointment', (args) =>
       this.handleBookAppointment(args)
     );
@@ -1503,6 +1545,10 @@ export class TwilioRealtimeCall {
     this.registerTrackedTool('cancel_appointment', (args) =>
       this.handleCancel(args)
     );
+    } else {
+      this.registerTrackedTool('prepare_appointment_action', (args) => this.proposals.prepare(args));
+      this.registerTrackedTool('confirm_appointment_action', (args) => this.proposals.confirm(args));
+    }
     this.registerTrackedTool('get_business_hours', (args) =>
       this.handleGetBusinessHours(args)
     );
@@ -1522,12 +1568,29 @@ export class TwilioRealtimeCall {
       this.handleTransferToOwner(args)
     );
     this.registerTrackedTool('leave_message_for_owner', (args) =>
-      this.handleLeaveMessageForOwner(args)
+      this.voiceEngine === 'live' ? this.handleLiveMessage(args) : this.handleLeaveMessageForOwner(args)
     );
     this.registerTrackedTool('end_call', (args) => this.handleEndCall(args));
     logger.debug(
       'OpenAI tools registered: suggest_availability, book_appointment, reschedule_appointment, cancel_appointment, get_business_hours, lookup_customer, list_appointments, log_running_late, transfer_to_owner, leave_message_for_owner, end_call'
     );
+  }
+
+  private recordLiveFragment(role: 'caller' | 'erica', fragment: { delta: string; startMs?: number; endMs?: number }) {
+    if (!fragment.delta) return;
+    const previous = this.transcript[this.transcript.length - 1];
+    if (previous?.role === role && Date.now() - previous.ts < 2000) previous.text += fragment.delta;
+    else this.transcript.push({ role, text: fragment.delta, ts: Date.now() });
+    CallStore.recordVoiceEvent(this.callSid, 'transcript_fragment', { role, ...fragment, approximate: true });
+  }
+
+  private async handleLiveMessage(args: unknown) {
+    if (!isVoiceTestMode() || this.closed) return { error: 'Simulated messages are unavailable.' };
+    const message = typeof args === 'object' && args !== null && 'message' in args ? (args as { message: unknown }).message : null;
+    if (typeof message !== 'string' || !message.trim() || message.length > OWNER_MESSAGE_MAX_CHARS) return { error: 'Provide the caller-approved message, up to 1200 characters.' };
+    CallStore.recordVoiceEvent(this.callSid, 'simulated_message', { message, source: 'modelRelayed', exactCapture: false });
+    CallStore.recordToolCall(this.callSid, { name: 'leave_message_for_owner', ok: true, detail: { simulated: true, source: 'modelRelayed' } });
+    return { messageAccepted: true, simulated: true, source: 'modelRelayed', note: 'Acknowledge the test message briefly. No actual message was sent.' };
   }
 
   /**
@@ -1541,6 +1604,7 @@ export class TwilioRealtimeCall {
     handler: (args: unknown) => Promise<unknown> | unknown
   ) {
     this.session.registerTool(name, async (args: unknown) => {
+      if (this.closed) return { error: 'The call has ended; no action was taken.' };
       this.toolCallsInFlight++;
       try {
         return await handler(args);
@@ -1568,9 +1632,8 @@ export class TwilioRealtimeCall {
       // Don't let a cold lookup delay the greeting (normally instant — the phone
       // index is warmed at boot — but cap it just in case). The lookup keeps
       // running past the cap; see the late-recognition continuation below.
-      const lookup = phorest
-        .lookupCustomerByPhone(callerPhone)
-        .catch(() => null);
+      let lookupFailed = false;
+      const lookup = phorest.lookupCustomerByPhone(callerPhone).catch(() => { lookupFailed = true; return null; });
       let timedOut = false;
       const customer = await Promise.race<CustomerResult | null>([
         lookup,
@@ -1591,7 +1654,9 @@ export class TwilioRealtimeCall {
         // We have the caller's number (caller ID) but no Phorest match (yet).
         // Let Erica offer that number later instead of asking cold. (Raw number
         // is NOT logged — only injected into the model's private context.)
-        this.pendingCallerContext = buildUnrecognizedCallerContext();
+        this.pendingCallerContext = (timedOut || lookupFailed) && this.voiceEngine === 'live'
+          ? `CALLER CONTEXT: caller_id_match: ${lookupFailed ? 'UNAVAILABLE' : 'LOADING'}. Calling number is available. Do not infer a new client or salesperson. Continue public questions normally. When an account action is requested, identify the caller and use lookup_customer; never say no account exists based on this state.`
+          : buildUnrecognizedCallerContext();
         if (timedOut) {
           // Seen live 2026-08-21: a call seconds after boot races the client
           // phone-index build (~5s for 4k clients) and the 700ms cap loses by
@@ -1683,7 +1748,8 @@ export class TwilioRealtimeCall {
   /** Inject the caller context prepared by prepareCallerContext (session must be open). */
   private applyCallerContext() {
     if (this.pendingCallerContext) {
-      this.session.injectContext(this.pendingCallerContext);
+      if (this.session instanceof OpenAILiveSession) void this.session.injectBackendContext(this.pendingCallerContext);
+      else this.session.injectContext(this.pendingCallerContext);
       this.pendingCallerContext = null;
     }
   }
@@ -1760,6 +1826,7 @@ export class TwilioRealtimeCall {
           }
           // Authenticated: cancel the pre-auth close timer (F7).
           this.started = true;
+          this.releaseVoiceCall = trackVoiceCall();
           if (this.preAuthTimer) {
             clearTimeout(this.preAuthTimer);
             this.preAuthTimer = undefined;
@@ -1794,6 +1861,9 @@ export class TwilioRealtimeCall {
           this.transferFailback =
             (event as TwilioStartEvent).start.customParameters
               ?.transferFailed === '1';
+          if (isVoiceTestMode() && !allowedTestCaller(callerFrom)) {
+            this.socket.close(1008); this.cleanup(); break;
+          }
           this.callerFrom = callerFrom;
           const warm = this.prepareCallerContext(callerFrom);
           // H1: race the (warm, TTL-cached) Phorest catalog fetch alongside
@@ -1826,12 +1896,22 @@ export class TwilioRealtimeCall {
           // get_prices/get_business_hours remain for anything unclear.
           const services = await servicesPromise;
           if (this.closed) break;
-          await this.session.configureSession({
-            instructions: buildInstructions(undefined, services, {
-              transferFailback: this.transferFailback,
-            }),
-            tools: TOOL_DEFINITIONS,
-          });
+          const productionInstructions = buildInstructions(undefined, services, { transferFailback: this.transferFailback });
+          if (this.session instanceof OpenAILiveSession) {
+            const now = DateTime.now().setZone(env.TIMEZONE);
+            const context = { publicFacts: { today: now.toISODate()!, tomorrow: now.plus({ days: 1 }).toISODate()!,
+              weeklyHours: JSON.stringify(businessHours.hours), currentStatus: JSON.stringify(getHoursStatus(now.toISODate()!, now)),
+              address: Object.values(businessHours.location).join(', ') } };
+            await this.session.configureSession({
+              liveInstructions: buildLivePrompt(productionInstructions, services ?? [], context),
+              backendInstructions: buildBackendPrompt(productionInstructions, services ?? [], {
+                serviceAliases: (services ?? []).filter((s) => /micro.*blading.*shading/i.test(s.name)).map((s) => ({ serviceId: s.id, aliases: ['eyebrow tattoo', 'brow tattoo'] })),
+              }),
+              tools: liveToolDefinitions(),
+            });
+          } else {
+            await this.session.configureSession({ instructions: productionInstructions, tools: TOOL_DEFINITIONS });
+          }
           if (this.closed) break;
           // The lookup was very likely done during the handshake; await it (700ms
           // cap) then apply its context note now that the session is open.
@@ -1921,12 +2001,16 @@ export class TwilioRealtimeCall {
           // fires seconds before Twilio finishes the buffered tail) disarmed
           // barge-in for the whole tail. This keeps interruption live through the
           // entire playback without leaving a stale reference for the next turn.
-          if (this.markQueue.length > 0) this.markQueue.shift();
+          if (this.voiceEngine === 'live') {
+            const name = (event as { mark?: { name?: string } }).mark?.name;
+            const index = name ? this.markQueue.indexOf(name) : -1;
+            if (index >= 0) this.markQueue.splice(index, 1);
+          } else if (this.markQueue.length > 0) this.markQueue.shift();
           if (this.markQueue.length === 0) {
             this.responseStartTimestamp = null;
             // First full drain after audio began = the greeting finished
             // playing; barge-in (client + server) arms from here on.
-            if (this.firstAudioChunkAt !== null) this.markGreetingPlayedOut();
+            if (this.firstAudioChunkAt !== null && !this.liveOutputActive) this.markGreetingPlayedOut();
           }
           break;
         case 'stop':
@@ -2000,16 +2084,16 @@ export class TwilioRealtimeCall {
   private sendAudioToTwilio(base64Mulaw: string, responseId?: string) {
     if (!this.streamSid || this.closed) return;
 
-    this.outboundAudioEpoch += 1;
+    if (this.voiceEngine === "realtime") this.outboundAudioEpoch += 1;
     this.lastOutboundAudioResponseId = responseId ?? null;
 
     // Mark the start of this response on the caller's media clock — barge-in
     // uses (latestMediaTimestamp - responseStartTimestamp) as the truncation point.
-    if (this.responseStartTimestamp === null) {
+    if (this.responseStartTimestamp === null && (this.voiceEngine === "realtime" || this.liveOutputActive)) {
       this.responseStartTimestamp = this.latestMediaTimestamp;
     }
 
-    if (!this.hasReceivedFirstAudioChunk) {
+    if (!this.hasReceivedFirstAudioChunk && (this.voiceEngine === "realtime" || this.liveOutputActive)) {
       logger.info(
         { streamSid: this.streamSid },
         '🔊 AI speaking - first audio chunk sent to Twilio'
@@ -2029,7 +2113,7 @@ export class TwilioRealtimeCall {
           media: { payload: base64Mulaw },
         })
       );
-      this.sendMark();
+      if (this.voiceEngine === "realtime") this.sendMark();
     } catch (error) {
       this.handleError(
         error instanceof Error
@@ -2043,14 +2127,15 @@ export class TwilioRealtimeCall {
   private sendMark() {
     if (!this.streamSid || this.closed) return;
     this.outMarks += 1;
+    const markName = this.voiceEngine === "live" ? `live-${++this.markSequence}` : "responsePart";
     this.socket.send(
       JSON.stringify({
         event: 'mark',
         streamSid: this.streamSid,
-        mark: { name: 'responsePart' },
+        mark: { name: markName },
       })
     );
-    this.markQueue.push('responsePart');
+    this.markQueue.push(markName);
   }
 
   /**
@@ -2159,7 +2244,7 @@ export class TwilioRealtimeCall {
    * what was actually heard and flush Twilio's outbound buffer so she stops now.
    */
   private handleBargeIn() {
-    if (this.markQueue.length === 0 || this.responseStartTimestamp === null)
+    if ((this.markQueue.length === 0 && !this.liveOutputActive) || this.responseStartTimestamp === null)
       return;
     // Any real interruption bumps the epoch — a pending end_call hangup checks
     // it after draining and aborts instead of hanging up on a caller who just
@@ -2241,7 +2326,7 @@ export class TwilioRealtimeCall {
   private tickSilenceWatchdog() {
     if (!this.sessionReady || this.closed || this.transferring) return;
     if (this.toolCallsInFlight > 0) return;
-    if (this.markQueue.length > 0) {
+    if (this.markQueue.length > 0 || this.liveOutputActive) {
       this.lastActivityAt = Date.now();
       return;
     }
@@ -2717,7 +2802,8 @@ export class TwilioRealtimeCall {
    */
   private async fetchOpenSlots(
     serviceName: string,
-    dateISO: string
+    dateISO: string,
+    serviceId?: string
   ): Promise<
     | {
         service: Service;
@@ -2731,7 +2817,7 @@ export class TwilioRealtimeCall {
     | { notOffered: true; closest: Service[] }
     | { ambiguous: Service[] }
   > {
-    const result = await suggestSlots({ serviceName, date: dateISO });
+    const result = await suggestSlots({ serviceName, date: dateISO, ...(serviceId ? { serviceId } : {}) });
     if ('notOffered' in result) return result;
     if ('ambiguous' in result) return result;
 
@@ -2987,6 +3073,7 @@ export class TwilioRealtimeCall {
       }
       const payload = parsed.data as {
         serviceName: string;
+        serviceId?: string;
         date: string;
         preferredTime?: string;
         searchNearby?: boolean;
@@ -2995,6 +3082,11 @@ export class TwilioRealtimeCall {
         { tool: 'suggest_availability', args: payload },
         'Tool called: suggest_availability'
       );
+
+      if (payload.serviceId) {
+        const canonical = await findServiceByName(payload.serviceName, payload.serviceId);
+        payload.serviceName = canonical!.name;
+      }
 
       // FR-01: business.json is authoritative for closures. Reject a known
       // closed date before touching Phorest so an availability outage cannot
@@ -3030,7 +3122,8 @@ export class TwilioRealtimeCall {
       }
       const result = await this.fetchOpenSlots(
         payload.serviceName,
-        payload.date
+        payload.date,
+        payload.serviceId
       );
 
       // fetchOpenSlots returns a discriminated union — narrow it before reading
@@ -3216,6 +3309,7 @@ export class TwilioRealtimeCall {
       }
       const payload = parsed.data as {
         serviceName: string;
+        serviceId?: string;
         date: string;
         time: string;
         // clientId is only present if TOOL_SCHEMAS admits it; the recognized-
@@ -3257,7 +3351,7 @@ export class TwilioRealtimeCall {
       // suggest_availability stored (it keys off the RESOLVED service name) —
       // otherwise an aliased phrasing ("eyebrows" vs "Eyebrow Threading") misses
       // the cache and the guard silently no-ops.
-      const bookSvc = await findServiceByName(payload.serviceName);
+      const bookSvc = await findServiceByName(payload.serviceName, payload.serviceId);
       const offered = this.offeredSlots.get(
         this.slotKey(bookSvc?.name ?? payload.serviceName, payload.date)
       );
@@ -3322,6 +3416,7 @@ export class TwilioRealtimeCall {
       }
       const bookInput = {
         serviceName: payload.serviceName,
+        ...(payload.serviceId ? { serviceId: payload.serviceId } : {}),
         date: payload.date,
         time: payload.time,
         ...(clientId ? { clientId } : {}),
@@ -3351,7 +3446,8 @@ export class TwilioRealtimeCall {
       try {
         const fresh = await this.fetchOpenSlots(
           bookSvc?.name ?? payload.serviceName,
-          payload.date
+          payload.date,
+          payload.serviceId
         );
         if (!('notOffered' in fresh) && !('ambiguous' in fresh)) {
           const freshValues = new Set(
@@ -3836,6 +3932,7 @@ export class TwilioRealtimeCall {
           });
           return {
             service: svc.name,
+            ...(this.voiceEngine === "live" ? { serviceId: svc.id } : {}),
             price: svc.price,
             durationMin: svc.durationMin,
           };
@@ -3875,7 +3972,9 @@ export class TwilioRealtimeCall {
       }
       // No service named at all → the caller asked broadly what we offer. This is
       // the only path that returns the full menu.
-      const services = await getServiceCatalog();
+      const services = this.voiceEngine === 'live'
+        ? (await phorest.listServices()).map((s) => ({ serviceId: s.id, service: s.name, price: s.price, durationMin: s.durationMin }))
+        : await getServiceCatalog();
       logger.info(
         { tool: 'get_prices', count: services.length },
         'Full price menu returned'
@@ -4567,6 +4666,10 @@ export class TwilioRealtimeCall {
   }
 
   private async handleTransferToOwner(args: unknown) {
+    if (isVoiceTestMode()) {
+      CallStore.recordToolCall(this.callSid, { name: 'transfer_to_owner', ok: true, detail: { simulated: true } });
+      return { transferred: false, simulated: true, note: 'This is a test: no live transfer was placed. Offer to take a simulated message.' };
+    }
     try {
       const parsed = parseToolArgs('transfer_to_owner', args);
       if (!parsed.success) {
@@ -5254,14 +5357,14 @@ export class TwilioRealtimeCall {
 
   private waitForPlaybackToDrain(capMs: number): Promise<void> {
     return new Promise((resolve) => {
-      if (this.markQueue.length === 0 || this.closed) {
+      if ((this.markQueue.length === 0 && !this.liveOutputActive) || this.closed) {
         resolve();
         return;
       }
       const started = Date.now();
       const timer = setInterval(() => {
         if (
-          this.markQueue.length === 0 ||
+          (this.markQueue.length === 0 && !this.liveOutputActive) ||
           this.closed ||
           Date.now() - started >= capMs
         ) {
@@ -5368,6 +5471,14 @@ export class TwilioRealtimeCall {
     // the dashboard instead of ending as a bare 'none' with no endReason.
     this.setEndReasonOnce(`failover: ${reason}`);
     if (this.outcome === 'none') this.outcome = 'failover';
+    if (isVoiceTestMode()) {
+      const testClient = getTwilioClient();
+      if (testClient && this.callSid && !this.closed && !this.transferring) {
+        this.transferring = true;
+        try { await testClient.calls(this.callSid).update({ twiml: '<Response><Say>The test encountered a connection problem. Please try again.</Say><Hangup/></Response>' }); } catch { /* cleanup below */ }
+      }
+      this.cleanup(); return;
+    }
     const client = getTwilioClient();
     if (client && this.callSid && !this.closed && !this.transferring) {
       this.transferring = true;
@@ -5392,6 +5503,8 @@ export class TwilioRealtimeCall {
   private cleanup() {
     if (this.closed) return;
     this.closed = true;
+    this.releaseVoiceCall?.();
+    this.releaseVoiceCall = undefined;
     for (const waiters of this.callerTranscriptWaiters.values()) {
       for (const resolve of waiters) resolve(undefined);
     }

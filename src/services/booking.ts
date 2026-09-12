@@ -6,11 +6,13 @@ import type { Service } from './phorest.types.js';
 
 export const SuggestSchema = z.object({
   serviceName: z.string().min(1),
+  serviceId: z.string().min(1).optional(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 
 export const BookSchema = z.object({
   serviceName: z.string().min(1),
+  serviceId: z.string().min(1).optional(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
   // When the caller is a recognized account (matched by caller ID), the
@@ -86,8 +88,13 @@ export type ServiceMatch =
 //      matched-token ratio (tie-break: shortest name)
 // If the top two scored candidates are close and different -> ambiguous.
 // If nothing scores -> notOffered with the closest few (by shared-token count).
-export async function resolveService(name: string): Promise<ServiceMatch> {
+export async function resolveService(name: string, serviceId?: string): Promise<ServiceMatch> {
   const services = await phorest.listServices();
+  if (serviceId) {
+    const service = services.find((entry) => entry.id === serviceId);
+    if (!service) throw new Error("Unknown service ID; refresh the catalog before trying again");
+    return { kind: "match", service };
+  }
   const q = normalize(name);
   if (!q) return { kind: 'notOffered', closest: services.slice(0, 3) };
 
@@ -253,9 +260,10 @@ export async function warnStaleAliases(): Promise<void> {
 // undefined). Ambiguous / notOffered both collapse to undefined here — callers
 // that need to disambiguate should use resolveService directly.
 export async function findServiceByName(
-  name: string
+  name: string,
+  serviceId?: string
 ): Promise<Service | undefined> {
-  const result = await resolveService(name);
+  const result = await resolveService(name, serviceId);
   return result.kind === 'match' ? result.service : undefined;
 }
 
@@ -267,8 +275,8 @@ export type SuggestResult =
 export async function suggestSlots(
   input: z.infer<typeof SuggestSchema>
 ): Promise<SuggestResult> {
-  const { serviceName, date } = SuggestSchema.parse(input);
-  const match = await resolveService(serviceName);
+  const { serviceName, serviceId, date } = SuggestSchema.parse(input);
+  const match = await resolveService(serviceName, serviceId);
   if (match.kind === 'notOffered') {
     return { notOffered: true, closest: match.closest };
   }
@@ -281,9 +289,9 @@ export async function suggestSlots(
 }
 
 export async function bookAppointment(input: z.infer<typeof BookSchema>) {
-  const { serviceName, date, time, clientId, customer } =
+  const { serviceName, serviceId, date, time, clientId, customer } =
     BookSchema.parse(input);
-  const svc = await findServiceByName(serviceName);
+  const svc = await findServiceByName(serviceName, serviceId);
   if (!svc) throw new Error('Service not found');
 
   const startIso = `${date}T${time.length === 5 ? time + ':00' : time}`;

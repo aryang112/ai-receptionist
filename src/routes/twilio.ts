@@ -6,6 +6,8 @@ import { issueStreamToken } from '../security/wsAuth.js';
 import { logger } from '../core/logger.js';
 import { isBlocked } from '../services/blocklist.js';
 import { CallStore } from '../services/callStore.js';
+import { isVoiceTestMode } from '../config/env.js';
+import { allowedTestCaller, testCallerIdentity } from '../voice/testAccess.js';
 
 const { VoiceResponse } = twilio.twiml;
 export const twilioVoice = express.Router();
@@ -88,7 +90,7 @@ function buildStreamTwiml(
  */
 twilioVoice.post('/voice', twilioSignature(), (req, res) => {
   const streamUrl = deriveStreamUrl(req);
-  const from = (req.body?.From || '').toString();
+  const from = testCallerIdentity(req.body);
   const callSid = (req.body?.CallSid || '').toString();
   // S2: STIR/SHAKEN attestation, log-only this round — collected for a future
   // tuning pass, no blocking decision is made on it here.
@@ -102,6 +104,13 @@ twilioVoice.post('/voice', twilioSignature(), (req, res) => {
     },
     'Twilio /voice called'
   );
+
+  if (isVoiceTestMode() && !allowedTestCaller(from)) {
+    const reject = new VoiceResponse();
+    reject.reject({ reason: "rejected" });
+    res.type("text/xml").send(reject.toString());
+    return;
+  }
 
   // S2: a repeat-spam number (S1 tagged it 'spam' >= SPAM_BLOCK_THRESHOLD
   // times) gets rejected here — before ANY OpenAI Realtime session opens —

@@ -67,6 +67,7 @@ export const env = {
     'real',
     ['real', 'simulate'] as const
   ) as OwnerSmsMode,
+  VOICE_TEST_ALLOWED_PHONES: process.env.VOICE_TEST_ALLOWED_PHONES || '',
   VOICE_ENGINE: requiredMode(
     'VOICE_ENGINE',
     process.env.VOICE_ENGINE,

@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import { metadata } from './routes/metadata.js';
 import { twilioVoice } from './routes/twilio.js';
 import { adminRouter } from './routes/admin.js';
+import { voiceTestRouter } from './routes/voiceTest.js';
 import { maybeSendDigest } from './services/digest.js';
 import { setupTwilioRealtimeStream } from './realtime/twilioStream.js';
 import { warnStaleAliases } from './services/booking.js';
@@ -65,6 +66,7 @@ app.use(
 );
 app.use('/api', metadata);
 app.use('/twilio', twilioVoice);
+app.use('/admin/voice-test', voiceTestRouter);
 app.use('/admin', adminRouter);
 
 app.get('/', (_req, res) => {
