@@ -36,6 +36,18 @@ afterAll(() => {
 });
 
 describe('blocklist (S2 — repeat-spam threshold)', () => {
+  it('does not read or persist a blocklist entry while voice test mode is active', () => {
+    const previous = env.PHOREST_WRITE_MODE;
+    env.PHOREST_WRITE_MODE = 'simulate';
+    try {
+      recordSpamOutcome('4105559999');
+      expect(isBlocked('4105559999')).toBe(false);
+      expect(fs.existsSync(tmpFile)).toBe(false);
+    } finally {
+      env.PHOREST_WRITE_MODE = previous;
+    }
+  });
+
   it('an unknown number is never blocked', () => {
     expect(isBlocked('4105551111')).toBe(false);
   });

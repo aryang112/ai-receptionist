@@ -1,5 +1,35 @@
 import 'dotenv/config';
 
+type PhorestWriteMode = 'real' | 'simulate';
+type OwnerSmsMode = 'real' | 'simulate';
+type VoiceEngine = 'realtime' | 'live';
+type LiveBackendModel = 'gpt-5.6-terra' | 'gpt-5.6-luna';
+type LiveBackendEffort = 'low' | 'medium' | 'high';
+
+function requiredMode<T extends string>(
+  name: string,
+  value: string | undefined,
+  fallback: T,
+  allowed: readonly T[]
+): T {
+  const resolved = value ?? fallback;
+  if (!allowed.includes(resolved as T)) {
+    throw new Error(
+      `${name} must be one of ${allowed.map((item) => `"${item}"`).join(', ')} (got: ${resolved || '<empty>'})`
+    );
+  }
+  return resolved as T;
+}
+
+function optionalMode<T extends string>(
+  name: string,
+  value: string | undefined,
+  allowed: readonly T[]
+): T | undefined {
+  if (value === undefined || value === '') return undefined;
+  return requiredMode(name, value, allowed[0]!, allowed);
+}
+
 export const env = {
   PORT: Number(process.env.PORT || 5050),
   NODE_ENV: process.env.NODE_ENV || 'development',
@@ -23,6 +53,38 @@ export const env = {
   OPENAI_NOISE_REDUCTION: process.env.OPENAI_NOISE_REDUCTION || 'near_field',
   TIMEZONE: process.env.TIMEZONE || 'America/New_York',
   USE_MOCK_PHOREST: process.env.USE_MOCK_PHOREST || 'true',
+  // The P0 taste-test boundary. Simulated mode continues to use real Phorest
+  // reads, but the singleton wraps every write in a process-local overlay.
+  PHOREST_WRITE_MODE: requiredMode(
+    'PHOREST_WRITE_MODE',
+    process.env.PHOREST_WRITE_MODE,
+    'real',
+    ['real', 'simulate'] as const
+  ) as PhorestWriteMode,
+  OWNER_SMS_MODE: requiredMode(
+    'OWNER_SMS_MODE',
+    process.env.OWNER_SMS_MODE,
+    'real',
+    ['real', 'simulate'] as const
+  ) as OwnerSmsMode,
+  VOICE_ENGINE: requiredMode(
+    'VOICE_ENGINE',
+    process.env.VOICE_ENGINE,
+    'realtime',
+    ['realtime', 'live'] as const
+  ) as VoiceEngine,
+  OPENAI_LIVE_BACKEND_MODEL: requiredMode(
+    'OPENAI_LIVE_BACKEND_MODEL',
+    process.env.OPENAI_LIVE_BACKEND_MODEL,
+    'gpt-5.6-terra',
+    ['gpt-5.6-terra', 'gpt-5.6-luna'] as const
+  ) as LiveBackendModel,
+  // Omit effort for the API default. P1 may explicitly compare low later.
+  OPENAI_LIVE_BACKEND_EFFORT: optionalMode(
+    'OPENAI_LIVE_BACKEND_EFFORT',
+    process.env.OPENAI_LIVE_BACKEND_EFFORT,
+    ['low', 'medium', 'high'] as const
+  ) as LiveBackendEffort | undefined,
 
   // Phorest availability re-anchors its grid to each appointment's END, so free
   // starts come back at odd minutes (2:43, 2:58…). We snap offered times UP to
@@ -197,3 +259,16 @@ export const env = {
   // sees the message and Erica can't follow up).
   TRANSFER_DIAL_TIMEOUT_S: Number(process.env.TRANSFER_DIAL_TIMEOUT_S || 15),
 };
+
+// This is deliberately a function: tests and comparison harnesses may switch
+// env.PHOREST_WRITE_MODE between variants in one process. All side-effect
+// guards must consult the current value rather than a frozen import-time flag.
+export function isVoiceTestMode(): boolean {
+  return env.PHOREST_WRITE_MODE === 'simulate';
+}
+
+if (env.VOICE_ENGINE === 'live' && !isVoiceTestMode()) {
+  throw new Error(
+    'VOICE_ENGINE="live" requires PHOREST_WRITE_MODE="simulate" until Live real-write acceptance.'
+  );
+}

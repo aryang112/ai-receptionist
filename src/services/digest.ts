@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DateTime } from 'luxon';
-import { env } from '../config/env.js';
+import { env, isVoiceTestMode } from '../config/env.js';
 import { logger } from '../core/logger.js';
 import { readCalls } from '../services/callStore.js';
 import { getOpenClose } from '../core/hours.js';
@@ -346,6 +346,10 @@ function digestRecipients(): string[] {
 export async function maybeSendDigest(
   now: DateTime = DateTime.now()
 ): Promise<void> {
+  // A comparison run must neither notify the owner nor mark the digest state
+  // as handled; the derived Phorest flag is the hard boundary even when the
+  // secondary digest/SMS settings were omitted.
+  if (isVoiceTestMode()) return;
   if (env.DIGEST_ENABLED !== 'true') return;
 
   const zoned = now.setZone(env.TIMEZONE);

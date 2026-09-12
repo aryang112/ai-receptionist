@@ -17,7 +17,7 @@
 //    the unblock path; there is no code-level "unblock" function.
 import fs from 'node:fs';
 import path from 'node:path';
-import { env } from '../config/env.js';
+import { env, isVoiceTestMode } from '../config/env.js';
 import { logger } from '../core/logger.js';
 
 type BlocklistEntry = { count: number; lastTs: number };
@@ -103,6 +103,7 @@ function persist(data: BlocklistData): void {
  */
 export function recordSpamOutcome(phone: string): void {
   try {
+    if (isVoiceTestMode()) return;
     const normalized = normalizePhone(phone);
     if (!normalized || normalized.length !== 10) return;
     if (allowlisted(normalized)) {
@@ -127,6 +128,7 @@ export function recordSpamOutcome(phone: string): void {
 /** count >= SPAM_BLOCK_THRESHOLD (default 2) — one spam verdict is a warning, two blocks. */
 export function isBlocked(phone: string): boolean {
   try {
+    if (isVoiceTestMode()) return false;
     const normalized = normalizePhone(phone);
     if (!normalized) return false;
     if (allowlisted(normalized)) return false;

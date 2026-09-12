@@ -36,12 +36,16 @@ describe('sendOwnerSms (M4 extraction from twilioStream.notifyOwnerSms)', () => 
   let origToken: string;
   let origNumber: string;
   let origOwnerPhone: string;
+  let origPhorestWriteMode: typeof env.PHOREST_WRITE_MODE;
+  let origOwnerSmsMode: typeof env.OWNER_SMS_MODE;
 
   beforeAll(() => {
     origSid = env.TWILIO_ACCOUNT_SID;
     origToken = env.TWILIO_AUTH_TOKEN;
     origNumber = env.TWILIO_NUMBER;
     origOwnerPhone = env.OWNER_PHONE;
+    origPhorestWriteMode = env.PHOREST_WRITE_MODE;
+    origOwnerSmsMode = env.OWNER_SMS_MODE;
   });
 
   beforeEach(() => {
@@ -49,6 +53,8 @@ describe('sendOwnerSms (M4 extraction from twilioStream.notifyOwnerSms)', () => 
     env.TWILIO_AUTH_TOKEN = 'test_auth_token';
     env.TWILIO_NUMBER = '+14105551111';
     env.OWNER_PHONE = '+14433706471';
+    env.PHOREST_WRITE_MODE = 'real';
+    env.OWNER_SMS_MODE = 'real';
     messagesCreateMock.mockReset();
     twilioFactoryMock.mockClear();
   });
@@ -58,6 +64,8 @@ describe('sendOwnerSms (M4 extraction from twilioStream.notifyOwnerSms)', () => 
     env.TWILIO_AUTH_TOKEN = origToken;
     env.TWILIO_NUMBER = origNumber;
     env.OWNER_PHONE = origOwnerPhone;
+    env.PHOREST_WRITE_MODE = origPhorestWriteMode;
+    env.OWNER_SMS_MODE = origOwnerSmsMode;
   });
 
   it('sends from TWILIO_NUMBER to OWNER_PHONE by default', async () => {
@@ -84,6 +92,25 @@ describe('sendOwnerSms (M4 extraction from twilioStream.notifyOwnerSms)', () => 
       'test_auth_token',
       { timeout: OWNER_SMS_TIMEOUT_MS }
     );
+  });
+
+  it('short-circuits Twilio with typed simulated delivery when either safety mode is enabled', async () => {
+    env.PHOREST_WRITE_MODE = 'simulate';
+    await expect(sendOwnerSms('test boundary')).resolves.toEqual({
+      queued: true,
+      sid: 'SIM_OWNER_SMS',
+      simulated: true,
+    });
+    expect(messagesCreateMock).not.toHaveBeenCalled();
+
+    env.PHOREST_WRITE_MODE = 'real';
+    env.OWNER_SMS_MODE = 'simulate';
+    await expect(sendOwnerSms('secondary safety')).resolves.toEqual({
+      queued: true,
+      sid: 'SIM_OWNER_SMS',
+      simulated: true,
+    });
+    expect(messagesCreateMock).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -95,6 +95,20 @@ describe('buildDailyDigest / buildWeeklyDigest (M4)', () => {
     }
   });
 
+  it('does not send or stamp a digest in derived voice test mode', async () => {
+    const previous = env.PHOREST_WRITE_MODE;
+    env.PHOREST_WRITE_MODE = 'simulate';
+    try {
+      await maybeSendDigest(
+        DateTime.fromISO('2026-08-20T09:00:00', { zone: env.TIMEZONE })
+      );
+      expect(sendOwnerSmsMock).not.toHaveBeenCalled();
+      expect(fs.existsSync(tmpDigestState)).toBe(false);
+    } finally {
+      env.PHOREST_WRITE_MODE = previous;
+    }
+  });
+
   it('returns null when there were zero handled calls that day (file empty)', () => {
     expect(buildDailyDigest(QUIET_DAY)).toBeNull();
   });

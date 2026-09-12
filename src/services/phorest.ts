@@ -1,6 +1,7 @@
 // src/services/phorest.ts
 import { env } from '../config/env.js';
 import type { PhorestPort } from './phorest.types.js';
+import { simulatedWrites } from './phorest.simulated.js';
 
 // Value imports (runtime)
 import { mockPhorest } from './phorest.mock.js';
@@ -27,4 +28,12 @@ if (env.NODE_ENV === 'production' && process.env.NODE_ENV !== 'test') {
 const useMock =
   process.env.NODE_ENV === 'test' || env.USE_MOCK_PHOREST !== 'false';
 
-export const phorest: PhorestPort = useMock ? mockPhorest : realPhorest;
+const basePhorest = useMock ? mockPhorest : realPhorest;
+
+// In simulation mode retain normal reads but never permit a provider write.
+// The wrapper is intentionally outside engine selection so Realtime and Live
+// comparisons observe identical simulated state and safety behavior.
+export const phorest: PhorestPort =
+  env.PHOREST_WRITE_MODE === 'simulate'
+    ? simulatedWrites(basePhorest)
+    : basePhorest;

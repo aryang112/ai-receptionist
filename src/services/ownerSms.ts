@@ -14,7 +14,7 @@
 // notifyOwnerSms delegation (and an import)" in twilioStream.ts, with zero
 // risk to any of its other Twilio call sites.
 import twilio from 'twilio';
-import { env } from '../config/env.js';
+import { env, isVoiceTestMode } from '../config/env.js';
 import { logger } from '../core/logger.js';
 
 let _twilioClient: ReturnType<typeof twilio> | null = null;
@@ -91,7 +91,7 @@ function isTimeoutError(error: unknown): boolean {
  * recipient when `DIGEST_TO` lists more than one number.
  */
 export type OwnerSmsResult =
-  | { queued: true; sid: string; status?: string }
+  | { queued: true; sid: string; status?: string; simulated?: true }
   | {
       queued: false;
       reason:
@@ -106,6 +106,12 @@ export async function sendOwnerSms(
   body: string,
   to?: string
 ): Promise<OwnerSmsResult> {
+  if (isVoiceTestMode() || env.OWNER_SMS_MODE === 'simulate') {
+    // Keep the normal accepted-delivery shape so callers can proceed exactly as
+    // they would after Twilio queued a message, while making the test boundary
+    // independent of Twilio credentials or a missed secondary env setting.
+    return { queued: true, sid: 'SIM_OWNER_SMS', simulated: true };
+  }
   try {
     const client = getTwilioClient();
     const recipient = to ?? env.OWNER_PHONE;
