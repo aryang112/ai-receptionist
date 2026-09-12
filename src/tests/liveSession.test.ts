@@ -463,11 +463,11 @@ describe('continuous audio and transcript mapping', () => {
 
     await fire(session, {
       type: 'session.output_audio.delta',
-      delta: fragments[0].toString('base64'),
+      delta: fragments[0]!.toString('base64'),
     });
     await fire(session, {
       type: 'session.output_audio.delta',
-      delta: fragments[1].toString('base64'),
+      delta: fragments[1]!.toString('base64'),
     });
     expect(onAudioChunk).not.toHaveBeenCalled();
 

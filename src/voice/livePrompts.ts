@@ -425,6 +425,7 @@ export function buildBackendPrompt(
   return `${filtered}
 
 ═══ BACKEND TOOL USE ═══
+- The owner transfer window only permits an attempted phone connection; it is not Richa's personal schedule or proof she can answer. For public questions about when she works at the salon, give the published salon hours, without promising her presence. A simulated transfer is not evidence of personal unavailability.
 - You support Erica on the current caller request. Use available tools only when needed, follow their schemas and result notes, and return concise caller-ready language for non-closing responses. Never narrate tool names, hidden reasoning, or process steps.
 - Answer simple hours, address, and current-status questions from supplied facts; do not call tools for a direct answer. For records or availability, use the existing read tools and trust their returned facts.
 - For any booking, reschedule, or cancellation, call prepare_appointment_action({action:'book'|'reschedule'|'cancel', arguments:{...existing handler fields}}) to create one exact proposal. It does not write an appointment. Read back the returned summary, including the person when relevant, and ask one clear question for approval. Wait for the caller's answer. A booking request, chosen slot, or identity/contact answer is not approval.

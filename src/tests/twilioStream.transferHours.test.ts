@@ -11,12 +11,11 @@ import WebSocket from 'ws';
 
 // 2026-08-24 (Aryan-decided after the Holly call — replaces the 2026-08-23
 // salon-hours gate): live transfers ring Richa's PERSONAL mobile, so the gate
-// is her waking hours (the transfer window, default 09:00–21:00 salon TZ),
+// is her waking hours (the transfer window, default 09:00–20:00 salon TZ),
 // NOT the salon's opening hours. Inside the window the dial happens even when
 // the salon is closed (Sunday mid-day, weekday mornings/evenings). Outside
 // it, transfer_to_owner offers the separate exact-transcript message path.
-// The fatal failover is deliberately NOT gated
-// (tested implicitly by not touching it).
+// Fatal failover observes the same cutoff.
 
 process.env.OPENAI_REALTIME_API_KEY ||= 'test-key';
 
@@ -51,8 +50,8 @@ describe('transfer_to_owner — transfer-window gate', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('OUTSIDE WINDOW (Tue 9pm): no dial or synthesized SMS; requests a real message', async () => {
-    vi.setSystemTime(new Date('2026-08-25T21:00:00-04:00'));
+  it('OUTSIDE WINDOW (Tue 8pm): no dial or synthesized SMS; requests a real message', async () => {
+    vi.setSystemTime(new Date('2026-08-25T20:00:00-04:00'));
     const call = buildCall();
     const notifyOwnerSms = vi
       .fn()
@@ -174,10 +173,10 @@ describe('transfer_to_owner — transfer-window gate', () => {
     expect(notifyOwnerSms).not.toHaveBeenCalled();
   });
 
-  it('SALON CLOSED but inside window (Tue 9:30am / Tue 8pm): DIALS', async () => {
+  it('SALON CLOSED but inside window (Tue 9:30am / Tue 7:59pm): DIALS', async () => {
     for (const time of [
       '2026-08-25T09:30:00-04:00', // before the salon opens at noon
-      '2026-08-25T20:00:00-04:00', // after the salon closed at 7pm
+      '2026-08-25T19:59:00-04:00', // after the salon closed at 7pm
       '2026-08-23T13:00:00-04:00', // Sunday mid-day (salon closed all day)
     ]) {
       vi.setSystemTime(new Date(time));

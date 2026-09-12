@@ -13,6 +13,7 @@ beforeAll(async () => {
 const saved = { voice: env.VOICE_ENGINE, writes: env.PHOREST_WRITE_MODE };
 
 afterEach(() => {
+  vi.useRealTimers();
   env.VOICE_ENGINE = saved.voice;
   env.PHOREST_WRITE_MODE = saved.writes;
   vi.restoreAllMocks();
@@ -123,13 +124,27 @@ describe('Live proposal tool isolation and controller gate', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it('returns a simulated transfer outcome in voice test mode before any dial path', async () => {
+  it('simulates an eligible transfer truthfully even before salon opening', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-14T09:00:00-04:00'));
     const call = buildLiveCall();
 
     await expect(call.handleTransferToOwner({})).resolves.toEqual({
       transferred: false,
       simulated: true,
-      note: 'This is a test: no live transfer was placed. Offer to take a simulated message.',
+      wouldTransfer: true,
+      note: expect.stringContaining(
+        'do not claim she is personally unavailable'
+      ),
     });
   });
+});
+
+it('keeps the 8 PM cutoff in simulation instead of pretending it would transfer', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-09-14T20:00:00-04:00'));
+  const call = buildLiveCall();
+  const result = await call.handleTransferToOwner({});
+  expect(result).toMatchObject({ transferred: false, messageRequired: true });
+  expect(result.wouldTransfer).not.toBe(true);
 });

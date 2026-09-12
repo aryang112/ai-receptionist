@@ -68,7 +68,10 @@ type ToolBatch = {
 };
 
 const OUTPUT_FRAME_BYTES = 160; // 20 ms at 8 kHz G.711 mu-law.
-const MAX_OUTPUT_FRAMES = 20; // At most 400 ms queued ahead of Twilio.
+const OUTPUT_FRAME_MS = 20;
+const OUTPUT_SOFT_FRAMES = 20; // 400 ms target; ordinary jitter is not fatal.
+const OUTPUT_HARD_FRAMES = 250; // 5 s pathological backlog, about 40 KB.
+const OUTPUT_CATCHUP_FRAMES = 5; // At most 100 ms per event-loop wake.
 const MAX_CONTEXT_APPEND_CHARS = 1_200; // Conservative guard below 500 tokens.
 const MAX_BACKEND_CONTEXT_CHARS = 16_000;
 
@@ -140,6 +143,8 @@ export class OpenAILiveSession {
   private activeInputSegmentId: string | undefined;
   private outputQueue: string[] = [];
   private outputTimer: NodeJS.Timeout | undefined;
+  private outputRemainder = Buffer.alloc(0);
+  private nextOutputAt: number | undefined;
   private outputDropLogged = false;
   private outputOverrun = false;
   private greetingRequested = false;
@@ -819,71 +824,113 @@ export class OpenAILiveSession {
   }
 
   private enqueueOutputAudio(payload: string): void {
-    const bytes = Buffer.from(payload, 'base64');
-    for (let offset = 0; offset < bytes.length; offset += OUTPUT_FRAME_BYTES) {
-      const frame = bytes.subarray(offset, offset + OUTPUT_FRAME_BYTES);
-      if (frame.length === 0) continue;
-      this.outputQueue.push(frame.toString('base64'));
+    if (this.closing) return;
+    // A socket event can run before an overdue timer after an event-loop stall.
+    // Drain that already-due work before judging the newly arrived backlog.
+    if (
+      this.outputTimer &&
+      this.nextOutputAt !== undefined &&
+      performance.now() >= this.nextOutputAt
+    ) {
+      clearTimeout(this.outputTimer);
+      this.outputTimer = undefined;
+      this.drainOneOutputFrame();
+      if (this.closing) return;
     }
-    this.boundOutputQueue();
+    // Live event boundaries are arbitrary. Carry partial samples into the next
+    // event instead of charging a short chunk a full 20 ms of playback time.
+    const bytes = Buffer.concat([
+      this.outputRemainder,
+      Buffer.from(payload, 'base64'),
+    ]);
+    const completeBytes = bytes.length - (bytes.length % OUTPUT_FRAME_BYTES);
+    for (let offset = 0; offset < completeBytes; offset += OUTPUT_FRAME_BYTES) {
+      this.outputQueue.push(
+        bytes.subarray(offset, offset + OUTPUT_FRAME_BYTES).toString('base64')
+      );
+      // Bound retained frames even if an upstream event contains a huge burst.
+      if (this.outputQueue.length > OUTPUT_HARD_FRAMES) {
+        if (!this.outputTimer) this.drainOneOutputFrame();
+        this.boundOutputQueue();
+        if (this.closing) return;
+      }
+    }
+    this.outputRemainder = Buffer.from(bytes.subarray(completeBytes));
     if (!this.outputTimer) this.drainOneOutputFrame();
+    this.boundOutputQueue();
   }
 
   private boundOutputQueue(): void {
-    while (this.outputQueue.length > MAX_OUTPUT_FRAMES) {
+    while (this.outputQueue.length > OUTPUT_SOFT_FRAMES) {
+      // Only collapse digital silence, never low-volume speech.
       const silenceIndex = this.outputQueue.findIndex(
-        (frame) => muLawRms(frame) <= 200
+        (frame) => muLawRms(frame) === 0
       );
-      if (silenceIndex < 0) {
-        if (!this.outputOverrun) {
-          this.outputOverrun = true;
-          const error = new Error(
-            'GPT-Live speech audio exceeded the 400ms outbound queue bound'
-          );
-          this.log.error(
-            { queuedFrames: this.outputQueue.length, maxQueuedMs: 400 },
-            error.message
-          );
-          this.handlers.onError?.(error);
-          void this.close();
-        }
-        return;
-      }
-      // Low-energy frames are safe to collapse while catching up. Never drop
-      // speech: clipping a spoken result must fail visibly instead.
-      this.outputQueue.splice(silenceIndex, 1);
       if (!this.outputDropLogged) {
         this.outputDropLogged = true;
         this.log.warn(
-          { maxQueuedMs: MAX_OUTPUT_FRAMES * 20 },
-          'GPT-Live output arrived faster than realtime; collapsed queued silence'
+          {
+            queuedMs: this.outputQueue.length * OUTPUT_FRAME_MS,
+            targetMs: 400,
+          },
+          'GPT-Live output buffering transient audio jitter'
         );
       }
+      if (silenceIndex < 0) break;
+      this.outputQueue.splice(silenceIndex, 1);
+    }
+    if (this.outputQueue.length > OUTPUT_HARD_FRAMES && !this.outputOverrun) {
+      this.outputOverrun = true;
+      const error = new Error(
+        'GPT-Live speech audio exceeded the 5s outbound queue bound'
+      );
+      this.log.error(
+        { queuedFrames: this.outputQueue.length, maxQueuedMs: 5000 },
+        error.message
+      );
+      this.handlers.onError?.(error);
+      void this.close();
     }
   }
 
   private drainOneOutputFrame(): void {
-    const frame = this.outputQueue.shift();
-    if (!frame || this.closing) {
+    if (this.closing || !this.outputQueue.length) {
       this.outputTimer = undefined;
+      this.nextOutputAt = undefined;
       return;
     }
-
-    const transition = this.outputSpeechGate.process(frame);
-    if (transition === 'started') {
-      this.greetingSpoken = this.greetingRequested || this.greetingSpoken;
-      this.clearGreetingTimers();
-      this.onOutputSpeechStarted?.();
+    this.nextOutputAt ??= performance.now();
+    let sent = 0;
+    while (
+      this.outputQueue.length &&
+      sent < OUTPUT_CATCHUP_FRAMES &&
+      performance.now() >= this.nextOutputAt &&
+      !this.closing
+    ) {
+      const frame = this.outputQueue.shift()!;
+      const transition = this.outputSpeechGate.process(frame);
+      if (transition === 'started') {
+        this.greetingSpoken = this.greetingRequested || this.greetingSpoken;
+        this.clearGreetingTimers();
+        this.onOutputSpeechStarted?.();
+      }
+      this.handlers.onAudioChunk?.(frame);
+      // Marks follow the quiet boundary frame, preserving playback ordering.
+      if (transition === 'stopped') this.onOutputSpeechStopped?.();
+      this.nextOutputAt += OUTPUT_FRAME_MS;
+      sent++;
     }
-    this.handlers.onAudioChunk?.(frame);
-    // A controller may place a Twilio mark in this callback. Emit it after the
-    // quiet boundary frame so the mark covers every frame in the segment.
-    if (transition === 'stopped') this.onOutputSpeechStopped?.();
-
-    this.outputTimer = setTimeout(() => {
-      this.outputTimer = undefined;
-      this.drainOneOutputFrame();
-    }, 20);
+    this.boundOutputQueue();
+    if (this.closing) return;
+    // Advance an absolute audio clock: callback overhead must not accumulate
+    // into seconds of lag on a long call. Yield after each bounded catch-up.
+    this.outputTimer = setTimeout(
+      () => {
+        this.outputTimer = undefined;
+        this.drainOneOutputFrame();
+      },
+      Math.max(0, this.nextOutputAt - performance.now())
+    );
     this.outputTimer.unref?.();
   }
 
@@ -891,6 +938,8 @@ export class OpenAILiveSession {
     if (this.outputTimer) clearTimeout(this.outputTimer);
     this.outputTimer = undefined;
     this.outputQueue = [];
+    this.outputRemainder = Buffer.alloc(0);
+    this.nextOutputAt = undefined;
     this.outputSpeechGate.reset();
   }
 

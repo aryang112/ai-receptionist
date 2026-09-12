@@ -309,3 +309,26 @@ describe('failback session start — no duplicate start/recording rows', () => {
     call.cleanup();
   });
 });
+
+describe('fatal failover respects owner transfer hours', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    updateMock.mockClear();
+    env.TWILIO_ACCOUNT_SID = 'AC_test_failover';
+    env.TWILIO_AUTH_TOKEN = 'test-token';
+  });
+  afterEach(() => vi.useRealTimers());
+  it.each([
+    ['2026-09-14T09:00:00-04:00', true],
+    ['2026-09-14T19:59:00-04:00', true],
+    ['2026-09-14T20:00:00-04:00', false],
+    ['2026-09-14T23:00:00-04:00', false],
+  ])('uses the same cutoff for %s', async (time, permitted) => {
+    vi.setSystemTime(new Date(time));
+    const call = buildCall('CA_failover_hours');
+    await call.failoverToOwner('test');
+    const twiml = lastDialTwiml();
+    expect(twiml.includes('<Dial>')).toBe(permitted);
+    expect(twiml.includes('<Hangup/>')).toBe(!permitted);
+  });
+});

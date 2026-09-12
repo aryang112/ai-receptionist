@@ -868,6 +868,12 @@ export function liveToolDefinitions(): ToolDefinition[] {
         description:
           'Find an existing account. With no arguments, use the prefetched account or the actual calling number supplied privately by the application. Never invent or ask to repeat caller ID. Use a supplied phone when different; use supplied firstName and lastName after a phone miss. A name match alone does not verify identity or authorize appointment disclosure or changes.',
       };
+    if (tool.name === 'transfer_to_owner')
+      return {
+        ...tool,
+        description:
+          'Check a caller-requested connection to Richa against the transfer hours. In this owner test the connection is simulated: if wouldTransfer is true, explain that no real call was placed because this is a test. Never describe a simulated transfer as Richa being unavailable or not answering. Outside the permitted hours, offer a message.',
+      };
     if (tool.name === 'end_call')
       return {
         ...tool,
@@ -4927,18 +4933,6 @@ export class TwilioRealtimeCall {
   }
 
   private async handleTransferToOwner(args: unknown) {
-    if (isVoiceTestMode()) {
-      CallStore.recordToolCall(this.callSid, {
-        name: 'transfer_to_owner',
-        ok: true,
-        detail: { simulated: true },
-      });
-      return {
-        transferred: false,
-        simulated: true,
-        note: 'This is a test: no live transfer was placed. Offer to take a simulated message.',
-      };
-    }
     try {
       const parsed = parseToolArgs('transfer_to_owner', args);
       if (!parsed.success) {
@@ -4994,8 +4988,7 @@ export class TwilioRealtimeCall {
       // range — NOT just "starting soon"), never dial her personal phone.
       // Return need-discovery coaching; message-taking remains available only
       // after Erica learns that the caller's need cannot be handled directly.
-      // The FATAL-ERROR failover (failoverToOwner, below) is untouched by this
-      // and keeps dialing — a technical meltdown should still reach a human.
+      // Fatal-error failover also respects the transfer-hours cutoff.
       const closureNow = DateTime.now().setZone(env.TIMEZONE);
       const closureTodayISO = closureNow.toISODate();
       const temporaryClosure = getActiveOrUpcomingVacation(closureNow);
@@ -5035,13 +5028,12 @@ export class TwilioRealtimeCall {
       // TRANSFER-WINDOW gate (2026-08-24, Aryan-decided after the Holly
       // call — replaces the 2026-08-23 salon-hours gate): live transfers
       // ring Richa's PERSONAL mobile, so the right clock is her waking
-      // hours (default 9 AM–9 PM salon TZ, env-tunable), NOT the salon's
+      // hours (default 9 AM–8 PM salon TZ, env-tunable), NOT the salon's
       // opening hours. Holly asked for Richa at 11:46 AM — 14 minutes
       // before the salon's noon opening — and the old gate blocked the
       // dial; under this one it rings through.
       // Outside the window: offer the separate exact-transcript message path.
-      // The fatal-error failover below is NOT gated — a
-      // technical meltdown still reaches a human at any hour.
+      // Fatal-error failover below uses this same hours gate.
       if (!isWithinTransferWindow()) {
         logger.info(
           { tool: 'transfer_to_owner', callSid: this.callSid },
@@ -5056,6 +5048,20 @@ export class TwilioRealtimeCall {
           transferred: false,
           messageRequired: true,
           note: "Richa can't be connected right now. Offer to take a message if the caller has not supplied one, then wait. After they give the complete message, call leave_message_for_owner silently.",
+        };
+      }
+
+      if (isVoiceTestMode()) {
+        CallStore.recordToolCall(this.callSid, {
+          name: 'transfer_to_owner',
+          ok: true,
+          detail: { simulated: true, wouldTransfer: true },
+        });
+        return {
+          transferred: false,
+          simulated: true,
+          wouldTransfer: true,
+          note: 'The transfer is permitted at this time, but this test does not place a real call to Richa. Tell the caller the transfer was simulated; do not claim she is personally unavailable or that her phone rang. Offer to continue helping here.',
         };
       }
 
@@ -5845,11 +5851,13 @@ export class TwilioRealtimeCall {
       this.transferring = true;
       try {
         await client.calls(this.callSid).update({
-          twiml: `<Response><Say voice="Polly.Joanna-Neural">I'm so sorry, I'm having a technical problem — let me connect you with the salon.</Say><Dial>${env.OWNER_PHONE}</Dial></Response>`,
+          twiml: isWithinTransferWindow()
+            ? `<Response><Say voice="Polly.Joanna-Neural">I'm so sorry, I'm having a technical problem — let me connect you with the salon.</Say><Dial>${env.OWNER_PHONE}</Dial></Response>`
+            : `<Response><Say voice="Polly.Joanna-Neural">I'm sorry, we're having a connection problem. Please call back during salon hours.</Say><Hangup/></Response>`,
         });
         logger.info(
           { streamSid: this.streamSid, callSid: this.callSid, reason },
-          'Call redirected to owner (failover)'
+          'Call redirected through time-gated failover'
         );
       } catch (redirectErr) {
         logger.error(
