@@ -1338,7 +1338,9 @@ describe('realPhorest client-resolution single-flight', () => {
       }
       if (u.includes('/appointment?updated_from=')) {
         return jsonResponse({
-          _embedded: { appointments: [appointmentRecord()] },
+          _embedded: {
+            appointments: [appointmentRecord({ startTime: '13:00:00.000' })],
+          },
           page: { number: 0, totalPages: 1 },
         });
       }
@@ -1360,6 +1362,7 @@ describe('realPhorest client-resolution single-flight', () => {
   it('Live real reschedule and cancellation require a verified provider state', async () => {
     let moved = false;
     let cancelled = false;
+    const appointmentReadUrls: string[] = [];
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     fetchMock.mockImplementation(async (url: unknown, init?: RequestInit) => {
@@ -1384,6 +1387,7 @@ describe('realPhorest client-resolution single-flight', () => {
         return new Response(null, { status: 204 });
       }
       if (u.includes('/appointment?updated_from=')) {
+        appointmentReadUrls.push(u);
         return jsonResponse({
           _embedded: {
             appointments: [
@@ -1415,6 +1419,11 @@ describe('realPhorest client-resolution single-flight', () => {
       appointmentId: 'appt-1',
       cancelled: true,
     });
+    expect(
+      appointmentReadUrls.some(
+        (url) => new URL(url).searchParams.get('fetch_canceled') === 'true'
+      )
+    ).toBe(true);
   });
 
   it('Live real create treats missing or mismatched read-back as uncertain', async () => {
@@ -1466,6 +1475,55 @@ describe('realPhorest client-resolution single-flight', () => {
     ).rejects.toMatchObject({ outcomeUncertain: true });
   });
 
+  it('Live real reschedule treats a non-active read-back as uncertain', async () => {
+    let moved = false;
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    fetchMock.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      const u = String(url);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (u.includes('/service?')) {
+        return jsonResponse({
+          _embedded: {
+            services: [
+              { serviceId: 'svc1', name: 'Brow', duration: 15, price: 15 },
+            ],
+          },
+          page: { number: 0, totalPages: 1 },
+        });
+      }
+      if (u.includes('/appointment/appt-1?') && method === 'PUT') {
+        moved = true;
+        return new Response(null, { status: 204 });
+      }
+      if (u.includes('/appointment?updated_from=')) {
+        return jsonResponse({
+          _embedded: {
+            appointments: [
+              appointmentRecord(
+                moved
+                  ? {
+                      appointmentDate: '2030-07-11',
+                      startTime: '14:30:00',
+                      activationState: 'INACTIVE',
+                    }
+                  : {}
+              ),
+            ],
+          },
+          page: { number: 0, totalPages: 1 },
+        });
+      }
+      throw new Error(`Unexpected request: ${u}`);
+    });
+    const phorest = await loadRealPhorest();
+    await enableLiveWriteReadback();
+
+    await expect(
+      phorest.updateAppointment('appt-1', '2030-07-11T14:30:00')
+    ).rejects.toMatchObject({ outcomeUncertain: true });
+  });
+
   it('Live real write transport uncertainty is latched, while a 4xx remains a safe rejection', async () => {
     let responseStatus = 503;
     const fetchMock = vi.fn();
@@ -1510,7 +1568,9 @@ describe('realPhorest client-resolution single-flight', () => {
       throw new Error('Expected a deterministic rejection');
     } catch (error) {
       expect(error).not.toMatchObject({ outcomeUncertain: true });
-      expect(error).toMatchObject({ message: 'Phorest request failed with 400' });
+      expect(error).toMatchObject({
+        message: 'Phorest request failed with 400',
+      });
     }
   });
 

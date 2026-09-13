@@ -1145,13 +1145,15 @@ async function pickStaffId(
 async function scanAppointmentWindow(
   appointmentId: string,
   updatedFrom: string,
-  updatedTo: string
+  updatedTo: string,
+  includeCanceled = false
 ): Promise<AppointmentResponse | undefined> {
   let page = 0;
   while (page < 10) {
+    const canceledFilter = includeCanceled ? '&fetch_canceled=true' : '';
     const response = await phorestFetch<AppointmentListResponse>(
       businessBranchPath(
-        `/appointment?updated_from=${encodeURIComponent(updatedFrom)}&updated_to=${encodeURIComponent(updatedTo)}&size=100&page=${page}`
+        `/appointment?updated_from=${encodeURIComponent(updatedFrom)}&updated_to=${encodeURIComponent(updatedTo)}&size=100&page=${page}${canceledFilter}`
       )
     );
 
@@ -1169,7 +1171,8 @@ async function scanAppointmentWindow(
 }
 
 async function fetchAppointment(
-  appointmentId: string
+  appointmentId: string,
+  { includeCanceled = false }: { includeCanceled?: boolean } = {}
 ): Promise<AppointmentResponse | undefined> {
   // Fast path: fetch the single appointment by ID directly (1 round-trip).
   // GATED OFF by default: on this tenant GET /appointment/{id} ALWAYS 404s, so
@@ -1208,7 +1211,8 @@ async function fetchAppointment(
     const match = await scanAppointmentWindow(
       appointmentId,
       updatedFrom,
-      updatedTo
+      updatedTo,
+      includeCanceled
     );
     if (match) return match;
   }
@@ -1231,10 +1235,25 @@ function hasExpectedStart(
   appointment: AppointmentResponse,
   start: DateTime
 ): boolean {
+  const actualStart = normaliseSalonLocalTime(appointment.startTime);
   return (
     appointment.appointmentDate === start.toISODate() &&
-    appointment.startTime === start.toFormat('HH:mm:ss')
+    actualStart === start.toFormat('HH:mm:ss')
   );
+}
+
+function normaliseSalonLocalTime(time: string | undefined): string | undefined {
+  // Appointment-list responses use salon-local wall-clock time but can include
+  // fractional seconds (for example, "12:15:00.000"). Compare the semantic
+  // clock value rather than the provider's serialization detail.
+  const match = /^(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?$/.exec(time ?? '');
+  if (!match) return undefined;
+
+  const [, hours, minutes, seconds] = match;
+  if (Number(hours) > 23 || Number(minutes) > 59 || Number(seconds) > 59) {
+    return undefined;
+  }
+  return `${hours}:${minutes}:${seconds}`;
 }
 
 function isCancelledAppointment(appointment: AppointmentResponse): boolean {
@@ -1285,7 +1304,8 @@ async function verifyRescheduledAppointment(
     if (
       !appointment ||
       appointment.appointmentId !== appointmentId ||
-      !hasExpectedStart(appointment, start)
+      !hasExpectedStart(appointment, start) ||
+      !isActiveBooked(appointment)
     ) {
       throw new AppointmentWriteOutcomeUncertainError();
     }
@@ -1295,9 +1315,13 @@ async function verifyRescheduledAppointment(
   }
 }
 
-async function verifyCancelledAppointment(appointmentId: string): Promise<void> {
+async function verifyCancelledAppointment(
+  appointmentId: string
+): Promise<void> {
   try {
-    const appointment = await fetchAppointment(appointmentId);
+    const appointment = await fetchAppointment(appointmentId, {
+      includeCanceled: true,
+    });
     if (
       !appointment ||
       appointment.appointmentId !== appointmentId ||
