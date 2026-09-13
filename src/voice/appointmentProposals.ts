@@ -30,6 +30,7 @@ export class AppointmentProposals {
     result?: Promise<unknown>;
   };
   private outcomeUncertain = false;
+  private confirmationPending = false;
   constructor(
     private readonly execute: (
       action: AppointmentAction,
@@ -51,6 +52,14 @@ export class AppointmentProposals {
     };
   }
 
+  private pending() {
+    return {
+      error:
+        'The previous appointment action is still being confirmed. Wait for its result before changing details.',
+      actionPending: true,
+    };
+  }
+
   private finalizeResult(result: unknown, simulated: boolean): unknown {
     const output: Record<string, unknown> =
       result !== null && typeof result === 'object'
@@ -66,6 +75,7 @@ export class AppointmentProposals {
   prepare(input: unknown) {
     if (!this.allowed()) return this.unavailable();
     if (this.outcomeUncertain) return this.uncertain();
+    if (this.confirmationPending) return this.pending();
     const parsed = prepareSchema.safeParse(input);
     if (!parsed.success)
       return {
@@ -115,6 +125,7 @@ export class AppointmentProposals {
           'This proposal is missing or superseded. Prepare the current details and obtain approval again.',
       };
     const simulated = this.simulated();
+    this.confirmationPending = true;
     p.result ??= Promise.resolve()
       .then(() => this.execute(p.action, structuredClone(p.args)))
       .then((result) => this.finalizeResult(result, simulated))
@@ -124,6 +135,9 @@ export class AppointmentProposals {
           return this.uncertain();
         }
         throw new Error('Appointment action failed.');
+      })
+      .finally(() => {
+        this.confirmationPending = false;
       });
     return p.result;
   }

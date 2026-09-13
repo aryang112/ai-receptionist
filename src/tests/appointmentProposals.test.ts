@@ -101,12 +101,24 @@ describe('AppointmentProposals', () => {
     // callers the same cached promise before the mutation begins.
     await Promise.resolve();
     expect(execute).toHaveBeenCalledTimes(1);
+    expect(
+      proposals.prepare({
+        action: 'book',
+        arguments: { ...booking, time: '14:00' },
+      })
+    ).toMatchObject({ actionPending: true });
     release();
 
     await expect(Promise.all([first, second])).resolves.toEqual([
       { appointmentId: 'sim_appt_1' },
       { appointmentId: 'sim_appt_1' },
     ]);
+    expect(
+      proposals.prepare({
+        action: 'book',
+        arguments: { ...booking, time: '14:00' },
+      })
+    ).toMatchObject({ requiresConfirmation: true });
   });
 
   it('latches an uncertain real outcome and returns its cached result to a duplicate confirm', async () => {
