@@ -17,9 +17,9 @@ const tools = {
 } as const;
 export type AppointmentAction = keyof typeof tools;
 
-/** Call-scoped, simulated-only proposals. Preparation never runs a write handler.
- * A replacement invalidates the prior proposal; retries share one execution.
- * Caller consent remains model-relayed in this pilot, not transcript-proven.
+/** Call-scoped proposals. Preparation never runs a write handler. A replacement
+ * invalidates the prior proposal; retries share one execution. Caller consent
+ * remains model-relayed; the controller supplies the mode and write safeguards.
  */
 export class AppointmentProposals {
   private current?: {
@@ -29,16 +29,43 @@ export class AppointmentProposals {
     summary: string;
     result?: Promise<unknown>;
   };
+  private outcomeUncertain = false;
   constructor(
     private readonly execute: (
       action: AppointmentAction,
       args: unknown
     ) => Promise<unknown>,
-    private readonly allowed: () => boolean
+    private readonly allowed: () => boolean,
+    private readonly simulated: () => boolean = () => true
   ) {}
+
+  private unavailable() {
+    return { error: 'Appointment actions are unavailable.' };
+  }
+
+  private uncertain() {
+    return {
+      error:
+        'The previous appointment action may have completed. Do not retry or prepare another action during this call.',
+      outcomeUncertain: true,
+    };
+  }
+
+  private finalizeResult(result: unknown, simulated: boolean): unknown {
+    const output: Record<string, unknown> =
+      result !== null && typeof result === 'object'
+        ? { ...(result as Record<string, unknown>) }
+        : { result };
+    if (!simulated && output.outcomeUncertain === true) {
+      this.outcomeUncertain = true;
+      return this.uncertain();
+    }
+    return simulated ? { ...output, simulated: true } : output;
+  }
+
   prepare(input: unknown) {
-    if (!this.allowed())
-      return { error: 'Simulated appointment actions are unavailable.' };
+    if (!this.allowed()) return this.unavailable();
+    if (this.outcomeUncertain) return this.uncertain();
     const parsed = prepareSchema.safeParse(input);
     if (!parsed.success)
       return {
@@ -67,24 +94,37 @@ export class AppointmentProposals {
       proposalId: proposal.id,
       action: proposal.action,
       summary,
-      simulated: true,
+      ...(this.simulated() ? { simulated: true } : {}),
       requiresConfirmation: true,
       note: 'Read back the exact service, date and time (including the selected existing appointment for changes). Wait for the caller to approve before confirming. A change of details requires a new proposal.',
     };
   }
   async confirm(input: unknown): Promise<unknown> {
-    if (!this.allowed())
-      return { error: 'Simulated appointment actions are unavailable.' };
+    if (!this.allowed()) return this.unavailable();
     const parsed = confirmSchema.safeParse(input);
     const p = this.current;
+    // A duplicate confirm of the same dispatched proposal receives its cached
+    // outcome, even after an uncertain real write latched this call.
+    if (parsed.success && p && p.id === parsed.data.proposalId && p.result) {
+      return p.result;
+    }
+    if (this.outcomeUncertain) return this.uncertain();
     if (!parsed.success || !p || p.id !== parsed.data.proposalId)
       return {
         error:
           'This proposal is missing or superseded. Prepare the current details and obtain approval again.',
       };
+    const simulated = this.simulated();
     p.result ??= Promise.resolve()
       .then(() => this.execute(p.action, structuredClone(p.args)))
-      .then((result) => ({ ...(result as object), simulated: true }));
+      .then((result) => this.finalizeResult(result, simulated))
+      .catch(() => {
+        if (!simulated) {
+          this.outcomeUncertain = true;
+          return this.uncertain();
+        }
+        throw new Error('Appointment action failed.');
+      });
     return p.result;
   }
 }

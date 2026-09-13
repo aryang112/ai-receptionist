@@ -49,7 +49,26 @@ describe('AppointmentProposals', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it('coalesces concurrent confirms to exactly one simulated mutation', async () => {
+  it('prepares real-mode proposals without a mutation or simulated result', () => {
+    const execute = vi.fn();
+    const proposals = new AppointmentProposals(
+      execute,
+      () => true,
+      () => false
+    );
+
+    const proposal = proposals.prepare({ action: 'book', arguments: booking });
+
+    expect(proposal).toMatchObject({
+      action: 'book',
+      requiresConfirmation: true,
+      summary: 'Book Lash Lift on 2026-10-01 at 13:15',
+    });
+    expect(proposal).not.toHaveProperty('simulated');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('coalesces concurrent real-mode confirms to exactly one mutation', async () => {
     let release!: () => void;
     const mutation = new Promise<void>((resolve) => {
       release = resolve;
@@ -58,7 +77,11 @@ describe('AppointmentProposals', () => {
       await mutation;
       return { appointmentId: 'sim_appt_1' };
     });
-    const proposals = new AppointmentProposals(execute, () => true);
+    const proposals = new AppointmentProposals(
+      execute,
+      () => true,
+      () => false
+    );
     const proposal = proposals.prepare({
       action: 'book',
       arguments: booking,
@@ -81,9 +104,102 @@ describe('AppointmentProposals', () => {
     release();
 
     await expect(Promise.all([first, second])).resolves.toEqual([
-      { appointmentId: 'sim_appt_1', simulated: true },
-      { appointmentId: 'sim_appt_1', simulated: true },
+      { appointmentId: 'sim_appt_1' },
+      { appointmentId: 'sim_appt_1' },
     ]);
+  });
+
+  it('latches an uncertain real outcome and returns its cached result to a duplicate confirm', async () => {
+    const execute = vi.fn().mockResolvedValue({
+      appointmentId: 'appt_1',
+      outcomeUncertain: true,
+    });
+    const proposals = new AppointmentProposals(
+      execute,
+      () => true,
+      () => false
+    );
+    const proposal = proposals.prepare({
+      action: 'book',
+      arguments: booking,
+    }) as {
+      proposalId: string;
+    };
+
+    await expect(
+      proposals.confirm({ proposalId: proposal.proposalId, confirmed: true })
+    ).resolves.toMatchObject({ outcomeUncertain: true });
+    await expect(
+      proposals.confirm({ proposalId: proposal.proposalId, confirmed: true })
+    ).resolves.toMatchObject({ outcomeUncertain: true });
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    expect(
+      proposals.prepare({
+        action: 'book',
+        arguments: { ...booking, time: '14:00' },
+      })
+    ).toMatchObject({ outcomeUncertain: true });
+    await expect(
+      proposals.confirm({ proposalId: 'another-proposal', confirmed: true })
+    ).resolves.toMatchObject({ outcomeUncertain: true });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('latches a rejected real write as uncertain and does not retry it', async () => {
+    const execute = vi.fn().mockRejectedValue(new Error('network failed'));
+    const proposals = new AppointmentProposals(
+      execute,
+      () => true,
+      () => false
+    );
+    const proposal = proposals.prepare({
+      action: 'book',
+      arguments: booking,
+    }) as {
+      proposalId: string;
+    };
+
+    await expect(
+      proposals.confirm({ proposalId: proposal.proposalId, confirmed: true })
+    ).resolves.toMatchObject({ outcomeUncertain: true });
+    await expect(
+      proposals.confirm({ proposalId: proposal.proposalId, confirmed: true })
+    ).resolves.toMatchObject({ outcomeUncertain: true });
+    expect(
+      proposals.prepare({
+        action: 'book',
+        arguments: { ...booking, time: '14:00' },
+      })
+    ).toMatchObject({ outcomeUncertain: true });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows a corrected real proposal after a known-safe error', async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ error: 'That time is no longer available.' })
+      .mockResolvedValueOnce({ appointmentId: 'appt_2' });
+    const proposals = new AppointmentProposals(
+      execute,
+      () => true,
+      () => false
+    );
+    const first = proposals.prepare({ action: 'book', arguments: booking }) as {
+      proposalId: string;
+    };
+
+    await expect(
+      proposals.confirm({ proposalId: first.proposalId, confirmed: true })
+    ).resolves.toEqual({ error: 'That time is no longer available.' });
+    const corrected = proposals.prepare({
+      action: 'book',
+      arguments: { ...booking, time: '14:00' },
+    }) as { proposalId: string };
+    await expect(
+      proposals.confirm({ proposalId: corrected.proposalId, confirmed: true })
+    ).resolves.toEqual({ appointmentId: 'appt_2' });
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 
   it('disallows preparation and confirmation after the call closes', async () => {
@@ -101,10 +217,10 @@ describe('AppointmentProposals', () => {
     await expect(
       proposals.confirm({ proposalId: proposal.proposalId, confirmed: true })
     ).resolves.toEqual({
-      error: 'Simulated appointment actions are unavailable.',
+      error: 'Appointment actions are unavailable.',
     });
     expect(proposals.prepare({ action: 'book', arguments: booking })).toEqual({
-      error: 'Simulated appointment actions are unavailable.',
+      error: 'Appointment actions are unavailable.',
     });
     expect(execute).not.toHaveBeenCalled();
   });
