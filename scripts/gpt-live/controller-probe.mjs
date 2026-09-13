@@ -21,6 +21,28 @@ const output =
   process.env.PROBE_OUTPUT ||
   `/tmp/erica-controller-${engine}-${model}-${Date.now()}`;
 fs.mkdirSync(output, { recursive: true });
+// A remote probe does not control the hosted adapter mode. Never assume that
+// the local simulate settings below protect a hosted real-write deployment.
+if (remoteUrl) {
+  const statusUrl = new URL(remoteUrl);
+  statusUrl.protocol = statusUrl.protocol === 'wss:' ? 'https:' : 'http:';
+  statusUrl.pathname = '/admin/voice-test';
+  statusUrl.search = '';
+  const statusResponse = await fetch(statusUrl, {
+    headers: { Authorization: `Bearer ${process.env.ADMIN_TOKEN || ''}` },
+  });
+  if (!statusResponse.ok)
+    throw new Error('Cannot verify hosted appointment write mode.');
+  const status = await statusResponse.json();
+  if (
+    status.writes !== 'simulate' &&
+    process.env.PROBE_ALLOW_REAL_BACKEND !== 'true'
+  ) {
+    throw new Error(
+      'Hosted appointment writes are real. Set PROBE_ALLOW_REAL_BACKEND=true only for an explicitly scoped probe.'
+    );
+  }
+}
 Object.assign(process.env, {
   NODE_ENV: 'development',
   VOICE_ENGINE: engine,
