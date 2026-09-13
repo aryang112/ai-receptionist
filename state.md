@@ -1,5 +1,13 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-13 — Live transfer-failback greeting WIRED (not deployed)
+
+- `CA4692de2d1423d376a85443f9ae049dbd` showed a failed transfer returning a fresh greeting plus a second promise to connect. On Live the cause is wiring, not the prompt: `buildLivePrompt` was called at `twilioStream.ts` without `greetingContext`, so it defaulted to `new_call` and the written-and-tested `transfer_failback` branch was never reached in production. The backend prompt already received the continuation note, so only the speech model was wrong — hence the re-greeting AND the retracted transfer offer.
+- Fix: pass `greetingContext: this.transferFailback ? 'transfer_failback' : 'new_call'`, and extend the existing failback branch with "her phone already rang out on this call, so never offer or promise to connect them again; a request to reach her can only become a message." The FAILBACK GATE in `handleTransferToOwner` already refused the second dial — no caller was ever dialed twice.
+- New `src/tests/twilioStream.failbackWiring.test.ts` covers the CALL SITE, which is the gap that let this ship: reverting the one line makes both tests fail with `expected undefined`. 703 tests / 63 files and tsc pass.
+- Owner decision: garbled-input approval guard is DEFERRED — that incident was on the legacy engine and Live's audio understanding is better; revisit if production shows it. The unclear-audio rule remains absent from the Live prompts (`rewriteReasoning` strips it); recorded, not fixed.
+- Grouped visits: root cause identified as an INSTRUCTION, not a missing feature. `handleListAppointments` returns every appointment but its note says "Lead with just the soonest one ... never a long list", and SERVE RESCHEDULE says "identify the exact one they mean". That is why the 09-06 caller had to discover her own eyebrow-tint appointment. No grouping/linkage heuristic is needed to fix disclosure. Not implemented; awaiting owner decision.
+
 ## 2026-09-13 — Live day/service carry-over fix COMMITTED (not deployed)
 
 - Owner call `CA3d5d6bb3f6a00adcd2fe5d11b83d2ed3` (10:25 ET): caller said "tomorrow", Erica asked "What day would you like?" after resolving the service. Root cause is a deletion, not a conflicting instruction: `backendSections()` in `src/voice/livePrompts.ts` skips the whole TOOLS section, dropping the production rule `No day → today AND tomorrow` (check, never ask) from both derived prompts.

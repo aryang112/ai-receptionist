@@ -2105,6 +2105,13 @@ export class TwilioRealtimeCall {
           if (this.session instanceof OpenAILiveSession) {
             const now = DateTime.now().setZone(env.TIMEZONE);
             const context = {
+              // The talking model greets; without this it falls through to
+              // 'new_call' and re-greets a caller whose transfer just rang
+              // out, then offers to connect them again (the FAILBACK GATE
+              // below already refuses the second dial, so it would retract).
+              greetingContext: this.transferFailback
+                ? ('transfer_failback' as const)
+                : ('new_call' as const),
               publicFacts: {
                 today: now.toISODate()!,
                 tomorrow: now.plus({ days: 1 }).toISODate()!,
