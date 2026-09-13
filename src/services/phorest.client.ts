@@ -752,10 +752,32 @@ class ClientCreateOutcomeUncertainError extends Error {
   }
 }
 
+/**
+ * A non-idempotent appointment write may have reached Phorest even when its
+ * response or the immediate read-back is unavailable. Callers must not retry
+ * this error: the controller reconciles it before offering another change.
+ */
+class AppointmentWriteOutcomeUncertainError extends Error {
+  readonly outcomeUncertain = true;
+
+  constructor() {
+    super(
+      'We could not verify whether the appointment change was completed. Please do not retry it.'
+    );
+    this.name = 'AppointmentWriteOutcomeUncertainError';
+  }
+}
+
 function isAmbiguousClientCreateFailure(error: unknown): boolean {
   // A deterministic 4xx means Phorest rejected the request. Transport errors,
   // timeouts, malformed success responses, and 5xx responses may have happened
   // after the provider committed the client.
+  return !(error instanceof PhorestHttpError) || error.status >= 500;
+}
+
+function isAmbiguousAppointmentWriteFailure(error: unknown): boolean {
+  // A 4xx is an authoritative rejection before a successful provider write.
+  // Transport failures and 5xx responses can arrive after the provider commits.
   return !(error instanceof PhorestHttpError) || error.status >= 500;
 }
 
@@ -1194,6 +1216,101 @@ async function fetchAppointment(
   return undefined;
 }
 
+function requiresLiveWriteReadback(): boolean {
+  return env.VOICE_ENGINE === 'live' && env.PHOREST_WRITE_MODE === 'real';
+}
+
+function isActiveBooked(appointment: AppointmentResponse): boolean {
+  return (
+    appointment.activationState?.toUpperCase() === 'ACTIVE' &&
+    appointment.state?.toUpperCase() === 'BOOKED'
+  );
+}
+
+function hasExpectedStart(
+  appointment: AppointmentResponse,
+  start: DateTime
+): boolean {
+  return (
+    appointment.appointmentDate === start.toISODate() &&
+    appointment.startTime === start.toFormat('HH:mm:ss')
+  );
+}
+
+function isCancelledAppointment(appointment: AppointmentResponse): boolean {
+  const state = appointment.state?.toUpperCase();
+  const activationState = appointment.activationState?.toUpperCase();
+  // This tenant's active appointments are ACTIVE/BOOKED. Cancellation reads
+  // have appeared as an inactive appointment or an explicit canceled state;
+  // absence from a bounded history scan is not proof of cancellation.
+  return (
+    activationState === 'INACTIVE' ||
+    activationState === 'CANCELED' ||
+    activationState === 'CANCELLED' ||
+    state === 'CANCELED' ||
+    state === 'CANCELLED'
+  );
+}
+
+async function verifyCreatedAppointment(
+  appointmentId: string,
+  clientId: string,
+  serviceId: string,
+  start: DateTime
+): Promise<void> {
+  try {
+    const appointment = await fetchAppointment(appointmentId);
+    if (
+      !appointment ||
+      appointment.appointmentId !== appointmentId ||
+      appointment.clientId !== clientId ||
+      appointment.serviceId !== serviceId ||
+      !hasExpectedStart(appointment, start) ||
+      !isActiveBooked(appointment)
+    ) {
+      throw new AppointmentWriteOutcomeUncertainError();
+    }
+  } catch (error) {
+    if (error instanceof AppointmentWriteOutcomeUncertainError) throw error;
+    throw new AppointmentWriteOutcomeUncertainError();
+  }
+}
+
+async function verifyRescheduledAppointment(
+  appointmentId: string,
+  start: DateTime
+): Promise<void> {
+  try {
+    const appointment = await fetchAppointment(appointmentId);
+    if (
+      !appointment ||
+      appointment.appointmentId !== appointmentId ||
+      !hasExpectedStart(appointment, start)
+    ) {
+      throw new AppointmentWriteOutcomeUncertainError();
+    }
+  } catch (error) {
+    if (error instanceof AppointmentWriteOutcomeUncertainError) throw error;
+    throw new AppointmentWriteOutcomeUncertainError();
+  }
+}
+
+async function verifyCancelledAppointment(appointmentId: string): Promise<void> {
+  try {
+    const appointment = await fetchAppointment(appointmentId);
+    if (
+      !appointment ||
+      appointment.appointmentId !== appointmentId ||
+      !isCancelledAppointment(appointment)
+    ) {
+      throw new AppointmentWriteOutcomeUncertainError();
+    }
+  } catch (error) {
+    if (error instanceof AppointmentWriteOutcomeUncertainError) throw error;
+    throw new AppointmentWriteOutcomeUncertainError();
+  }
+}
+
 export const realPhorest: PhorestPort = {
   async listStaffNames(): Promise<string[]> {
     const staff = await loadStaff();
@@ -1311,19 +1428,43 @@ export const realPhorest: PhorestPort = {
       ],
     };
 
-    const response = await phorestFetch<BookingResponse>(
-      businessBranchPath('/booking?force_selected_time=true'),
-      {
-        method: 'POST',
-        body: JSON.stringify(payload),
+    let response: BookingResponse;
+    try {
+      response = await phorestFetch<BookingResponse>(
+        businessBranchPath('/booking?force_selected_time=true'),
+        {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        }
+      );
+    } catch (error) {
+      if (
+        requiresLiveWriteReadback() &&
+        isAmbiguousAppointmentWriteFailure(error)
+      ) {
+        throw new AppointmentWriteOutcomeUncertainError();
       }
-    );
+      throw error;
+    }
 
     const appointmentId =
       response.clientAppointmentSchedules?.[0]?.serviceSchedules?.[0]
         ?.appointmentId;
+    if (!appointmentId && requiresLiveWriteReadback()) {
+      throw new AppointmentWriteOutcomeUncertainError();
+    }
     if (!appointmentId) {
       throw new Error('Phorest booking response missing appointmentId');
+    }
+
+    if (requiresLiveWriteReadback()) {
+      await verifyCreatedAppointment(
+        appointmentId,
+        resolvedClientId,
+        serviceId,
+        start
+      );
+      return { appointmentId, bookingId: response.bookingId };
     }
 
     // Non-blocking diagnostic: read the appointment back and log its real state
@@ -1375,30 +1516,58 @@ export const realPhorest: PhorestPort = {
       confirmed: appointment.confirmed,
     };
 
-    await phorestFetch(
-      businessBranchPath(
-        `/appointment/${appointmentId}?force_selected_time=true`
-      ),
-      {
-        method: 'PUT',
-        body: JSON.stringify(payload),
-        expectEmpty: true,
+    try {
+      await phorestFetch(
+        businessBranchPath(
+          `/appointment/${appointmentId}?force_selected_time=true`
+        ),
+        {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+          expectEmpty: true,
+        }
+      );
+    } catch (error) {
+      if (
+        requiresLiveWriteReadback() &&
+        isAmbiguousAppointmentWriteFailure(error)
+      ) {
+        throw new AppointmentWriteOutcomeUncertainError();
       }
-    );
+      throw error;
+    }
+
+    if (requiresLiveWriteReadback()) {
+      await verifyRescheduledAppointment(appointmentId, start);
+    }
 
     return { appointmentId };
   },
 
   async cancelAppointment(appointmentId: string) {
-    await phorestFetch(
-      businessBranchPath(
-        `/appointment/cancel?appointment_id=${encodeURIComponent(appointmentId)}`
-      ),
-      {
-        method: 'POST',
-        expectEmpty: true,
+    try {
+      await phorestFetch(
+        businessBranchPath(
+          `/appointment/cancel?appointment_id=${encodeURIComponent(appointmentId)}`
+        ),
+        {
+          method: 'POST',
+          expectEmpty: true,
+        }
+      );
+    } catch (error) {
+      if (
+        requiresLiveWriteReadback() &&
+        isAmbiguousAppointmentWriteFailure(error)
+      ) {
+        throw new AppointmentWriteOutcomeUncertainError();
       }
-    );
+      throw error;
+    }
+
+    if (requiresLiveWriteReadback()) {
+      await verifyCancelledAppointment(appointmentId);
+    }
 
     return { appointmentId, cancelled: true as const };
   },

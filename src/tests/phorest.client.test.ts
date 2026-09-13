@@ -32,6 +32,30 @@ async function loadRealPhorest() {
   return mod.realPhorest;
 }
 
+async function enableLiveWriteReadback() {
+  // Import after loadRealPhorest() so this is the same mutable config instance
+  // captured by the adapter after vi.resetModules().
+  const { env } = await import('../config/env.js');
+  env.VOICE_ENGINE = 'live';
+  env.PHOREST_WRITE_MODE = 'real';
+}
+
+function appointmentRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    appointmentId: 'appt-1',
+    version: 1,
+    appointmentDate: '2030-07-10',
+    startTime: '13:00:00',
+    endTime: '13:15:00',
+    serviceId: 'svc1',
+    staffId: 'staff1',
+    clientId: 'client-1',
+    state: 'BOOKED',
+    activationState: 'ACTIVE',
+    ...overrides,
+  };
+}
+
 type ClientResolutionFetchOptions = {
   phoneIndexClients?: Array<Record<string, unknown>>;
   emailLookupClients?:
@@ -1283,6 +1307,211 @@ describe('realPhorest client-resolution single-flight', () => {
 
     expect(stats.clientCreates).toBe(1);
     expect(stats.bookingClientIds).toEqual([]);
+  });
+
+  it('Live real create verifies the exact active booked appointment before success', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    fetchMock.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      const u = String(url);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (u.includes('/service?')) {
+        return jsonResponse({
+          _embedded: {
+            services: [
+              { serviceId: 'svc1', name: 'Brow', duration: 15, price: 15 },
+            ],
+          },
+          page: { number: 0, totalPages: 1 },
+        });
+      }
+      if (u.includes('/staff?')) {
+        return jsonResponse({ _embedded: { staffs: [{ staffId: 'staff1' }] } });
+      }
+      if (u.includes('/booking') && method === 'POST') {
+        return jsonResponse({
+          bookingId: 'booking-1',
+          clientAppointmentSchedules: [
+            { serviceSchedules: [{ appointmentId: 'appt-1' }] },
+          ],
+        });
+      }
+      if (u.includes('/appointment?updated_from=')) {
+        return jsonResponse({
+          _embedded: { appointments: [appointmentRecord()] },
+          page: { number: 0, totalPages: 1 },
+        });
+      }
+      throw new Error(`Unexpected request: ${u}`);
+    });
+    const phorest = await loadRealPhorest();
+    await enableLiveWriteReadback();
+
+    await expect(
+      phorest.createAppointment(
+        'svc1',
+        '2030-07-10T13:00:00',
+        { name: 'Known Caller' },
+        'client-1'
+      )
+    ).resolves.toEqual({ appointmentId: 'appt-1', bookingId: 'booking-1' });
+  });
+
+  it('Live real reschedule and cancellation require a verified provider state', async () => {
+    let moved = false;
+    let cancelled = false;
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    fetchMock.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      const u = String(url);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (u.includes('/service?')) {
+        return jsonResponse({
+          _embedded: {
+            services: [
+              { serviceId: 'svc1', name: 'Brow', duration: 15, price: 15 },
+            ],
+          },
+          page: { number: 0, totalPages: 1 },
+        });
+      }
+      if (u.includes('/appointment/appt-1?') && method === 'PUT') {
+        moved = true;
+        return new Response(null, { status: 204 });
+      }
+      if (u.includes('/appointment/cancel?') && method === 'POST') {
+        cancelled = true;
+        return new Response(null, { status: 204 });
+      }
+      if (u.includes('/appointment?updated_from=')) {
+        return jsonResponse({
+          _embedded: {
+            appointments: [
+              appointmentRecord(
+                cancelled
+                  ? { activationState: 'INACTIVE' }
+                  : moved
+                    ? {
+                        appointmentDate: '2030-07-11',
+                        startTime: '14:30:00',
+                        endTime: '14:45:00',
+                      }
+                    : {}
+              ),
+            ],
+          },
+          page: { number: 0, totalPages: 1 },
+        });
+      }
+      throw new Error(`Unexpected request: ${u}`);
+    });
+    const phorest = await loadRealPhorest();
+    await enableLiveWriteReadback();
+
+    await expect(
+      phorest.updateAppointment('appt-1', '2030-07-11T14:30:00')
+    ).resolves.toEqual({ appointmentId: 'appt-1' });
+    await expect(phorest.cancelAppointment('appt-1')).resolves.toEqual({
+      appointmentId: 'appt-1',
+      cancelled: true,
+    });
+  });
+
+  it('Live real create treats missing or mismatched read-back as uncertain', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    fetchMock.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      const u = String(url);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (u.includes('/service?')) {
+        return jsonResponse({
+          _embedded: {
+            services: [
+              { serviceId: 'svc1', name: 'Brow', duration: 15, price: 15 },
+            ],
+          },
+          page: { number: 0, totalPages: 1 },
+        });
+      }
+      if (u.includes('/staff?')) {
+        return jsonResponse({ _embedded: { staffs: [{ staffId: 'staff1' }] } });
+      }
+      if (u.includes('/booking') && method === 'POST') {
+        return jsonResponse({
+          clientAppointmentSchedules: [
+            { serviceSchedules: [{ appointmentId: 'appt-1' }] },
+          ],
+        });
+      }
+      if (u.includes('/appointment?updated_from=')) {
+        return jsonResponse({
+          _embedded: {
+            appointments: [appointmentRecord({ startTime: '13:15:00' })],
+          },
+          page: { number: 0, totalPages: 1 },
+        });
+      }
+      throw new Error(`Unexpected request: ${u}`);
+    });
+    const phorest = await loadRealPhorest();
+    await enableLiveWriteReadback();
+
+    await expect(
+      phorest.createAppointment(
+        'svc1',
+        '2030-07-10T13:00:00',
+        { name: 'Known Caller' },
+        'client-1'
+      )
+    ).rejects.toMatchObject({ outcomeUncertain: true });
+  });
+
+  it('Live real write transport uncertainty is latched, while a 4xx remains a safe rejection', async () => {
+    let responseStatus = 503;
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    fetchMock.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      const u = String(url);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (u.includes('/service?')) {
+        return jsonResponse({
+          _embedded: {
+            services: [
+              { serviceId: 'svc1', name: 'Brow', duration: 15, price: 15 },
+            ],
+          },
+          page: { number: 0, totalPages: 1 },
+        });
+      }
+      if (u.includes('/staff?')) {
+        return jsonResponse({ _embedded: { staffs: [{ staffId: 'staff1' }] } });
+      }
+      if (u.includes('/booking') && method === 'POST') {
+        return jsonResponse({ detail: 'rejected' }, responseStatus);
+      }
+      throw new Error(`Unexpected request: ${u}`);
+    });
+    const phorest = await loadRealPhorest();
+    await enableLiveWriteReadback();
+    const input = [
+      'svc1',
+      '2030-07-10T13:00:00',
+      { name: 'Known Caller' },
+      'client-1',
+    ] as const;
+
+    await expect(phorest.createAppointment(...input)).rejects.toMatchObject({
+      outcomeUncertain: true,
+    });
+
+    responseStatus = 400;
+    try {
+      await phorest.createAppointment(...input);
+      throw new Error('Expected a deterministic rejection');
+    } catch (error) {
+      expect(error).not.toMatchObject({ outcomeUncertain: true });
+      expect(error).toMatchObject({ message: 'Phorest request failed with 400' });
+    }
   });
 
   it('bounds successful subject results and evicts the least recently used', async () => {
