@@ -313,6 +313,13 @@ re-check" (A1).
 
 - `src/voice/liveSession.ts`, `liveProtocol.ts`, `mulawAudio.ts`: continuous Live transport, delegated tools, usage snapshots, approximate fragments and bounded pacing/close.
 - `src/voice/livePrompts.ts`: public speech prompt and policy/catalog backend prompt.
+  `backendSections()` SKIPS whole sections of the production prompt (`TOOLS`,
+  `PREAMBLES`, `SERVICES & PRICES`) — any behavioral rule in them must be
+  re-stated in the replacement section or it silently disappears from the Live
+  stack. That is how the `No day → today AND tomorrow` rule was lost; carry-over
+  and the no-day fallback now live in the Live prompt, SERVE and BACKEND TOOL USE,
+  locked by `src/tests/livePrompts.test.ts`. See
+  [`reviews/GPT_LIVE_DAY_CARRYOVER_FIX_2026-09-13.md`](reviews/GPT_LIVE_DAY_CARRYOVER_FIX_2026-09-13.md).
 - `src/voice/appointmentProposals.ts`: simulated prepare/confirm and per-call retry deduplication.
 - `src/voice/testAccess.ts`, `testControl.ts`, `src/routes/voiceTest.ts`: allowed callers and authenticated idle variant switches/reset.
 - `src/services/phorest.simulated.ts`: real-read/simulated-write overlay including client/read continuity.

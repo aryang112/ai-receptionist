@@ -195,6 +195,37 @@ describe('backend prompt extraction', () => {
     expect(prompt).toContain('Appointment details belong to the person');
   });
 
+  it('carries earlier caller details into availability instead of asking for the day again', () => {
+    const instructions = buildInstructions(
+      salonTime('2026-10-01T12:00'),
+      CATALOG
+    );
+    const live = buildLivePrompt(instructions, CATALOG);
+    const backend = buildBackendPrompt(instructions, CATALOG);
+
+    // The speech side must not re-ask for something the caller already said.
+    expect(live).toContain('Carry-over:');
+    expect(live).toContain('never ask for it again');
+    expect(live).toContain(
+      'A day they named while asking about hours or about Richa is still the day they want'
+    );
+
+    // SERVE keeps the day alive across the service-first question.
+    expect(backend).toContain('- CARRY OVER what the caller already said');
+    expect(backend).toContain(
+      'asking the service first does not discard the day'
+    );
+
+    // The production TOOLS no-day fallback survives the backend rewrite.
+    expect(backend).toContain(
+      'only when no day has been mentioned at all, check today and tomorrow'
+    );
+    expect(backend).toContain(
+      'reuse a new day they already named rather than asking again'
+    );
+    expect(backend).toContain('Never ask for a detail twice');
+  });
+
   it('renders canonical IDs, prices, durations, and only supplied aliases; it preserves one-question safety', () => {
     const instructions = buildInstructions(
       salonTime('2026-10-01T12:00'),

@@ -1,5 +1,15 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-13 — Live day/service carry-over fix COMMITTED (not deployed)
+
+- Owner call `CA3d5d6bb3f6a00adcd2fe5d11b83d2ed3` (10:25 ET): caller said "tomorrow", Erica asked "What day would you like?" after resolving the service. Root cause is a deletion, not a conflicting instruction: `backendSections()` in `src/voice/livePrompts.ts` skips the whole TOOLS section, dropping the production rule `No day → today AND tomorrow` (check, never ask) from both derived prompts.
+- Fix is confined to `src/voice/livePrompts.ts`: a Carry-over rule in the Live speech prompt, a CARRY OVER bullet plus a no-day fallback in SERVE BOOK/RESCHEDULE, and the same pair in BACKEND TOOL USE. Five strings locked by `src/tests/livePrompts.test.ts`. The released production prompt is byte-for-byte unchanged (locked sha256 test passes); the legacy Realtime path is untouched.
+- Verified with actual Live + Terra replays through `scripts/gpt-live/controller-probe.mjs` (local, real read-only Phorest, writes forced to simulate, no dial). Defect is intermittent ~40%: before 2/5 runs re-asked the day, after 0/6, all six calling suggest_availability with date 2026-09-14. No-day control 3 runs: 2 checked today then tomorrow, 1 asked; no run assumed a day the caller had not given. 701 tests / 62 files and tsc pass.
+- Same defect class found in a real customer call `CA85c9db416495728578a30a9b5e0ec42c` (09-06) in the opposite direction: service quoted at $23, then re-asked. Issue register entry 12 covers identity questions only, so service/date carry-over was uncovered until now.
+- Evidence: `docs/reviews/GPT_LIVE_DAY_CARRYOVER_FIX_2026-09-13.md`.
+- PENDING: deploy decision for this fix. Separately verify whether issue 30 (failed transfer returns a fresh greeting and promises the transfer again — `CA4692de2d1423d376a85443f9ae049dbd`) is live; its fix is recorded local-only in `5769300` on a different branch. Grouped visits (issue 08) remain DESIGN ONLY per `docs/GPT_LIVE_GROUPED_VISIT_PLAN_2026-09-12.md` — deliberately not implemented. That same transcript shows garbled input ("Á.", "Every.") accepted as approval of a 3:00 PM move; an approval guard for unintelligible input needs separate scoping.
+- Today's other call `CA3af8fd0c74f145a20499b1483fa048f7` (10:30, painting-services pitch) was correctly flagged spam, declined and ended. No defect.
+
 ## 2026-09-12 9:12 PM — Live REAL appointment writes, all direct callers DEPLOYED
 
 - User explicitly authorized any direct caller and real Phorest appointment changes while external salon forwarding remains off. Runtime source `b53d436`, Railway `e47db2d5-d2c4-462c-aa49-d88c78b03bc8` SUCCESS. Eight source/build hashes match; 700 tests / 62 files and TypeScript build pass.

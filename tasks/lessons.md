@@ -6,6 +6,31 @@ production testing and cost real debugging.
 
 ---
 
+## 🧠 Splitting the prompt DROPS rules — `backendSections()` skips whole sections
+`src/voice/livePrompts.ts` builds the Live speech prompt and the backend prompt
+from the released production prompt. `backendSections()` has
+`case 'TOOLS': continue;` (also `PREAMBLES`, `SERVICES & PRICES`) — the entire
+section is thrown away, behavioral rules included.
+
+That is how Erica started asking "What day would you like?" after the caller had
+already said "tomorrow" (owner call 2026-09-13): the production TOOLS rule
+`No day → today AND tomorrow, a couple from each` — check, never ask — lived in
+the skipped section and never reached the Live stack.
+
+**RULE:** when a section is dropped from a derived prompt, re-state its
+behavioral rules in the replacement section. Structure/telephony procedure is
+safe to drop; conversation rules are not. Before skipping a section, grep it for
+imperative lines and account for each one.
+
+**Related trap:** "never make the caller repeat a request" sits inside
+IDENTITY & CONTACT, so it only ever covered names and phone numbers. Carry-over
+for service/day/time needed its own rule. Narrow placement silently narrows a
+rule's scope.
+
+**Verification that works:** the defect was intermittent (~40%). One replay
+proves nothing — run `scripts/gpt-live/controller-probe.mjs` 5+ times per build
+and compare rates. Before: 2/5 re-asked. After: 0/6.
+
 ## ⏰ Phorest timezone is INCONSISTENT per endpoint (bit us 3×)
 The single biggest trap. The same tenant returns different timezones per endpoint:
 - **GET `/appointment`** → returns **salon-LOCAL** time (`"12:45:00"` = 12:45 PM local).
