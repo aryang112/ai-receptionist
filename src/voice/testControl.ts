@@ -19,6 +19,8 @@ export function voiceTestStatus() {
     backendModel: env.OPENAI_LIVE_BACKEND_MODEL,
     effort: env.OPENAI_LIVE_BACKEND_EFFORT ?? 'default',
     writes: env.PHOREST_WRITE_MODE,
+    callerAccess: isVoiceTestMode() ? 'allowlist' : 'all',
+    ownerTransfers: isVoiceTestMode() ? 'simulate' : env.OWNER_TRANSFER_MODE,
     ownerNotifications: isVoiceTestMode() ? 'simulate' : env.OWNER_SMS_MODE,
     allowedCallerCount: env.VOICE_TEST_ALLOWED_PHONES.split(',').filter((s) =>
       s.trim()

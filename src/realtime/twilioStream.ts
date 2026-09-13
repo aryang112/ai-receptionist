@@ -869,7 +869,7 @@ export function liveToolDefinitions(): ToolDefinition[] {
       return {
         ...tool,
         description:
-          'Check a caller-requested connection to Richa against the transfer hours. In this owner test the connection is simulated: if wouldTransfer is true, explain that no real call was placed because this is a test. Never describe a simulated transfer as Richa being unavailable or not answering. Outside the permitted hours, offer a message.',
+          'Check a caller-requested connection to Richa against her working-day calling window. Follow the result: if simulated, explain that no real call was placed; do not describe that as her being unavailable or not answering. Outside the permitted window, offer a message.',
       };
     if (tool.name === 'end_call')
       return {
@@ -893,7 +893,7 @@ export function liveToolDefinitions(): ToolDefinition[] {
     type: 'function',
     name: 'prepare_appointment_action',
     description:
-      'Prepare a simulated booking, reschedule, or cancellation. No change occurs yet. Read the exact details back and wait for fresh caller approval.',
+      'Prepare a booking, reschedule, or cancellation. No change occurs yet. Read the exact details back and wait for fresh caller approval.',
     parameters: {
       type: 'object',
       properties: {
@@ -911,7 +911,7 @@ export function liveToolDefinitions(): ToolDefinition[] {
     type: 'function',
     name: 'confirm_appointment_action',
     description:
-      'Execute the current simulated proposal only after the caller approves its exact read-back. Any changed detail requires preparation again.',
+      'Execute the current proposal only after the caller approves its exact read-back. Any changed detail requires preparation again.',
     parameters: {
       type: 'object',
       properties: {
@@ -1230,8 +1230,36 @@ export class TwilioRealtimeCall {
         : action === 'reschedule'
           ? this.handleReschedule(args)
           : this.handleCancel(args),
-    () => isVoiceTestMode() && !this.closed
+    () => !this.closed,
+    () => isVoiceTestMode()
   );
+  private readonly phoneMatchedClientIds = new Set<string>();
+  private isLiveRealWrite(): boolean {
+    return this.voiceEngine === 'live' && !isVoiceTestMode();
+  }
+  private hasPhoneMatchedClient(clientId: string): boolean {
+    return (
+      this.prefetch?.clientId === clientId ||
+      this.phoneMatchedClientIds.has(clientId)
+    );
+  }
+  private appointmentError(error: unknown) {
+    const uncertain =
+      this.isLiveRealWrite() &&
+      typeof error === 'object' &&
+      error !== null &&
+      'outcomeUncertain' in error &&
+      error.outcomeUncertain === true;
+    return {
+      error: this.formatError(error),
+      ...(uncertain
+        ? {
+            outcomeUncertain: true,
+            note: 'The change may have reached Phorest but could not be verified. Do not claim success or retry any appointment change. Explain the uncertainty and stop; a read-only reconciliation is required.',
+          }
+        : {}),
+    };
+  }
   private streamSid = '';
   private callSid = '';
   private closed = false;
@@ -1713,8 +1741,14 @@ export class TwilioRealtimeCall {
   }
 
   private async handleLiveMessage(args: unknown) {
-    if (!isVoiceTestMode() || this.closed)
-      return { error: 'Simulated messages are unavailable.' };
+    if (
+      this.closed ||
+      (!isVoiceTestMode() && env.OWNER_SMS_MODE !== 'simulate')
+    )
+      return {
+        error:
+          'Message delivery is unavailable. Do not claim a message was sent.',
+      };
     const message =
       typeof args === 'object' && args !== null && 'message' in args
         ? (args as { message: unknown }).message
@@ -2115,7 +2149,7 @@ export class TwilioRealtimeCall {
               catalogCount: services?.length ?? 0,
               publicContextDate: now.toISODate(),
               transcriptKind: 'approximate_fragments',
-              simulated: true,
+              simulated: isVoiceTestMode(),
             });
             await this.session.configureSession({
               liveInstructions,
@@ -3646,6 +3680,16 @@ export class TwilioRealtimeCall {
       );
       const clientId =
         payload.clientId ?? (recognized ? this.prefetch!.clientId : undefined);
+      if (
+        this.isLiveRealWrite() &&
+        clientId &&
+        !this.hasPhoneMatchedClient(clientId)
+      ) {
+        return {
+          error:
+            'Match the account by calling number or the caller-provided account phone before booking for it. A name match alone is not sufficient.',
+        };
+      }
       // MOBILE_REQUIRED fix (2026-08-27): a NEW caller who accepts "the number
       // you're calling from is fine" never dictates digits, so the model has no
       // phone to pass — and Phorest refuses to create a client without a
@@ -3716,11 +3760,25 @@ export class TwilioRealtimeCall {
             };
           }
         }
+        if (
+          this.isLiveRealWrite() &&
+          ('notOffered' in fresh || 'ambiguous' in fresh)
+        ) {
+          return {
+            error:
+              'The service could not be verified. No appointment was booked.',
+          };
+        }
         // notOffered/ambiguous on re-resolve is not expected here (the same
         // name just resolved moments ago via findServiceByName above) — treat
         // it the same as a fetch failure: fail open rather than block a write
         // the offered-slot gate already approved.
       } catch (error) {
+        if (this.isLiveRealWrite())
+          return {
+            error:
+              'Current availability could not be verified. No appointment was booked. Try the availability lookup again before making a new proposal.',
+          };
         logger.warn(
           { tool: 'book_appointment', error: this.formatError(error) },
           'Fresh availability re-check failed — proceeding with booking (fail-open)'
@@ -3773,7 +3831,10 @@ export class TwilioRealtimeCall {
         price: result.service.price,
         date: payload.date,
         time: payload.time,
-        note: 'This newly booked appointment is already selected for the rest of this call. If the caller immediately wants to cancel or reschedule it, do not call list_appointments and never pass this appointmentId as a clientId. First get their explicit confirmation of the exact change, then call cancel_appointment or reschedule_appointment directly with this appointmentId.',
+        note:
+          this.voiceEngine === 'live'
+            ? 'This newly booked appointment is already selected for this call. For a later cancellation or reschedule, use prepare_appointment_action with this appointmentId, read back the exact change, wait for approval, then use confirm_appointment_action. Do not list appointments again or pass this appointmentId as a clientId.'
+            : 'This newly booked appointment is already selected for the rest of this call. If the caller immediately wants to cancel or reschedule it, do not call list_appointments and never pass this appointmentId as a clientId. First get their explicit confirmation of the exact change, then call cancel_appointment or reschedule_appointment directly with this appointmentId.',
       };
     } catch (error) {
       logger.error(
@@ -3785,7 +3846,7 @@ export class TwilioRealtimeCall {
         ok: false,
         error: this.formatError(error),
       });
-      return { error: this.formatError(error) };
+      return this.appointmentError(error);
     }
   }
 
@@ -3933,16 +3994,35 @@ export class TwilioRealtimeCall {
               };
             }
           }
+          if (
+            this.isLiveRealWrite() &&
+            ('notOffered' in fresh || 'ambiguous' in fresh)
+          ) {
+            return {
+              error:
+                'The service could not be verified. No appointment was moved.',
+            };
+          }
           // notOffered/ambiguous here would mean the service name we recorded
           // earlier no longer resolves — unexpected; fail open like a fetch
           // failure rather than block a write the earlier gates approved.
         } catch (error) {
+          if (this.isLiveRealWrite())
+            return {
+              error:
+                'Current availability could not be verified. No appointment was moved. Try the availability lookup again before making a new proposal.',
+            };
           logger.warn(
             { tool: 'reschedule_appointment', error: this.formatError(error) },
             'Fresh availability re-check failed — proceeding with reschedule (fail-open)'
           );
         }
       } else {
+        if (this.isLiveRealWrite())
+          return {
+            error:
+              'The appointment service is unknown. No appointment was moved; look up the appointment again.',
+          };
         logger.warn(
           {
             tool: 'reschedule_appointment',
@@ -4001,7 +4081,7 @@ export class TwilioRealtimeCall {
         ok: false,
         error: this.formatError(error),
       });
-      return { error: this.formatError(error) };
+      return this.appointmentError(error);
     }
   }
 
@@ -4079,7 +4159,7 @@ export class TwilioRealtimeCall {
         ok: false,
         error: this.formatError(error),
       });
-      return { error: this.formatError(error) };
+      return this.appointmentError(error);
     }
   }
 
@@ -4316,6 +4396,7 @@ export class TwilioRealtimeCall {
           const phoneMatchName =
             `${result.firstName} ${result.lastName}`.trim();
           this.clientNames.set(result.clientId, phoneMatchName);
+          this.phoneMatchedClientIds.add(result.clientId);
           return {
             found: true,
             clientId: result.clientId,
@@ -4379,6 +4460,18 @@ export class TwilioRealtimeCall {
           // bounded, and tolerate a per-candidate failure (-> null) — one slow or
           // failing lookup must never sink the whole disambiguation.
           const top = results.slice(0, 3);
+          if (this.isLiveRealWrite()) {
+            return {
+              found: true,
+              multiple: true,
+              candidates: top.map((r) => ({
+                clientId: r.clientId,
+                firstName: r.firstName,
+                lastName: r.lastName,
+              })),
+              note: 'Ask for the account phone and use lookup_customer to match it before reading or changing appointments. A name match alone is not sufficient.',
+            };
+          }
           const candidates = await Promise.all(
             top.map(async (r) => ({
               clientId: r.clientId,
@@ -4528,7 +4621,19 @@ export class TwilioRealtimeCall {
         return {
           appointments: [knownAppointment],
           lookupSkipped: true,
-          note: 'The supplied value was an appointmentId, not a clientId, and this call already knows that appointment. Treat it as selected and do not call list_appointments again. If the caller has not yet explicitly confirmed the exact cancellation or new slot, ask once and wait. After their explicit yes, call cancel_appointment or reschedule_appointment directly with this appointmentId.',
+          note:
+            this.voiceEngine === 'live'
+              ? 'This is an appointmentId already selected on this call. Do not list appointments again. Prepare the exact cancellation or move using prepare_appointment_action, read it back and wait for approval, then use confirm_appointment_action.'
+              : 'The supplied value was an appointmentId, not a clientId, and this call already knows that appointment. Treat it as selected and do not call list_appointments again. If the caller has not yet explicitly confirmed the exact cancellation or new slot, ask once and wait. After their explicit yes, call cancel_appointment or reschedule_appointment directly with this appointmentId.',
+        };
+      }
+      if (
+        this.isLiveRealWrite() &&
+        !this.hasPhoneMatchedClient(payload.clientId)
+      ) {
+        return {
+          error:
+            'Match this account by calling number or the caller-provided account phone before reading or changing its appointments.',
         };
       }
       // Serve from the caller-ID prefetch if it's the same client and already
@@ -5042,7 +5147,7 @@ export class TwilioRealtimeCall {
         };
       }
 
-      if (isVoiceTestMode()) {
+      if (isVoiceTestMode() || env.OWNER_TRANSFER_MODE === 'simulate') {
         CallStore.recordToolCall(this.callSid, {
           name: 'transfer_to_owner',
           ok: true,
@@ -5821,7 +5926,7 @@ export class TwilioRealtimeCall {
     // the dashboard instead of ending as a bare 'none' with no endReason.
     this.setEndReasonOnce(`failover: ${reason}`);
     if (this.outcome === 'none') this.outcome = 'failover';
-    if (isVoiceTestMode()) {
+    if (isVoiceTestMode() || env.OWNER_TRANSFER_MODE === 'simulate') {
       const testClient = getTwilioClient();
       if (testClient && this.callSid && !this.closed && !this.transferring) {
         this.transferring = true;

@@ -67,6 +67,13 @@ export const env = {
     'real',
     ['real', 'simulate'] as const
   ) as OwnerSmsMode,
+  // Transfer behavior is independent of whether appointment writes are real.
+  OWNER_TRANSFER_MODE: requiredMode(
+    'OWNER_TRANSFER_MODE',
+    process.env.OWNER_TRANSFER_MODE,
+    'real',
+    ['real', 'simulate'] as const
+  ),
   VOICE_TEST_ALLOWED_PHONES: process.env.VOICE_TEST_ALLOWED_PHONES || '',
   VOICE_ENGINE: requiredMode(
     'VOICE_ENGINE',
@@ -262,10 +269,4 @@ export const env = {
 // guards must consult the current value rather than a frozen import-time flag.
 export function isVoiceTestMode(): boolean {
   return env.PHOREST_WRITE_MODE === 'simulate';
-}
-
-if (env.VOICE_ENGINE === 'live' && !isVoiceTestMode()) {
-  throw new Error(
-    'VOICE_ENGINE="live" requires PHOREST_WRITE_MODE="simulate" until Live real-write acceptance.'
-  );
 }
