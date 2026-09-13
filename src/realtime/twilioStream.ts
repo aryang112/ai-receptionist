@@ -1250,6 +1250,7 @@ export class TwilioRealtimeCall {
       error !== null &&
       'outcomeUncertain' in error &&
       error.outcomeUncertain === true;
+    if (uncertain && this.prefetch) this.prefetch.appointments = null;
     return {
       error: this.formatError(error),
       ...(uncertain

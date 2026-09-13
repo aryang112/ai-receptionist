@@ -154,6 +154,12 @@ describe('Live real appointment boundary', () => {
   });
   it('passes a dispatched write uncertainty to the proposal latch', async () => {
     const c = call();
+    c.prefetch = {
+      clientId: 'c1',
+      firstName: 'Test',
+      lastName: 'Caller',
+      appointments: [],
+    };
     vi.spyOn(phorest, 'getAvailability').mockResolvedValue([
       `${booking.date}T13:15:00`,
     ]);
@@ -164,6 +170,7 @@ describe('Live real appointment boundary', () => {
     expect(
       await c.proposals.confirm({ proposalId: p.proposalId, confirmed: true })
     ).toMatchObject({ outcomeUncertain: true });
+    expect(c.prefetch.appointments).toBeNull();
     expect(
       c.proposals.prepare({
         action: 'book',
