@@ -1309,7 +1309,8 @@ describe('realPhorest client-resolution single-flight', () => {
     expect(stats.bookingClientIds).toEqual([]);
   });
 
-  it('Live real create verifies the exact active booked appointment before success', async () => {
+  it('Live real create retries delayed targeted read-back before success', async () => {
+    let createReadbacks = 0;
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     fetchMock.mockImplementation(async (url: unknown, init?: RequestInit) => {
@@ -1336,10 +1337,14 @@ describe('realPhorest client-resolution single-flight', () => {
           ],
         });
       }
-      if (u.includes('/appointment?updated_from=')) {
+      if (u.includes('/appointment?client_id=client-1')) {
+        createReadbacks += 1;
         return jsonResponse({
           _embedded: {
-            appointments: [appointmentRecord({ startTime: '13:00:00.000' })],
+            appointments:
+              createReadbacks === 1
+                ? []
+                : [appointmentRecord({ startTime: '13:00:00.000' })],
           },
           page: { number: 0, totalPages: 1 },
         });
@@ -1357,11 +1362,23 @@ describe('realPhorest client-resolution single-flight', () => {
         'client-1'
       )
     ).resolves.toEqual({ appointmentId: 'appt-1', bookingId: 'booking-1' });
+    expect(createReadbacks).toBe(2);
+    const targetedReadUrl = String(
+      fetchMock.mock.calls.find((call) =>
+        String(call[0]).includes('/appointment?client_id=client-1')
+      )?.[0]
+    );
+    const targetedParams = new URL(targetedReadUrl).searchParams;
+    expect(targetedParams.get('client_id')).toBe('client-1');
+    expect(targetedParams.get('from_date')).toBe('2030-07-10');
+    expect(targetedParams.get('to_date')).toBe('2030-07-10');
   });
 
   it('Live real reschedule and cancellation require a verified provider state', async () => {
     let moved = false;
     let cancelled = false;
+    let movedReadbacks = 0;
+    let cancelledReadbacks = 0;
     const appointmentReadUrls: string[] = [];
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
@@ -1393,13 +1410,17 @@ describe('realPhorest client-resolution single-flight', () => {
             appointments: [
               appointmentRecord(
                 cancelled
-                  ? { activationState: 'INACTIVE' }
+                  ? (cancelledReadbacks += 1) === 1
+                    ? {}
+                    : { activationState: 'INACTIVE' }
                   : moved
-                    ? {
-                        appointmentDate: '2030-07-11',
-                        startTime: '14:30:00',
-                        endTime: '14:45:00',
-                      }
+                    ? (movedReadbacks += 1) === 1
+                      ? {}
+                      : {
+                          appointmentDate: '2030-07-11',
+                          startTime: '14:30:00',
+                          endTime: '14:45:00',
+                        }
                     : {}
               ),
             ],
@@ -1415,10 +1436,26 @@ describe('realPhorest client-resolution single-flight', () => {
     await expect(
       phorest.updateAppointment('appt-1', '2030-07-11T14:30:00')
     ).resolves.toEqual({ appointmentId: 'appt-1' });
+    expect(movedReadbacks).toBe(2);
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url).includes('/appointment/appt-1?') &&
+          (init as RequestInit | undefined)?.method === 'PUT'
+      )
+    ).toHaveLength(1);
     await expect(phorest.cancelAppointment('appt-1')).resolves.toEqual({
       appointmentId: 'appt-1',
       cancelled: true,
     });
+    expect(cancelledReadbacks).toBe(2);
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url).includes('/appointment/cancel?') &&
+          (init as RequestInit | undefined)?.method === 'POST'
+      )
+    ).toHaveLength(1);
     expect(
       appointmentReadUrls.some(
         (url) => new URL(url).searchParams.get('fetch_canceled') === 'true'
@@ -1427,6 +1464,7 @@ describe('realPhorest client-resolution single-flight', () => {
   });
 
   it('Live real create treats missing or mismatched read-back as uncertain', async () => {
+    let createReadbacks = 0;
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     fetchMock.mockImplementation(async (url: unknown, init?: RequestInit) => {
@@ -1452,10 +1490,16 @@ describe('realPhorest client-resolution single-flight', () => {
           ],
         });
       }
-      if (u.includes('/appointment?updated_from=')) {
+      if (u.includes('/appointment?client_id=client-1')) {
+        createReadbacks += 1;
         return jsonResponse({
           _embedded: {
-            appointments: [appointmentRecord({ startTime: '13:15:00' })],
+            appointments: [
+              appointmentRecord({
+                clientId: 'other-client',
+                startTime: '13:15:00',
+              }),
+            ],
           },
           page: { number: 0, totalPages: 1 },
         });
@@ -1473,6 +1517,14 @@ describe('realPhorest client-resolution single-flight', () => {
         'client-1'
       )
     ).rejects.toMatchObject({ outcomeUncertain: true });
+    expect(createReadbacks).toBe(3);
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url).includes('/booking') &&
+          (init as RequestInit | undefined)?.method === 'POST'
+      )
+    ).toHaveLength(1);
   });
 
   it('Live real reschedule treats a non-active read-back as uncertain', async () => {

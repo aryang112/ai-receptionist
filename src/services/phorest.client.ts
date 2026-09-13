@@ -1220,6 +1220,35 @@ async function fetchAppointment(
   return undefined;
 }
 
+// A just-created booking can take a moment to appear in the broad
+// updated-date index. Create verification instead uses the provider's indexed
+// client/date query, which is both narrower and aligned with the write.
+async function fetchAppointmentForClientOnDate(
+  appointmentId: string,
+  clientId: string,
+  appointmentDate: string
+): Promise<AppointmentResponse | undefined> {
+  let page = 0;
+  while (page < 10) {
+    const response = await phorestFetch<AppointmentListResponse>(
+      businessBranchPath(
+        `/appointment?client_id=${encodeURIComponent(clientId)}&from_date=${encodeURIComponent(appointmentDate)}&to_date=${encodeURIComponent(appointmentDate)}&size=100&page=${page}`
+      )
+    );
+
+    const appointments = response._embedded?.appointments ?? [];
+    const match = appointments.find(
+      (item) => item.appointmentId === appointmentId
+    );
+    if (match) return match;
+
+    const totalPages = response.page?.totalPages ?? 1;
+    if (page >= totalPages - 1) break;
+    page += 1;
+  }
+  return undefined;
+}
+
 function requiresLiveWriteReadback(): boolean {
   return env.VOICE_ENGINE === 'live' && env.PHOREST_WRITE_MODE === 'real';
 }
@@ -1277,62 +1306,100 @@ async function verifyCreatedAppointment(
   serviceId: string,
   start: DateTime
 ): Promise<void> {
-  try {
-    const appointment = await fetchAppointment(appointmentId);
-    if (
-      !appointment ||
-      appointment.appointmentId !== appointmentId ||
-      appointment.clientId !== clientId ||
-      appointment.serviceId !== serviceId ||
-      !hasExpectedStart(appointment, start) ||
-      !isActiveBooked(appointment)
-    ) {
-      throw new AppointmentWriteOutcomeUncertainError();
-    }
-  } catch (error) {
-    if (error instanceof AppointmentWriteOutcomeUncertainError) throw error;
-    throw new AppointmentWriteOutcomeUncertainError();
-  }
+  await verifyWriteReadback(
+    appointmentId,
+    () =>
+      fetchAppointmentForClientOnDate(
+        appointmentId,
+        clientId,
+        start.toISODate()!
+      ),
+    (appointment) => ({
+      clientMatches: appointment?.clientId === clientId,
+      serviceMatches: appointment?.serviceId === serviceId,
+      dateMatches: appointment?.appointmentDate === start.toISODate(),
+      startMatches: appointment ? hasExpectedStart(appointment, start) : false,
+      activeBooked: appointment ? isActiveBooked(appointment) : false,
+    })
+  );
 }
 
 async function verifyRescheduledAppointment(
   appointmentId: string,
   start: DateTime
 ): Promise<void> {
-  try {
-    const appointment = await fetchAppointment(appointmentId);
-    if (
-      !appointment ||
-      appointment.appointmentId !== appointmentId ||
-      !hasExpectedStart(appointment, start) ||
-      !isActiveBooked(appointment)
-    ) {
-      throw new AppointmentWriteOutcomeUncertainError();
-    }
-  } catch (error) {
-    if (error instanceof AppointmentWriteOutcomeUncertainError) throw error;
-    throw new AppointmentWriteOutcomeUncertainError();
-  }
+  await verifyWriteReadback(
+    appointmentId,
+    () => fetchAppointment(appointmentId),
+    (appointment) => ({
+      dateMatches: appointment?.appointmentDate === start.toISODate(),
+      startMatches: appointment ? hasExpectedStart(appointment, start) : false,
+      activeBooked: appointment ? isActiveBooked(appointment) : false,
+    })
+  );
 }
 
 async function verifyCancelledAppointment(
   appointmentId: string
 ): Promise<void> {
-  try {
-    const appointment = await fetchAppointment(appointmentId, {
-      includeCanceled: true,
-    });
-    if (
-      !appointment ||
-      appointment.appointmentId !== appointmentId ||
-      !isCancelledAppointment(appointment)
-    ) {
-      throw new AppointmentWriteOutcomeUncertainError();
+  await verifyWriteReadback(
+    appointmentId,
+    () => fetchAppointment(appointmentId, { includeCanceled: true }),
+    (appointment) => ({
+      cancelled: appointment ? isCancelledAppointment(appointment) : false,
+    })
+  );
+}
+
+type WriteReadbackFields = Record<string, boolean>;
+
+// Phorest's appointment indexes can lag a successful write briefly. Retry only
+// bounded, idempotent reads; writes remain single-shot because their outcome
+// could already have been persisted.
+async function verifyWriteReadback(
+  appointmentId: string,
+  readAppointment: () => Promise<AppointmentResponse | undefined>,
+  expectedFields: (
+    appointment: AppointmentResponse | undefined
+  ) => WriteReadbackFields
+): Promise<void> {
+  const maxAttempts = 3;
+  let appointment: AppointmentResponse | undefined;
+  let fields = expectedFields(undefined);
+  let reason = 'not_found';
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    reason = 'not_found';
+    try {
+      appointment = await readAppointment();
+    } catch {
+      appointment = undefined;
+      reason = 'read_error';
     }
-  } catch (error) {
-    if (error instanceof AppointmentWriteOutcomeUncertainError) throw error;
-    throw new AppointmentWriteOutcomeUncertainError();
+
+    const idMatches = appointment?.appointmentId === appointmentId;
+    fields = expectedFields(appointment);
+    if (appointment && idMatches && Object.values(fields).every(Boolean)) {
+      return;
+    }
+
+    if (appointment) reason = 'readback_mismatch';
+    if (attempt + 1 < maxAttempts) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+    }
   }
+
+  logger.warn(
+    {
+      expectedAppointmentId: appointmentId,
+      reason,
+      found: Boolean(appointment),
+      idMatches: appointment?.appointmentId === appointmentId,
+      ...fields,
+    },
+    'Live appointment write readback could not be verified'
+  );
+  throw new AppointmentWriteOutcomeUncertainError();
 }
 
 export const realPhorest: PhorestPort = {
