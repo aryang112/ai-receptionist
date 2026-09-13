@@ -1,5 +1,11 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-12 8:34 PM call — review complete, real writes still disabled
+
+- Owner call `CAcfe25bad14206422258751a2b83f1e41` recognized Aryan and completed two simulated bookings: Monday Sep 14 brow 4:45 PM and chin 4:30 PM. Explicit read-backs/approvals and persisted booking rows verified. Direct real Phorest read found no Monday appointments for that profile, consistent with hosted writes=simulate.
+- Three-choice availability and basic hours worked. Multi-service flow still promised options “for both” then committed brow before arranging chin, prompting caller correction. Repeated process narration / duplicate confirmation remain conversation-quality issues. Audio quality not assessed from transcript.
+- Review: `docs/reviews/GPT_LIVE_CALL_REVIEW_2026-09-12_2034.md` in implementation worktree. No code, environment or real Phorest writes changed. Runtime remains `8607ef1`. A scoped real-write pilot requires implementation and verification; startup/proposal gates currently require simulation.
+
 ## 2026-09-12 evening — Owner transfer working-day correction DEPLOYED
 
 - Runtime `8607ef1`, Railway `4d6dc922-bc44-4bf1-8699-b31c7f51db1f` SUCCESS (created 7:47 PM Eastern). Four deployed source/build hashes match; 682 tests / 61 files and TypeScript build pass. Health 200, zero active calls, Live + Terra, two approved callers, writes/notifications simulated.
