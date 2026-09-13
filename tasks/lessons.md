@@ -511,3 +511,9 @@ A simulated transfer must not be described as the owner being unavailable or fai
 
 ## 2026-09-12 — Owner calling window applies only on working days
 The owner clarified that 9 AM–8 PM is not an every-day permission. Use the existing single-provider salon calendar to exclude closed weekdays, recorded holidays and away closures; allow the broader calling window before/after opening only on working days. Keep the check in isWithinTransferWindow so prompt status, normal transfer and fatal failover agree. Never infer a day off from zero booking slots: a working day may simply be fully booked. Individual time off not recorded in this calendar is not discovered automatically from a separate Phorest roster.
+
+
+## 2026-09-12 — Live real-write verification and remote probes
+Live now supports real single-appointment proposals. A successful write must be followed by verified provider state, with at most bounded read-only retries; never resend a mutation to resolve uncertainty. Phorest start times can include fractional seconds (`12:15:00.000`), and immediate reads may not yet expose a saved change. Create verification targets client_id + appointment date; cancellation verification includes fetch_canceled=true and requires explicit canceled/inactive state. Unknown outcomes clear warmed appointment lists and block further mutations for that call. Owner communication mode is independent of appointment writes.
+
+Remote controller-probe.mjs cannot force hosted writes to simulate. It now checks hosted mode and requires PROBE_ALLOW_REAL_BACKEND=true for an explicitly scoped real-backend probe. Keep automated voice scenarios that could book/move/cancel away from the real target unless those exact real effects and cleanup are intended.

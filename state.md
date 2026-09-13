@@ -1,5 +1,15 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-12 9:12 PM — Live REAL appointment writes, all direct callers DEPLOYED
+
+- User explicitly authorized any direct caller and real Phorest appointment changes while external salon forwarding remains off. Runtime source `b53d436`, Railway `e47db2d5-d2c4-462c-aa49-d88c78b03bc8` SUCCESS. Eight source/build hashes match; 700 tests / 62 files and TypeScript build pass.
+- Current status: Live + Terra, PHOREST_WRITE_MODE=real, callerAccess=all, zero active calls, health200. Owner SMS/transfers remain simulated; digest and post-call summary disabled; USE_MOCK_PHOREST=false. Legacy enabled=false means simulation disabled, not voice disabled. Retained two-number allowlist is inactive in real mode (kept for rollback).
+- Existing single-appointment prepare/confirm tools now perform real writes with fresh-availability refusal on uncertainty, phone-matched client-ID binding, persisted provider verification and no automatic write retries. Pending writes block proposal replacement; unknown outcomes block subsequent mutations and invalidate cached appointment lists. Readback normalizes fractional seconds and retries only reads for delayed visibility; cancellation explicitly includes canceled records.
+- Actual controller/Phorest create→reschedule→cancel validation PASSED after catching/fixing read-back issues. All three temporary Sep22 Brow Threading fixtures on Aryan Gupta were canceled; no active test appointment remains. Hosted unlisted-caller synthetic read-only check reached Erica and answered Monday hours without any write. No unsolicited phone call/SMS made.
+- Next: owner actual phone booking/reschedule/cancel taste test. Grouped visits and acknowledgment polish are DESIGN ONLY, not implemented: `docs/GPT_LIVE_GROUPED_VISIT_PLAN_2026-09-12.md`. Reuse Phorest native aggregate availability/multi-service booking and batch cancellation, one complete visit read-back/approval; sequential grouped reschedules need per-item verification and partial-outcome handling.
+- Release evidence: `docs/reviews/GPT_LIVE_REAL_WRITE_RELEASE_2026-09-12.md`; outputs/live-real-write-validation/. Continue in `/Users/aryangupta/Documents/Dev/ai-receptionist-live-2026-09-12`, not older main. Remote probes now require explicit PROBE_ALLOW_REAL_BACKEND=true against this host; their local simulation env does not protect remote writes.
+- Rollback to simulation: with no active calls set PHOREST_WRITE_MODE=simulate and restart/redeploy; keep owner communication suppression. Do not roll back a simulation-only binary while leaving real-write settings enabled.
+
 ## 2026-09-12 8:34 PM call — review complete, real writes still disabled
 
 - Owner call `CAcfe25bad14206422258751a2b83f1e41` recognized Aryan and completed two simulated bookings: Monday Sep 14 brow 4:45 PM and chin 4:30 PM. Explicit read-backs/approvals and persisted booking rows verified. Direct real Phorest read found no Monday appointments for that profile, consistent with hosted writes=simulate.

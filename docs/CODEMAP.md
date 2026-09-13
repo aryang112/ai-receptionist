@@ -319,3 +319,13 @@ re-check" (A1).
 - `src/services/liveTestTelemetry.ts`: voice seconds plus deduplicated backend costs; test-only admin view via `?testView=true`.
 - `scripts/gpt-live/controller-probe.mjs`: actual-model synthetic audio through local controller or authenticated hosted WebSocket. Not a carrier/handset test.
 - `scripts/gpt-live/select-variant.mjs`, `owner-call.mjs`: operator comparison controls and explicitly invoked owner call.
+
+
+## Live real direct-number pilot (September 12, evening)
+
+- `appointmentProposals.ts`: both real/simulated single-appointment modes, immutable proposal, approval, pending-confirm barrier and unknown-outcome latch.
+- `phorest.client.ts`: Live real writes verify persisted state via bounded reads; create uses client/date filtering, cancellation includes canceled records, fractional local times normalize before comparison.
+- `twilioStream.ts`: real Live fresh checks fail closed; caller-ID/phone-match binding gates explicit client IDs; uncertain writes invalidate warm appointment lists. Live tool notes retain prepare/confirm for subsequent changes.
+- `env.ts`: PHOREST_WRITE_MODE=real allows direct callers; independent OWNER_TRANSFER_MODE and OWNER_SMS_MODE keep communications simulated during this pilot. Digest/summary are disabled in runtime.
+- `controller-probe.mjs`: hosted real mode requires explicit PROBE_ALLOW_REAL_BACKEND=true; default remote refusal protects against mistaken reliance on local simulate settings.
+- Grouped visits remain a design in `docs/GPT_LIVE_GROUPED_VISIT_PLAN_2026-09-12.md`, not runtime functionality.
