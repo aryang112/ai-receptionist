@@ -175,23 +175,33 @@ export function isOwner(phone: string): boolean {
 }
 
 /**
- * During a taste test, only allowlisted numbers get an agent reply.
+ * Who may receive an agent reply. FAIL-CLOSED.
  *
- * This is what makes a live test safe. The smsUrl has to be repointed on the
- * salon's REAL number — there is no staging number — so without an allowlist
- * the first client to reply "Done!" would meet a brand-new agent at the same
- * moment the owner is testing it.
+ * This is what makes a live test safe. There is no staging number — testing
+ * means repointing the smsUrl on the salon's REAL line — so the moment it
+ * flips, the next client to reply "Done!" is talking to whatever we deployed.
  *
- * An empty allowlist means everyone, which is the real launch state rather
- * than a disabled feature — so the check is "is a list configured at all",
- * not a separate on/off flag that could drift out of agreement with it.
+ * The precedence is deliberate and is the whole safety property:
+ *
+ *   owner                      -> always (her control channel must never break)
+ *   number on the allowlist    -> yes
+ *   SMS_OPEN_TO_ALL === true   -> yes (the deliberate launch decision)
+ *   anything else              -> NO
+ *
+ * An empty allowlist therefore means NOBODY, not everybody. Reaching every
+ * client requires ADDING a variable; it can never happen by forgetting one,
+ * fat-fingering one, or losing one in a redeploy. A silent no-reply is exactly
+ * what clients get today, so the failure mode of this gate is the status quo —
+ * while the failure mode of getting it backwards is the entire client base
+ * meeting an untested agent at once.
  */
 export function isAllowedForAgent(phone: string): boolean {
-  const list = env.SMS_ALLOWED_NUMBERS;
-  if (!list.length) return true;
-  if (isOwner(phone)) return true; // Richa's control channel is never gated.
+  if (isOwner(phone)) return true;
   const target = normalizePhone(phone);
-  return list.some((n) => normalizePhone(n) === target);
+  if (env.SMS_ALLOWED_NUMBERS.some((n) => normalizePhone(n) === target)) {
+    return true;
+  }
+  return env.SMS_OPEN_TO_ALL;
 }
 
 export type RoutingDecision = {

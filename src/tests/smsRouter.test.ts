@@ -265,31 +265,45 @@ describe('routeInbound — failure of the review lookup must not lose the messag
   });
 });
 
-describe('isAllowedForAgent — the taste-test gate', () => {
+describe('isAllowedForAgent — fail-closed', () => {
   const originalList = env.SMS_ALLOWED_NUMBERS;
+  const originalOpen = env.SMS_OPEN_TO_ALL;
   afterEach(() => {
     (env as any).SMS_ALLOWED_NUMBERS = originalList;
+    (env as any).SMS_OPEN_TO_ALL = originalOpen;
   });
 
-  it('allows everyone when no list is configured (the launch state)', () => {
+  it('answers NOBODY when nothing is configured', () => {
+    // The property this whole gate exists for. A forgotten variable, a typo,
+    // or a var lost in a redeploy must never open the lane to every client.
     (env as any).SMS_ALLOWED_NUMBERS = [];
-    expect(isAllowedForAgent(CLIENT)).toBe(true);
+    (env as any).SMS_OPEN_TO_ALL = false;
+    expect(isAllowedForAgent(CLIENT)).toBe(false);
   });
 
-  it('allows only the listed numbers when a list is configured', () => {
+  it('answers only the listed numbers during a taste test', () => {
     (env as any).SMS_ALLOWED_NUMBERS = ['+14105550123'];
+    (env as any).SMS_OPEN_TO_ALL = false;
     expect(isAllowedForAgent('+14105550123')).toBe(true);
     expect(isAllowedForAgent(CLIENT)).toBe(false);
   });
 
   it('normalizes formatting so a list entry cannot silently miss', () => {
     (env as any).SMS_ALLOWED_NUMBERS = ['(410) 555-0123'];
+    (env as any).SMS_OPEN_TO_ALL = false;
     expect(isAllowedForAgent('+14105550123')).toBe(true);
     expect(isAllowedForAgent('4105550123')).toBe(true);
   });
 
+  it('opens to everyone ONLY on the explicit launch flag', () => {
+    (env as any).SMS_ALLOWED_NUMBERS = [];
+    (env as any).SMS_OPEN_TO_ALL = true;
+    expect(isAllowedForAgent(CLIENT)).toBe(true);
+  });
+
   it('never gates the owner — her control channel must always work', () => {
-    (env as any).SMS_ALLOWED_NUMBERS = ['+14105550123'];
+    (env as any).SMS_ALLOWED_NUMBERS = [];
+    (env as any).SMS_OPEN_TO_ALL = false;
     expect(isAllowedForAgent(OWNER)).toBe(true);
   });
 });

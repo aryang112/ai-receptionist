@@ -207,6 +207,14 @@ export const env = {
     .split(',')
     .map((n) => n.trim())
     .filter(Boolean),
+  // The deliberate act of opening the lane to every client.
+  //
+  // Fail-closed by design: an EMPTY allowlist means "nobody", not "everybody".
+  // Getting that backwards is the one configuration mistake that would let the
+  // whole client base meet a brand-new agent by accident — a forgotten
+  // variable, a typo, a var dropped in a Railway redeploy. Reaching every
+  // client must require adding something, never forgetting something.
+  SMS_OPEN_TO_ALL: process.env.SMS_OPEN_TO_ALL === 'true',
 
   // S2: repeat-spam blocklist. A number tagged 'spam' (S1) this many times
   // gets rejected at the /voice webhook before an OpenAI session opens —
