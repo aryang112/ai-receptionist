@@ -1,5 +1,13 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-13 — GitHub main reconciled to the deployed line
+
+- Aryan authorized pointing `main` at what actually runs. GitHub `main` had diverged from production on 2026-09-03 at `117ada0`: 20 commits on main that production never had, 57 on the deployed branch that main never had. Production was correct; `main` was a different, never-deployed Erica.
+- REVIEW OF ALL 20 — nothing needed porting: 16 were documentation. Of the 4 code commits, `9101f95` (Phorest placeholder email) and `f270e17` (service-name matching) are ALREADY satisfied in production by different implementations — verified `PLACEHOLDER_EMAIL_DOMAIN` present, and "eyebrow threading plus upper lip" resolves to Brow Thread + Lip Thread in live calls via SERVICE_ALIASES rather than main's TOKEN_SYNONYMS. `37d1d93` is obsolete: its `wait_for_user` silent tool exists only to let the Realtime engine decline to speak on a non-addressed turn, which GPT-Live handles natively, and its prompt reorganization added no section production lacks while the deployed prompt has been revised many times since. `5644669` bundles phone and name into one question, which Aryan explicitly REJECTED — merging main would have silently reinstated it. There is no automatic live→realtime fallback; VOICE_ENGINE is explicit, so legacy code cannot re-enter service by accident.
+- CORRECTION CAUGHT BEFORE ACTING: the 16 "documentation" commits were NOT superseded. They created 11 files that existed only on main, and the live CODEMAP/state.md link to 6 of them (nearby/tattoo release twice, the 09-03 prompt audit, booking hotfix, conversation release, release assessment, repetition review). All 11 were copied onto the deployed branch first — documentation only, no source/prompt/test touched — and every previously dangling link now resolves.
+- SAFETY: `archive/main-pre-reconcile-2026-09-13` was pushed to GitHub at `a2fcd35` (main's exact pre-rewrite state) and verified BEFORE any rewrite. All 20 commits remain reachable; the reconciliation is fully reversible.
+- `main` now equals the deployed line, so the obvious place to look is the code that actually runs. Do not resurrect `5644669`'s combined phone/name question from the archive.
+
 ## 2026-09-13 — Carry-over + transfer-failback fixes DEPLOYED
 
 - Aryan authorized deployment of both fixes. Runtime source `3eda50a` on `codex/gpt-live-taste-test`, Railway deployment `6bfed3c4-876c-43a4-ad87-c05b3bcaeeb8` SUCCESS (project `adf5ecf3-d8d2-4809-93d7-0cb45e96f070`, service `c82cc5c8-fac5-4f0d-ad7b-800253007265`). 703 tests / 63 files and `tsc` passed before upload. Zero active calls confirmed before and after.
