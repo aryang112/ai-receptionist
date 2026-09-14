@@ -196,6 +196,17 @@ export const env = {
   // still RECORDS the message (never drop a client again), but runs no agent
   // and sends nothing. Safe to deploy before the number's smsUrl is repointed.
   SMS_ENABLED: process.env.SMS_ENABLED === 'true',
+  // Taste-test allowlist, mirroring VOICE_TEST_ALLOWED_PHONES. When NON-EMPTY,
+  // only these numbers get an agent reply; everyone else is recorded and left
+  // alone. This is what makes a live test safe: the smsUrl has to be repointed
+  // on the salon's real number, so without an allowlist the first client to
+  // reply "Done!" would meet a brand-new agent at the same moment Aryan does.
+  // Comma-separated, any format — normalized before compare. Empty = everyone
+  // (the real launch state). OWNER_PHONE is always allowed implicitly.
+  SMS_ALLOWED_NUMBERS: (process.env.SMS_ALLOWED_NUMBERS || '')
+    .split(',')
+    .map((n) => n.trim())
+    .filter(Boolean),
 
   // S2: repeat-spam blocklist. A number tagged 'spam' (S1) this many times
   // gets rejected at the /voice webhook before an OpenAI session opens —

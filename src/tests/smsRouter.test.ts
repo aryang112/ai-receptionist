@@ -7,6 +7,7 @@ import {
   routeInbound,
   isAcknowledgment,
   isOwner,
+  isAllowedForAgent,
   REVIEW_REPLY_WINDOW_MS,
 } from '../services/smsRouter.js';
 import { SmsStore, __resetSmsStoreForTests } from '../services/smsStore.js';
@@ -261,5 +262,34 @@ describe('routeInbound — failure of the review lookup must not lose the messag
     // ...and that a null-returning lookup (the real failure mode) is safe:
     const d = await routeInbound(CLIENT, 'Done!', async () => null);
     expect(d.lane).toBe('booking');
+  });
+});
+
+describe('isAllowedForAgent — the taste-test gate', () => {
+  const originalList = env.SMS_ALLOWED_NUMBERS;
+  afterEach(() => {
+    (env as any).SMS_ALLOWED_NUMBERS = originalList;
+  });
+
+  it('allows everyone when no list is configured (the launch state)', () => {
+    (env as any).SMS_ALLOWED_NUMBERS = [];
+    expect(isAllowedForAgent(CLIENT)).toBe(true);
+  });
+
+  it('allows only the listed numbers when a list is configured', () => {
+    (env as any).SMS_ALLOWED_NUMBERS = ['+14105550123'];
+    expect(isAllowedForAgent('+14105550123')).toBe(true);
+    expect(isAllowedForAgent(CLIENT)).toBe(false);
+  });
+
+  it('normalizes formatting so a list entry cannot silently miss', () => {
+    (env as any).SMS_ALLOWED_NUMBERS = ['(410) 555-0123'];
+    expect(isAllowedForAgent('+14105550123')).toBe(true);
+    expect(isAllowedForAgent('4105550123')).toBe(true);
+  });
+
+  it('never gates the owner — her control channel must always work', () => {
+    (env as any).SMS_ALLOWED_NUMBERS = ['+14105550123'];
+    expect(isAllowedForAgent(OWNER)).toBe(true);
   });
 });

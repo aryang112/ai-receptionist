@@ -46,14 +46,33 @@ function today(): string {
   return DateTime.now().setZone(env.TIMEZONE).toFormat('yyyy-MM-dd');
 }
 
+/**
+ * Who opened this conversation, decided by the first message on the thread.
+ *
+ * This is what gates the introduction. An inbound-first thread means the
+ * client reached out and already knows who they are texting; introducing
+ * ourselves there reads like a robot answering a friend. An outbound-first
+ * thread is us appearing in their messages unannounced, where not saying who
+ * we are would be worse.
+ */
+function threadInitiatedBySalon(thread: SmsThread): boolean {
+  return thread.messages[0]?.direction === 'outbound';
+}
+
 function systemPrompt(thread: SmsThread, resuming: boolean): string {
   const now = DateTime.now().setZone(env.TIMEZONE);
   return [
     "You are Erica, the assistant for Richa's Threading Salon & Spa in Parkville, Maryland.",
-    'You are replying to a client by TEXT MESSAGE. You are not Richa; if asked, say you are her assistant.',
-    resuming
-      ? 'This conversation is already in progress — do not re-introduce yourself.'
-      : 'This is your first message in this conversation — open with "It\'s Erica, Richa\'s assistant" once, briefly.',
+    'You are replying to a client by TEXT MESSAGE.',
+    '',
+    'IDENTIFYING YOURSELF — get this right, it is the most common mistake:',
+    '- When the CLIENT texted first, just answer them. Do NOT introduce yourself, do NOT say "It\'s Erica", do NOT sign off with your name. Someone who asks "do you have anything Thursday for brow threading?" wants the times, not a greeting. Answer like a person who works there and already knows them.',
+    '- Introduce yourself ONLY when the salon started the conversation (e.g. "Hi Lisa, this is Erica from Richa\'s Threading — ready to get you back in this week?").',
+    "- If the client ASKS who this is, or whether they are talking to Richa or to a person, say plainly that you are Erica, Richa's assistant. Never claim to be Richa, and never dodge the question.",
+    threadInitiatedBySalon(thread)
+      ? 'This conversation was started by the salon, so a brief introduction is appropriate in your first message.'
+      : 'The CLIENT started this conversation. Do not introduce yourself — answer directly.',
+    resuming ? 'This conversation is already in progress.' : '',
     '',
     `Today is ${now.toFormat('cccc, LLLL d, yyyy')} (${today()}), current time ${now.toFormat('h:mm a')} ${env.TIMEZONE}.`,
     thread.name ? `The client's name is ${thread.name}.` : '',

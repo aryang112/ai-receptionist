@@ -166,11 +166,32 @@ export function isAcknowledgment(body: string): boolean {
   );
 }
 
+const normalizePhone = (p: string) =>
+  p.replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+
 export function isOwner(phone: string): boolean {
-  const normalize = (p: string) =>
-    p.replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
   const owner = env.OWNER_PHONE;
-  return Boolean(owner) && normalize(phone) === normalize(owner);
+  return Boolean(owner) && normalizePhone(phone) === normalizePhone(owner);
+}
+
+/**
+ * During a taste test, only allowlisted numbers get an agent reply.
+ *
+ * This is what makes a live test safe. The smsUrl has to be repointed on the
+ * salon's REAL number — there is no staging number — so without an allowlist
+ * the first client to reply "Done!" would meet a brand-new agent at the same
+ * moment the owner is testing it.
+ *
+ * An empty allowlist means everyone, which is the real launch state rather
+ * than a disabled feature — so the check is "is a list configured at all",
+ * not a separate on/off flag that could drift out of agreement with it.
+ */
+export function isAllowedForAgent(phone: string): boolean {
+  const list = env.SMS_ALLOWED_NUMBERS;
+  if (!list.length) return true;
+  if (isOwner(phone)) return true; // Richa's control channel is never gated.
+  const target = normalizePhone(phone);
+  return list.some((n) => normalizePhone(n) === target);
 }
 
 export type RoutingDecision = {

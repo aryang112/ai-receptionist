@@ -11,7 +11,7 @@ import { twilioSignature } from '../middleware/twilioSignature.js';
 import { env } from '../config/env.js';
 import { logger } from '../core/logger.js';
 import { SmsStore } from '../services/smsStore.js';
-import { routeInbound } from '../services/smsRouter.js';
+import { routeInbound, isAllowedForAgent } from '../services/smsRouter.js';
 import { lookupLastReviewRequest } from '../services/reviewRequests.js';
 import {
   HELP_REPLY,
@@ -38,8 +38,7 @@ const inFlight = new Set<string>();
  *  just said "Done!" does not need an LLM, and a generated reply here would be
  *  the one place we could accidentally say something wrong at zero benefit. */
 const REVIEW_THANKS =
-  'Thank you so much — that really does help the salon. See you next time! ' +
-  "— Erica, Richa's assistant";
+  'Thank you so much — that really does help the salon. See you next time!';
 
 async function resolveIdentity(phone: string): Promise<void> {
   const thread = SmsStore.get(phone);
@@ -72,6 +71,18 @@ async function handleInbound(
   // Persist FIRST, always, on every lane including suppressed ones. If
   // everything below this line throws, we still have the customer's message.
   SmsStore.recordInbound(from, body, decision.lane, sid);
+
+  // Taste-test gate. A non-empty allowlist means we are mid-test on the REAL
+  // salon number: record everyone, answer only the testers. Compliance is
+  // deliberately NOT gated — a STOP from any number must always be honoured,
+  // test or not.
+  if (decision.lane !== 'compliance' && !isAllowedForAgent(from)) {
+    logger.info(
+      { tail: from.slice(-4), lane: decision.lane },
+      'SMS allowlist active — recorded, not answered'
+    );
+    return;
+  }
 
   switch (decision.lane) {
     case 'owner': {
@@ -132,7 +143,7 @@ async function handleInbound(
         );
         await sendClientSms(
           from,
-          'Let me check on that with Richa and come right back to you. — Erica'
+          'Let me check on that and come right back to you.'
         );
       }
       return;
