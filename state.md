@@ -1,5 +1,52 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-13 — SMS BOOKING LANE BUILT (branch `feat/erica-sms-booking`, NOT deployed)
+
+- Worktree `/Users/aryangupta/Documents/Dev/ai-receptionist-sms-2026-09-13`, branch
+  `feat/erica-sms-booking` off `codex/gpt-live-taste-test` (59906ec), commit `aab4d04`.
+  **Not merged, not deployed, by Aryan's explicit instruction.** The GPT-Live owner taste
+  test is still open; deploying both at once would make a regression unattributable.
+- **Why:** the number's `smsUrl` still points at `https://demo.twilio.com/welcome/sms/reply`,
+  which Twilio retired — it 301s to HTML, so Twilio gets invalid TwiML and sends nothing.
+  **57 real client replies have been received and silently dropped** (all warm, zero
+  opt-outs). Verified against the live Twilio API this session.
+- **What shipped:** `routes/sms.ts` (signature-verified inbound webhook, acks immediately
+  and works async), `smsRouter` (four lanes on one number: owner / compliance /
+  review_reply / booking), `smsStore` (append-only JSONL threads + durable opt-out),
+  `smsAgent` (text turn over the EXISTING booking tools — no new Phorest logic),
+  `smsOwner` (Richa texts instructions in, Erica carries them out), `smsSender` (single
+  exit point so the opt-out check cannot be bypassed), `smsCompliance`.
+- **Ships inert:** `SMS_ENABLED=false`, `SMS_SEND_MODE=simulate` by default.
+  `SMS_SEND_MODE` is deliberately independent of `PHOREST_WRITE_MODE` — one protects the
+  calendar, the other protects the client's handset, and a taste test wants real calendar
+  writes with zero real texts.
+- **Verified:** 752/752 tests (700 baseline + 52 new), clean `tsc`, and an end-to-end
+  smoke through the real route with a valid Twilio signature. STOP opted out and
+  confirmed; "anything Thursday for brow threading?" returned a correct three-option
+  reply from a real availability lookup. Mock Phorest, simulated send — no customer
+  texted, no calendar written.
+- **Two real bugs caught by pinning tests to the actual dropped backlog** rather than to
+  invented examples: (1) an iOS tapback emoji is wrapped in U+200B, which JS `\s` does
+  not match, so a pure "🤗" read as a real message; (2) "cancel my 3pm" must never be an
+  opt-out — whole-message keyword match only.
+- **Note for a fresh worktree:** it has no `.env` or `node_modules`, and without `.env`
+  36 voice tests fail on empty Twilio creds — that is an artifact, not a regression.
+  Symlink both from the main checkout, as `ai-receptionist-live-2026-09-12` does.
+- **Decisions (Aryan, 2026-09-13):** one number for now, second only if problems appear;
+  persona is "Erica, Richa's assistant" and never claims to be Richa; out-of-scope →
+  Erica texts Richa at `+14433706471`, Richa replies with an instruction, Erica acts and
+  confirms; do not answer the 57 historical replies.
+- **Next, in order:** (1) close the GPT-Live taste test; (2) merge and deploy with
+  `SMS_ENABLED=false` — safe, changes nothing; (3) repoint the number's `smsUrl` to
+  `<host>/twilio/sms` (**Aryan only** — outward-facing change to the number clients
+  text); (4) `SMS_ENABLED=true` with `SMS_SEND_MODE=simulate` and taste-test from
+  Aryan's handset; (5) flip `SMS_SEND_MODE=real`. Rollback at any point is
+  `SMS_ENABLED=false`.
+- **Not built (deliberate, Phase 2):** outbound campaigns. Before any outbound wave:
+  Phorest's native rebooking SMS is ON, so a cross-system ≤1 msg/48–72h cap is
+  mandatory, and the A2P campaign description (currently "asking for Google reviews")
+  should be broadened to include booking.
+
 ## 2026-09-13 — GitHub main reconciled to the deployed line
 
 - Aryan authorized pointing `main` at what actually runs. GitHub `main` had diverged from production on 2026-09-03 at `117ada0`: 20 commits on main that production never had, 57 on the deployed branch that main never had. Production was correct; `main` was a different, never-deployed Erica.
