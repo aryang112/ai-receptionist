@@ -300,7 +300,8 @@ async function runTool(
           `Erica: ${reason}`,
           '',
           `Reply "${thread.ref} <what to tell them>" and I'll send it.`,
-        ].join('\n')
+        ].join('\n'),
+        env.SMS_OWNER_PHONE || undefined
       );
       return { output: { escalated: true }, escalated: true };
     }

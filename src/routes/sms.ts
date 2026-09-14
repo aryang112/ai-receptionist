@@ -93,7 +93,8 @@ async function handleInbound(
           result.clientMessage.body
         );
       }
-      if (result.ownerReply) await sendOwnerSms(result.ownerReply);
+      if (result.ownerReply)
+        await sendOwnerSms(result.ownerReply, env.SMS_OWNER_PHONE || undefined);
       return;
     }
 
@@ -139,7 +140,8 @@ async function handleInbound(
             `${thread.name || `…${from.slice(-4)}`}: "${body.slice(0, 140)}"`,
             '',
             `Reply "${thread.ref} <what to tell them>" and I'll send it.`,
-          ].join('\n')
+          ].join('\n'),
+          env.SMS_OWNER_PHONE || undefined
         );
         await sendClientSms(
           from,

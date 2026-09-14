@@ -114,6 +114,16 @@ const ACK_PHRASES = [
   'no',
 ];
 
+/**
+ * Zero-width characters, built from escapes via `new RegExp` on purpose.
+ *
+ * Written as a regex literal, Prettier rewrites `\u200B` into the actual
+ * invisible character — leaving a range of unprintable bytes sitting in the
+ * source that nobody can read, review, or safely edit. This form survives
+ * formatting and stays legible.
+ */
+const ZERO_WIDTH = new RegExp('[\\u200B-\\u200F\\uFEFF]', 'g');
+
 function stripPunctuationAndEmoji(s: string): string {
   return (
     s
@@ -124,7 +134,7 @@ function stripPunctuationAndEmoji(s: string): string {
       // \s does NOT match it — without this, a pure "🤗" reaction strips to
       // two invisible characters instead of the empty string and is misread
       // as a real message. Found by the backlog-derived test, not by eye.
-      .replace(/[​-‏﻿]/g, '')
+      .replace(ZERO_WIDTH, '')
       .replace(/[.!?,;:'"“”]+/g, '')
       .replace(/\s+/g, ' ')
       .trim()
@@ -170,8 +180,13 @@ const normalizePhone = (p: string) =>
   p.replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
 
 export function isOwner(phone: string): boolean {
-  const owner = env.OWNER_PHONE;
-  return Boolean(owner) && normalizePhone(phone) === normalizePhone(owner);
+  // Both, deliberately. During a taste test SMS_OWNER_PHONE is the tester and
+  // OWNER_PHONE is still Richa — if only one counted, whichever of them texted
+  // in an instruction would be misread as a customer starting a conversation.
+  const target = normalizePhone(phone);
+  return [env.SMS_OWNER_PHONE, env.OWNER_PHONE]
+    .filter(Boolean)
+    .some((owner) => normalizePhone(owner) === target);
 }
 
 /**

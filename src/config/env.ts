@@ -207,6 +207,12 @@ export const env = {
     .split(',')
     .map((n) => n.trim())
     .filter(Boolean),
+  // Where SMS escalations go. Defaults to OWNER_PHONE (Richa), but is settable
+  // on its own so a taste test can route escalations to the tester WITHOUT
+  // repointing OWNER_PHONE — which the voice product also uses for transfers,
+  // the daily digest and post-call summaries. One shared variable would mean a
+  // test change silently altering live call behaviour.
+  SMS_OWNER_PHONE: process.env.SMS_OWNER_PHONE || process.env.OWNER_PHONE || '',
   // The deliberate act of opening the lane to every client.
   //
   // Fail-closed by design: an EMPTY allowlist means "nobody", not "everybody".
