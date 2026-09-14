@@ -4,6 +4,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { metadata } from './routes/metadata.js';
 import { twilioVoice } from './routes/twilio.js';
+import { twilioSms } from './routes/sms.js';
 import { adminRouter } from './routes/admin.js';
 import { voiceTestRouter } from './routes/voiceTest.js';
 import { maybeSendDigest } from './services/digest.js';
@@ -66,6 +67,9 @@ app.use(
 );
 app.use('/api', metadata);
 app.use('/twilio', twilioVoice);
+// Inbound SMS shares the /twilio prefix so the number's smsUrl is simply
+// <host>/twilio/sms, alongside the existing voiceUrl <host>/twilio/voice.
+app.use('/twilio', twilioSms);
 app.use('/admin/voice-test', voiceTestRouter);
 app.use('/admin', adminRouter);
 

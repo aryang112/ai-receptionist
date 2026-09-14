@@ -175,6 +175,28 @@ export const env = {
   // Append-only call log (JSONL) for the admin surface / auditing.
   CALL_STORE_PATH: process.env.CALL_STORE_PATH || './data/calls.jsonl',
 
+  // ---- SMS lane ----------------------------------------------------------
+  // Append-only SMS thread log. Same env-tunable-path convention as
+  // CALL_STORE_PATH so tests can point it at a tmp fixture.
+  SMS_STORE_PATH: process.env.SMS_STORE_PATH || './data/sms.jsonl',
+  // Text model for the SMS agent. Separate from OPENAI_CALL_SUMMARY_MODEL so
+  // the conversational lane can be tuned without touching the call recap.
+  OPENAI_SMS_MODEL: process.env.OPENAI_SMS_MODEL || 'gpt-4.1',
+  // Independent of PHOREST_WRITE_MODE on purpose — the two guard different
+  // things. PHOREST_WRITE_MODE=simulate protects the CALENDAR; this protects
+  // the CLIENT'S HANDSET. A taste test wants real calendar reads and writes
+  // while still being certain no customer receives a text.
+  SMS_SEND_MODE: requiredMode(
+    'SMS_SEND_MODE',
+    process.env.SMS_SEND_MODE,
+    'simulate',
+    ['real', 'simulate'] as const
+  ),
+  // Master switch for the inbound webhook. Off = the route still 200s and
+  // still RECORDS the message (never drop a client again), but runs no agent
+  // and sends nothing. Safe to deploy before the number's smsUrl is repointed.
+  SMS_ENABLED: process.env.SMS_ENABLED === 'true',
+
   // S2: repeat-spam blocklist. A number tagged 'spam' (S1) this many times
   // gets rejected at the /voice webhook before an OpenAI session opens —
   // manually editing the file (object keyed by number) is the unblock path.

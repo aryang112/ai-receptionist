@@ -17,3 +17,8 @@ const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'erica-test-data-'));
 process.env.CALL_STORE_PATH = path.join(testDataDir, 'calls.jsonl');
 process.env.BLOCKLIST_PATH = path.join(testDataDir, 'blocklist.json');
 process.env.DIGEST_STATE_PATH = path.join(testDataDir, 'digest-state.json');
+// SMS lane: same safety net — without this, suites that drive the inbound
+// handler would append real client threads to data/sms.jsonl.
+process.env.SMS_STORE_PATH = path.join(testDataDir, 'sms.jsonl');
+// Never let a test send a real text, whatever a suite forgets to override.
+process.env.SMS_SEND_MODE = 'simulate';
