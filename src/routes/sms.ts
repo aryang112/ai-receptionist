@@ -34,11 +34,13 @@ export const twilioSms = express.Router();
  */
 const inFlight = new Set<string>();
 
-/** Warm, honest, and cheap — a canned reply, not a model call. Someone who
- *  just said "Done!" does not need an LLM, and a generated reply here would be
- *  the one place we could accidentally say something wrong at zero benefit. */
-const REVIEW_THANKS =
-  'Thank you so much — that really does help the salon. See you next time!';
+// Deliberately no auto-reply to a review-request acknowledgment (Aryan,
+// 2026-09-14). Someone texting "Done!" after we asked for a review needs
+// nothing from us — replying is noise, and silence is exactly what they get
+// today. We still RECORD every one of them, which is the whole point: 57 of
+// these were lost before this route existed. The lane stays a distinct lane
+// rather than being deleted, because its job is to stop "Done!" from reaching
+// the booking agent and getting an unnecessary reply.
 
 async function resolveIdentity(phone: string): Promise<void> {
   const thread = SmsStore.get(phone);
@@ -116,7 +118,11 @@ async function handleInbound(
     }
 
     case 'review_reply':
-      await sendClientSms(from, REVIEW_THANKS);
+      // Recorded above. No reply by design — see the note at the top.
+      logger.info(
+        { tail: from.slice(-4) },
+        'review-request acknowledgment — recorded, no reply'
+      );
       return;
 
     case 'booking': {
