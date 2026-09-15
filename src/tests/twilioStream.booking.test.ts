@@ -48,7 +48,7 @@ const MOM = {
 // snapped/hours-filtered result. The F1/F2 tests below are about clientId
 // injection, not availability, so they mock getAvailability to return a
 // single grid-aligned slot ("13:15", a multiple of the 15-min SLOT_GRID_MIN
-// default) that legitimately survives snapSlotsToGrid, and book that exact
+// presentation grid) that Erica leads with, and book that exact
 // time — giving the new re-check real data to pass instead of accidentally
 // exercising it. (The mock module's own default getAvailability — 13:20/
 // 13:50/14:20 — deliberately does NOT survive snapping: none of those raw

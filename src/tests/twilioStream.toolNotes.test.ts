@@ -125,8 +125,8 @@ describe('suggest_availability — note coaching per result state', () => {
   });
 
   it('a normal open day with slots carries offer-only-from-slots coaching', async () => {
-    // On-grid starts (the mock's raw 13:20/13:50/14:20 all get dropped by
-    // snapSlotsToGrid's lone-tail rule — see core/slots.ts).
+    // Two tidy quarter-hour starts — the normal case Erica leads with
+    // (see core/slots.ts: real starts are selected, never moved).
     vi.spyOn(phorest, 'getAvailability').mockResolvedValue([
       `${DATE}T14:00:00`,
       `${DATE}T14:15:00`,

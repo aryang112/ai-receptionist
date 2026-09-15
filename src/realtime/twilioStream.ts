@@ -46,7 +46,7 @@ import {
   isOpenNow,
   isWithinTransferWindow,
 } from '../core/hours.js';
-import { snapSlotsToGrid } from '../core/slots.js';
+import { isOnGridValue, partitionByGrid } from '../core/slots.js';
 import { verifyStreamToken } from '../security/wsAuth.js';
 import { DateTime } from 'luxon';
 // decodeMuLaw no longer needed here — audio decoding happens in openaiSession
@@ -82,6 +82,12 @@ const PRE_AUTH_TIMEOUT_MS = 10_000;
 // arrive, suppression must not outlive it (a dead barge-in for the whole
 // call was defect D-RT4's class — never again).
 const GREETING_BARGE_IN_MAX_MS = 20000;
+
+// OWNER RULE (2026-09-14): Erica leads with tidy quarter-hour starts. Odd
+// minutes are real and bookable, but they only surface once the day cannot
+// fill a normal reply — the prompt asks for at most three choices, so fewer
+// than three tidy starts IS a thin day.
+const MIN_OFFERED_SLOTS = 3;
 
 // A live Twilio media stream delivers inbound frames continuously (~50/s,
 // silence included). Frames stopping entirely for this long means the call
@@ -3131,11 +3137,15 @@ export class TwilioRealtimeCall {
     const parsedSlots = result.slots.map((iso) =>
       DateTime.fromISO(iso, { zone: env.TIMEZONE })
     );
-    // Phorest re-anchors its availability grid to each appointment's end, so
-    // free starts arrive at odd minutes (2:43, 2:58…). Snap to clean clock
-    // times BEFORE the hours filter so we never speak "2:43 pm". (snapSlotsToGrid)
-    const inHours = snapSlotsToGrid(parsedSlots, env.SLOT_GRID_MIN).filter(
-      (dt) =>
+    // 2026-09-14 (the Loretta call): these starts are passed through EXACTLY
+    // as Phorest returned them. We used to ceil-round them onto a clean clock
+    // grid and then book the rounded value — but Phorest anchors its grid to
+    // appointment ENDS, so the gaps between free starts are other clients'
+    // appointments, and rounding up booked straight into one. Tidiness of the
+    // source times is controlled by the salon's Phorest "Booking slots"
+    // interval; selectOfferedSlots only CHOOSES which real starts to read out.
+    const inHours = parsedSlots.filter(
+      (dt: DateTime) =>
         dt >= openClose.open &&
         dt.plus({ minutes: durationMin }) <= openClose.close
     );
@@ -3162,6 +3172,17 @@ export class TwilioRealtimeCall {
     }
   }
 
+  /**
+   * Even spread across a list so morning AND evening are represented, rather
+   * than the earliest N. Returns the list unchanged when it already fits.
+   */
+  private spreadAcross(list: DateTime[], max: number): DateTime[] {
+    if (max <= 0 || list.length === 0) return [];
+    if (list.length <= max) return [...list];
+    const step = (list.length - 1) / (max - 1);
+    return Array.from({ length: max }, (_, i) => list[Math.round(i * step)]!);
+  }
+
   /** Keep ordinary and nearby offers on the same preference/spread rules. */
   private selectOfferedSlots(
     available: DateTime[],
@@ -3180,6 +3201,8 @@ export class TwilioRealtimeCall {
       : null;
     let picked: DateTime[];
     if (pref && pref.isValid) {
+      // An explicit request wins over tidiness: the caller asked for a time,
+      // so answer with the REAL starts nearest it, on-grid or not.
       picked = [...available]
         .sort(
           (a, b) =>
@@ -3188,14 +3211,19 @@ export class TwilioRealtimeCall {
         )
         .slice(0, max)
         .sort((a, b) => a.toMillis() - b.toMillis());
-    } else if (available.length <= max) {
-      picked = available;
     } else {
-      const step = (available.length - 1) / (max - 1);
-      picked = Array.from(
-        { length: max },
-        (_, i) => available[Math.round(i * step)]!
-      );
+      // OWNER RULE (2026-09-14): lead with tidy quarter-hour starts. Odd
+      // minutes are real and bookable but stay in reserve — they surface only
+      // when the day cannot fill a normal reply, where they read as fitting
+      // the caller in rather than as ordinary openings. Nothing is moved: both
+      // lists hold starts Phorest actually returned.
+      const { onGrid, offGrid } = partitionByGrid(available, env.SLOT_GRID_MIN);
+      picked = this.spreadAcross(onGrid, max);
+      if (onGrid.length < MIN_OFFERED_SLOTS) {
+        picked = [...picked, ...this.spreadAcross(offGrid, max - picked.length)].sort(
+          (a, b) => a.toMillis() - b.toMillis()
+        );
+      }
     }
     return picked.map((dt) => ({
       time: dt.toFormat('h:mm a'),
@@ -3537,6 +3565,13 @@ export class TwilioRealtimeCall {
       // the word vacation, never "fully booked", and the reopen day carries
       // its full date so the caller hears the right week.
       const awayClosure = getVacationForDate(payload.date);
+      // When the tidy quarter-hour starts ran out, the offer falls back to
+      // real odd-minute starts. Say so at the decision moment (coaching rides
+      // WITH the data) so Erica frames them as a favour rather than reading a
+      // ragged list — and never rounds one to sound neater.
+      const offGridOffered = slots.some(
+        (slot) => !isOnGridValue(slot.value, env.SLOT_GRID_MIN)
+      );
       const stateNote = awayClosure
         ? TEMPORARY_CLOSURE_RESULT_NOTE
         : !hours.salonOpenThatDay
@@ -3545,7 +3580,11 @@ export class TwilioRealtimeCall {
             ? `Already closed for today (hours were ${hours.hoursThatDay}) — say so and offer the next opening (${hours.nextOpen ?? 'tomorrow'}). Never call it fully booked.`
             : slots.length === 0
               ? 'Open that day but genuinely fully booked — say so and offer another day.'
-              : 'Offer only times from slots: at most three choices TOTAL per reply, then ask which works and wait. If their exact requested time is listed, confirm just that one. Otherwise choose near their stated time or part of day; with no preference, spread the choices across the returned day rather than reading adjacent starts. Give individual start times, never imply a continuous available range. Keep other returned slots for follow-up; offer different choices only if asked or the first choices do not work. This is a selection of times, not the entire calendar: if they request an unlisted time, check again with preferredTime before declaring it unavailable; never invent a time.';
+              : `Offer only times from slots: at most three choices TOTAL per reply, then ask which works and wait. If their exact requested time is listed, confirm just that one. Otherwise choose near their stated time or part of day; with no preference, spread the choices across the returned day rather than reading adjacent starts. Give individual start times, never imply a continuous available range. Keep other returned slots for follow-up; offer different choices only if asked or the first choices do not work. This is a selection of times, not the entire calendar: if they request an unlisted time, check again with preferredTime before declaring it unavailable; never invent a time.${
+                  offGridOffered
+                    ? ' The tidy quarter-hour openings are gone for that day, so these starts land on odd minutes. Read each one EXACTLY as given and present it as a way to fit the caller in, never as an ordinary opening — and never round it to sound neater.'
+                    : ''
+                }`;
 
       return await this.addNearbyDates(
         {

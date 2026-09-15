@@ -1,55 +1,57 @@
 import { DateTime } from 'luxon';
 
 /**
- * Round a time UP to the next grid boundary (e.g. gridMin=15 → next quarter
- * hour). A time already on the grid is returned unchanged.
+ * PRESENTATION ONLY — nothing in this file may ever MOVE a start time.
+ *
+ * 2026-09-14 (the Loretta call): the previous version of this module snapped
+ * Phorest's real free starts UP onto a clean clock grid so Erica never had to
+ * say "2:43 pm", and the snapped value was then both spoken AND booked. That
+ * is unsound. Phorest re-anchors its availability grid to the END of every
+ * existing appointment, so the GAPS between consecutive free starts are other
+ * people's appointments. Rounding up walks into one. Threading services run
+ * 5 minutes, so a 5-minute shift is a whole appointment's width — Erica
+ * offered 5:30 PM for a slot another client was already sitting in.
+ *
+ * The salon's Phorest "Booking slots" interval is the right place to control
+ * how tidy the source times are (set to 5 minutes on 2026-09-14). Here we only
+ * CHOOSE which of the real starts to read out first.
  */
-export function ceilToGrid(dt: DateTime, gridMin: number): DateTime {
-  const topOfHour = dt.startOf('hour');
-  const minutesPast = dt.diff(topOfHour, 'minutes').minutes;
-  const steps = Math.ceil(minutesPast / gridMin - 1e-9);
-  return topOfHour.plus({ minutes: steps * gridMin });
+
+/** True when a real start already sits on the presentation grid. */
+export function isOnGrid(dt: DateTime, gridMin: number): boolean {
+  if (!Number.isFinite(gridMin) || gridMin <= 1) return true;
+  return (dt.hour * 60 + dt.minute) % gridMin === 0;
+}
+
+/** Same test for an "HH:mm" value as carried in a tool result. */
+export function isOnGridValue(value: string, gridMin: number): boolean {
+  const [h, m] = value.split(':').map(Number);
+  if (h == null || m == null || Number.isNaN(h) || Number.isNaN(m)) return true;
+  if (!Number.isFinite(gridMin) || gridMin <= 1) return true;
+  return (h * 60 + m) % gridMin === 0;
 }
 
 /**
- * Snap raw Phorest availability starts onto a clean clock grid.
- *
- * WHY: Phorest computes availability as a rolling grid that RE-ANCHORS to the
- * END of every existing appointment, so after any booking the free starts come
- * back at odd minutes — e.g. an appointment ending at 2:43 yields 2:43, 2:58,
- * 3:13, 3:28… A salon should never offer "2:43 pm", so we snap each start UP to
- * the next grid boundary (default :00/:15/:30/:45) before offering it.
- *
- * WHY SNAP *UP* (never round to nearest / down): the staff is free FROM the raw
- * start onward, so any LATER time inside the same free block is also free.
- * Rounding down could name a time before the block opens (an unbookable/double-
- * book time). We only keep a snapped time when the free block is proven to reach
- * it: a slot that already sits on the grid is always safe; an off-grid slot is
- * kept only if a SUCCESSOR raw start exists within `gridMin` (i.e. the slot is
- * inside a contiguous run). That successor guarantees the block extends ≥ gridMin
- * past the raw start, and the snapped boundary never exceeds raw+gridMin, so the
- * service still fits before the next appointment. A lone off-grid slot at the
- * tail of a run sits right against the next appointment — its runway can't be
- * proven once snapped, so it's dropped rather than risk offering a colliding
- * time. Output is de-duplicated and chronologically sorted.
+ * Split real starts into the tidy ones we lead with (:00/:15/:30/:45 by
+ * default) and the rest, which stay in reserve for a thin day or an exact
+ * request. Both lists are de-duplicated and chronological. No start is
+ * altered, dropped, or invented.
  */
-export function snapSlotsToGrid(slots: DateTime[], gridMin = 15): DateTime[] {
+export function partitionByGrid(
+  slots: DateTime[],
+  gridMin: number
+): { onGrid: DateTime[]; offGrid: DateTime[] } {
+  const seen = new Set<number>();
   const sorted = [...slots]
     .filter((dt) => dt.isValid)
-    .sort((a, b) => a.toMillis() - b.toMillis());
-  const kept = new Map<number, DateTime>(); // key = epoch ms → natural de-dupe
-  for (let i = 0; i < sorted.length; i++) {
-    const raw = sorted[i]!;
-    const snapped = ceilToGrid(raw, gridMin);
-    if (snapped.toMillis() === raw.toMillis()) {
-      kept.set(snapped.toMillis(), snapped); // already on the grid — always safe
-      continue;
-    }
-    const next = sorted[i + 1];
-    const hasRunway =
-      next != null && next.diff(raw, 'minutes').minutes <= gridMin + 1e-6;
-    if (hasRunway) kept.set(snapped.toMillis(), snapped);
-    // else: lone off-grid tail slot against an appointment edge → drop it.
-  }
-  return [...kept.values()].sort((a, b) => a.toMillis() - b.toMillis());
+    .sort((a, b) => a.toMillis() - b.toMillis())
+    .filter((dt) => {
+      if (seen.has(dt.toMillis())) return false;
+      seen.add(dt.toMillis());
+      return true;
+    });
+  return {
+    onGrid: sorted.filter((dt) => isOnGrid(dt, gridMin)),
+    offGrid: sorted.filter((dt) => !isOnGrid(dt, gridMin)),
+  };
 }
