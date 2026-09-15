@@ -111,8 +111,14 @@ describe('Live speech prompt', () => {
     const livePrompt = buildLivePrompt(instructions, CATALOG);
     const backendPrompt = buildBackendPrompt(instructions, CATALOG);
 
+    // 2026-09-15: the voice model must hand the closing MOMENT over — it
+    // cannot end a call itself. The trigger list used to be three literal
+    // phrases ("that is all" / "goodbye" / asking to hang up), so a caller
+    // saying "All right" after a finished reschedule produced total silence.
+    // Assert the rule and its widened trigger, not the old sentence.
+    expect(livePrompt).toContain('Delegate the done-close before replying');
     expect(livePrompt).toContain(
-      'Ending the phone connection is an application action: always delegate'
+      'a bare acknowledgement after something you completed'
     );
     expect(livePrompt).toContain('For clear spam, delegate the spam-close');
     expect(backendPrompt).toContain(
