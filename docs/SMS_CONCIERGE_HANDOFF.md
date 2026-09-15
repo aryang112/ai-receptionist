@@ -1,0 +1,130 @@
+# SMS concierge — deployment handoff
+
+**Written 2026-09-14 for whoever deploys Erica.** The feature is built, merged and tested.
+It is NOT deployed. Production has no `/twilio/sms` route (verified: unsigned POST returns
+404, while `/twilio/voice` returns 403 — so the probe works and the route genuinely is
+absent).
+
+Design and rationale: `docs/SMS_CONCIERGE_2026-09-14.md`.
+
+---
+
+## What is already done
+
+- Code merged into `codex/gpt-live-taste-test`. 757/757 tests, clean `tsc`.
+- Five variables set on Railway service `erica` (production). **Setting them appears to
+  have triggered a redeploy at 00:04:52Z on 09-15 despite `--skip-deploys`** — the
+  container restarted at 00:06:34. No call was active, nothing was dropped, and no new
+  code shipped (it re-ran the existing build). Flagging it so the restart in the logs is
+  not a mystery.
+
+  ```
+  SMS_ENABLED=true
+  SMS_SEND_MODE=real
+  SMS_ALLOWED_NUMBERS=+14432535169     # Aryan only
+  SMS_OWNER_PHONE=+14432535169         # escalations go to Aryan, not Richa, during the test
+  SMS_STORE_PATH=/app/data/sms.jsonl   # on the Railway volume — see below
+  ```
+
+  `SMS_OPEN_TO_ALL` is deliberately **unset**. The reply gate is fail-closed: an empty
+  allowlist means NOBODY. Reaching every client requires ADDING that variable, never
+  forgetting one.
+
+- The number's `SmsUrl` was blanked (it pointed at Twilio's retired demo endpoint and had
+  delivered 57 "Configure your number's SMS URL" auto-replies to 50 real clients between
+  Nov 2025 and Sep 10 2026). Inbound texts are still logged by Twilio, so nothing is lost
+  while the lane is dark.
+
+---
+
+## The one open question before deploying
+
+`railway up` uploads the whole directory. This worktree is ahead of the runtime recorded
+in `state.md` (`b53d436`). Excluding the SMS files, that delta is:
+
+```
+src/realtime/twilioStream.ts    +7    "tell the Live speech model a transfer already rang out"
+src/voice/livePrompts.ts        +9/-3 "carry earlier caller details into Live availability lookups"
+(+ 2 test files)
+```
+
+**~16 lines of voice behaviour.** Their own doc commit (`312493f docs: record carry-over
+and transfer-failback production deploy`) says they were already deployed, and the
+running logs show the current GPT-Live/Terra stack (`model=gpt-live-1`,
+`backendModel=gpt-5.6-terra`), which is consistent with that. But Railway has no git
+metadata for this service (deploys are file uploads) and the app prints no version on
+boot, so **it cannot be confirmed from outside.**
+
+**If you know the last commit you deployed and it is at or past `3eda50a`, the delta is
+zero and this is a pure SMS deploy.** That is the fastest way to close this out.
+
+---
+
+## Deploy sequence
+
+```bash
+cd /Users/aryangupta/Documents/Dev/ai-receptionist-live-2026-09-12
+
+# 0. NEVER deploy while a call is in progress — it restarts the container.
+#    Check: Twilio Calls.json?Status=in-progress  (or the Twilio console)
+
+# 1. deploy
+railway up --service erica --detach
+
+# 2. confirm the route now exists (403 = present; 404 = still missing)
+curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+  https://erica-production-f2e2.up.railway.app/twilio/sms
+
+# 3. point the number's SMS webhook at it
+#    PN SID: PNfc3e21b482274d41df93674589456851
+curl -fsS -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" -X POST \
+  "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers/PNfc3e21b482274d41df93674589456851.json" \
+  --data-urlencode "SmsUrl=https://erica-production-f2e2.up.railway.app/twilio/sms" \
+  --data-urlencode "SmsMethod=POST"
+```
+
+Send ONLY `SmsUrl` in step 3. `voiceUrl` is not in the payload and therefore cannot be
+touched — verify it afterwards regardless.
+
+---
+
+## Then test, from +14432535169 only
+
+| Text | Expected |
+|---|---|
+| "do you have anything thursday for brow threading?" | 3 real times, **no self-introduction** |
+| "wait is this richa or a bot?" | "Erica, Richa's assistant" — never claims to be Richa |
+| "2:15 works" | reads back service + day + date + time, asks for a clear yes |
+| "yes" | **books it in Phorest for real** — `PHOREST_WRITE_MODE=real`. Cancel the fixture after. |
+| "can I get a refund" | escalates: Aryan gets "Erica needs you — #A7 …" |
+| reply "A7 tell her yes that's fine" | Erica sends it to the client and confirms back |
+| "STOP" | opt-out confirmation, and the number is suppressed permanently |
+
+**Known gap:** `OWNER_SMS_MODE=simulate` on production, by earlier deliberate choice, and
+`sendOwnerSms` honours it — so **escalation texts will be logged but not delivered**.
+Everything else tests end to end. Setting it to `real` also un-suppresses VOICE owner
+notifications (post-call summaries, transfer notices), so that is a real decision rather
+than a toggle.
+
+---
+
+## Rollback
+
+`railway variables --service erica --set "SMS_ENABLED=false"` — the route still records
+every inbound message and answers nobody. The webhook does not need reverting. For a full
+stop, blank `SmsUrl` again.
+
+---
+
+## Do not skip
+
+- `SMS_STORE_PATH` must stay under `/app/data` (the Railway volume). Off the volume, every
+  redeploy wipes thread history **and the durable opt-out ledger** — a client who sent
+  STOP would start receiving messages again.
+- A fresh worktree of this repo has no `.env` and no `node_modules`; without `.env`, 36
+  voice tests fail on empty Twilio credentials. That is an artifact, not a regression —
+  symlink both from the main checkout.
+- Before any outbound campaign (not built): Phorest's native rebooking SMS is ON, so a
+  cross-system cap of ≤1 message per 48–72h is mandatory, and the A2P campaign
+  description (currently "asking for Google reviews") should be broadened to cover
+  booking. The campaign is Low Volume Mixed, so multiple use cases are permitted.
