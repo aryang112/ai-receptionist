@@ -47,6 +47,7 @@ import {
   isWithinTransferWindow,
 } from '../core/hours.js';
 import { isOnGridValue, partitionByGrid } from '../core/slots.js';
+import { clusterSameVisit, planConsecutive } from '../core/visits.js';
 import { verifyStreamToken } from '../security/wsAuth.js';
 import { DateTime } from 'luxon';
 // decodeMuLaw no longer needed here — audio decoding happens in openaiSession
@@ -735,7 +736,7 @@ IDENTIFY (only before an account-specific read/write; hours, services, prices, a
 
 SERVE — hear what the caller actually NEEDS before acting. Callers almost never use words like "cancel" or "reschedule" — "I can't make it today" or "something came up" usually means one of them. Then:
 - BOOK: which service → availability (per TOOLS) → offer the times nearest what they asked → identify them per IDENTIFY immediately before the booking write if not already done → summarize the exact service + day + time and ask for confirmation → WAIT for an explicit yes BEFORE book_appointment → confirm only what the tool actually booked. Booking several services in one call is completely normal: run this again per service, and NEVER transfer to Richa just because they're booking a second or third one.
-- RESCHEDULE: list_appointments → lead with the soonest, confirm it's the one they mean (if not, mention the next) → ask what works better → availability for that day → an explicit yes on the new slot BEFORE reschedule_appointment → confirm the new day and time back.
+- RESCHEDULE: list_appointments → name every service in the soonest sitting, confirm which they mean → availability → explicit yes → reschedule_appointment. Two or more kept together: reschedule_visit instead. Confirm new times back.
 - CANCEL: list_appointments → confirm exactly which appointment (service, day, time) → an explicit yes → cancel_appointment → say it's cancelled ONLY if the tool succeeded.
 - RUNNING LATE: identify → find today's appointment via list_appointments → log_running_late with clientId, appointmentId, AND detail — a short summary in the caller's own words, including HOW late if they said. squeezed false → reassure them warmly, no rush, Richa will know. squeezed true → let them know we'll do our best to squeeze them in.
 - The caller changes their mind mid-flow (e.g. asks to cancel instead of reschedule) → ABANDON the old flow immediately and follow the new request.
@@ -1031,6 +1032,37 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
       },
       required: ['appointmentId', 'date', 'time'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'reschedule_visit',
+    description:
+      'Move TWO OR MORE appointments the caller is keeping as one sitting. Call it twice: first without startTime to get back-to-back options, then again with the chosen startTime and confirmed true after ONE yes covering all of them. Only pass appointmentIds the caller has agreed to move — appointments hours apart on the same day are separate visits, so ask which they mean instead. Use reschedule_appointment for a single appointment.',
+    parameters: {
+      type: 'object',
+      properties: {
+        appointmentIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Two or more appointmentIds the caller agreed to move',
+        },
+        date: { type: 'string', description: 'ISO date YYYY-MM-DD' },
+        preferredTime: {
+          type: 'string',
+          description: '24h HH:MM the caller asked for, if any',
+        },
+        startTime: {
+          type: 'string',
+          description:
+            "24h HH:MM — the chosen option's startTime. Only with confirmed.",
+        },
+        confirmed: {
+          type: 'boolean',
+          description: 'True only after one explicit yes covering every service',
+        },
+      },
+      required: ['appointmentIds', 'date'],
     },
   },
   {
@@ -1673,6 +1705,9 @@ export class TwilioRealtimeCall {
       this.registerTrackedTool('reschedule_appointment', (args) =>
         this.handleReschedule(args)
       );
+    this.registerTrackedTool('reschedule_visit', (args) =>
+      this.handleRescheduleVisit(args)
+    );
       this.registerTrackedTool('cancel_appointment', (args) =>
         this.handleCancel(args)
       );
@@ -3897,6 +3932,202 @@ export class TwilioRealtimeCall {
     }
   }
 
+  /**
+   * ONE SITTING, decided in full before anything is written.
+   *
+   * 2026-09-14 (the two-appointment reschedule call): moving appointments one
+   * at a time makes Erica narrate the machinery — she moved lip threading into
+   * 5:45, re-checked, and told the caller "5:45 is no longer open" about a slot
+   * SHE had just filled. Planning the whole visit first makes that impossible
+   * rather than merely discouraged: there is no intermediate state to report.
+   *
+   * SCOPE IS NEVER INFERRED. This only ever touches the appointmentIds the
+   * model was given, which the ownership guard requires were surfaced on this
+   * call. Same-day is NOT the same visit — see core/visits.ts.
+   */
+  private async handleRescheduleVisit(args: unknown) {
+    try {
+      const parsed = parseToolArgs('reschedule_visit', args);
+      if (!parsed.success) {
+        logger.error(
+          { tool: 'reschedule_visit', error: parsed.error },
+          'Tool arg validation failed: reschedule_visit'
+        );
+        return { error: parsed.error };
+      }
+      const payload = parsed.data as {
+        appointmentIds: string[];
+        date: string;
+        preferredTime?: string;
+        startTime?: string;
+        confirmed?: boolean;
+      };
+      logger.info(
+        { tool: 'reschedule_visit', args: payload },
+        'Tool called: reschedule_visit'
+      );
+
+      const unique = [...new Set(payload.appointmentIds)];
+      const unseen = unique.filter((id) => !this.servedAppointmentIds.has(id));
+      if (unseen.length) {
+        return {
+          error:
+            'I need to pull up your appointments first — please call list_appointments.',
+        };
+      }
+      if (!getOpenClose(payload.date)) {
+        return {
+          error:
+            'The salon is closed on that date. Nothing was rescheduled.',
+        };
+      }
+
+      // Resolve each appointment's service + duration, and intersect the real
+      // availability across them. Everything is scoped to one staff member, so
+      // the intersection is normally identical — but never assume it.
+      const items: { appointmentId: string; service: Service }[] = [];
+      let shared: DateTime[] | null = null;
+      for (const appointmentId of unique) {
+        const serviceName = this.servedAppointmentServices.get(appointmentId);
+        if (!serviceName) {
+          return {
+            error:
+              'I could not identify one of those appointments — please call list_appointments again.',
+          };
+        }
+        const open = await this.fetchOpenSlots(serviceName, payload.date);
+        if ('notOffered' in open || 'ambiguous' in open) {
+          return {
+            error: `I could not look up availability for ${serviceName}.`,
+          };
+        }
+        items.push({ appointmentId, service: open.service });
+        shared =
+          shared === null
+            ? open.slots
+            : shared.filter((dt) =>
+                open.slots.some((other) => other.toMillis() === dt.toMillis())
+              );
+      }
+      const available = shared ?? [];
+      const durations = items.map((i) => i.service.durationMin || 0);
+
+      const preferred = payload.preferredTime
+        ? DateTime.fromISO(`${payload.date}T${payload.preferredTime}`, {
+            zone: env.TIMEZONE,
+          })
+        : undefined;
+
+      // ---- PLAN -------------------------------------------------------
+      if (!payload.confirmed || !payload.startTime) {
+        const plans = planConsecutive(available, durations, preferred, 3);
+        if (!plans.length) {
+          return {
+            planned: false,
+            options: [],
+            note: 'The whole visit will not fit back-to-back that day. Say so plainly, then offer to check another day or to move just one of them — never move part of the visit without asking.',
+          };
+        }
+        // Register every planned start so the per-appointment write guard
+        // (offeredTimesForDate) recognises times we actually offered.
+        for (const [index, item] of items.entries()) {
+          const key = this.slotKey(item.service.name, payload.date);
+          const existing = this.offeredSlots.get(key) ?? new Set<string>();
+          for (const plan of plans) {
+            existing.add(plan[index]!.toFormat('HH:mm'));
+          }
+          this.offeredSlots.set(key, existing);
+        }
+        const options = plans.map((plan) => ({
+          startTime: plan[0]!.toFormat('HH:mm'),
+          items: items.map((item, index) => ({
+            appointmentId: item.appointmentId,
+            service: item.service.name,
+            time: plan[index]!.toFormat('h:mm a'),
+          })),
+        }));
+        logger.info(
+          { tool: 'reschedule_visit', date: payload.date, options },
+          'Visit plan prepared'
+        );
+        return {
+          planned: true,
+          date: payload.date,
+          options,
+          note: 'These keep the whole visit back-to-back. Offer ONE option — read every service and its exact time as given — and ask for a single yes covering all of them. Do not move anything yet. On yes, call reschedule_visit again with that startTime and confirmed true. Never describe the steps, the order, or what each move does to availability.',
+        };
+      }
+
+      // ---- EXECUTE ----------------------------------------------------
+      const start = DateTime.fromISO(`${payload.date}T${payload.startTime}`, {
+        zone: env.TIMEZONE,
+      });
+      const chosen = planConsecutive(available, durations, start, 3).find(
+        (plan) => plan[0]!.toFormat('HH:mm') === payload.startTime
+      );
+      if (!chosen) {
+        return {
+          error:
+            'That start no longer fits the whole visit. Check the plan again before confirming anything.',
+        };
+      }
+
+      // Sequential, never parallel: each write changes what is free for the
+      // next one (FR-02 / R03). Partial success is reported honestly — Phorest
+      // gives us no all-or-nothing guarantee to promise.
+      const moved: { service: string; time: string }[] = [];
+      const failed: { service: string; error: string }[] = [];
+      for (const [index, item] of items.entries()) {
+        const time = chosen[index]!.toFormat('HH:mm');
+        const result = (await this.handleReschedule({
+          appointmentId: item.appointmentId,
+          date: payload.date,
+          time,
+        })) as { error?: string };
+        if (result?.error) {
+          failed.push({ service: item.service.name, error: result.error });
+        } else {
+          moved.push({
+            service: item.service.name,
+            time: chosen[index]!.toFormat('h:mm a'),
+          });
+        }
+      }
+      logger.info(
+        { tool: 'reschedule_visit', moved, failed },
+        'Visit reschedule complete'
+      );
+      if (failed.length && !moved.length) {
+        return {
+          rescheduled: false,
+          failed,
+          note: 'Nothing moved. Apologise briefly, do not explain internals, and offer another time.',
+        };
+      }
+      if (failed.length) {
+        return {
+          rescheduled: true,
+          partial: true,
+          moved,
+          failed,
+          note: 'Only part of the visit moved. Say exactly which service moved and to when, say plainly that the other could not be moved, and offer to sort it now. Never imply everything changed.',
+        };
+      }
+      return {
+        rescheduled: true,
+        moved,
+        date: payload.date,
+        note: 'The whole visit moved. Confirm it in ONE short sentence naming each service and its new time exactly as given, then stop. Do not recount the steps or mention availability.',
+      };
+    } catch (error) {
+      logger.error(
+        { tool: 'reschedule_visit', error: this.formatError(error) },
+        'Tool error: reschedule_visit'
+      );
+      return { error: this.formatError(error) };
+    }
+  }
+
   private async handleReschedule(args: unknown) {
     try {
       const parsed = parseToolArgs('reschedule_appointment', args);
@@ -4718,12 +4949,41 @@ export class TwilioRealtimeCall {
         ok: true,
         detail: { clientId: payload.clientId, count: clean.length },
       });
+      // 2026-09-14: the old note said "lead with just the soonest one", so a
+      // caller with lip AND brow threading at 6 PM was told about one of them.
+      // Everything in the soonest SITTING is named; the no-long-list restraint
+      // now applies only ACROSS days. Appointments hours apart on one date are
+      // separate visits (core/visits.ts) — naming both is still right, moving
+      // both is not.
+      const soonestDate = clean[0]?.date;
+      const sameDay = clean.filter((a) => a.date === soonestDate);
+      const firstVisit =
+        clusterSameVisit(
+          sameDay.map((a) => ({
+            at: DateTime.fromFormat(
+              `${a.date} ${a.time}`,
+              'yyyy-MM-dd h:mm a',
+              { zone: env.TIMEZONE }
+            ),
+            item: a,
+          }))
+        )[0] ?? [];
+      const laterCount = clean.length - firstVisit.length;
+      const listNote =
+        firstVisit.length > 1
+          ? `The soonest ${firstVisit.length} are ONE sitting. Name EVERY service in it with its time, exactly as given, in a single sentence — never just the first. Ask whether they want the whole visit moved or only one of them, and wait. To move more than one, use reschedule_visit.`
+          : 'Lead with the soonest one and quote its service, date, and time exactly as given — never approximated times.';
+      const restNote =
+        laterCount > 0
+          ? ` There ${laterCount === 1 ? 'is 1 other appointment' : `are ${laterCount} other appointments`} on later dates: say how many and when in a few words rather than reading them out, and ask which one they mean. Never read more than three appointments aloud.`
+          : '';
+
       return {
         appointments: clean,
         note:
           clean.length === 0
             ? 'No upcoming appointments on this account. Say so gently and offer to book a new one (or, if they wanted to cancel, ask if it might be under a different name or number). Never invent an appointment and never transfer for this.'
-            : 'Sorted soonest-first. Lead with just the soonest one and quote its service, date, and time fields exactly as given — never a long list, never approximated times.',
+            : `Sorted soonest-first. ${listNote}${restNote}`,
       };
     } catch (error) {
       logger.error(

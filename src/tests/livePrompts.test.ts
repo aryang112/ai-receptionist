@@ -143,8 +143,14 @@ describe('backend prompt extraction', () => {
     const backend = buildBackendPrompt(before, CATALOG);
     const after = buildInstructions(salonTime('2026-10-01T12:00'), null);
 
+    // Deliberate-change tripwire. Update ONLY with an intentional prompt
+    // edit, and say what changed:
+    //   2026-09-14 — RESCHEDULE flow made visit-aware (name every service in
+    //   the soonest sitting; reschedule_visit for two or more kept together).
+    //   Net SHORTER than the line it replaced; the flow detail moved into the
+    //   tool description and tool-result notes.
     expect(digestBefore).toBe(
-      'ee00677bfaaa921f59745ac9081088019ffe58ed61f0bf630328d3d9c7131d61'
+      '73cecffe22a2b3ebb033eceef94c62f7e781d73d3255ab410afb426a07505eaf'
     );
     expect(after).toBe(before);
     expect(createHash('sha256').update(after).digest('hex')).toBe(digestBefore);

@@ -40,6 +40,18 @@ export const TOOL_SCHEMAS = {
   cancel_appointment: z.object({
     appointmentId: z.string(),
   }),
+  // One sitting, decided in full before anything is written (the 2026-09-14
+  // two-appointment reschedule call). Two phases through one tool, mirroring
+  // the prepare/confirm shape AppointmentProposals already uses:
+  //   plan    — appointmentIds + date (+ preferredTime) → back-to-back options
+  //   execute — the same, plus the chosen startTime and confirmed: true
+  reschedule_visit: z.object({
+    appointmentIds: z.array(z.string()).min(2),
+    date: z.string(),
+    preferredTime: z.string().optional(),
+    startTime: z.string().optional(),
+    confirmed: z.boolean().optional(),
+  }),
   get_business_hours: z.object({}),
   get_prices: z.object({
     serviceName: z.string().optional(),
