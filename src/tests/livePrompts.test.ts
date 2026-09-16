@@ -153,6 +153,10 @@ describe('Live speech prompt', () => {
     expect(backendPrompt).toContain(
       'Never ask this after an intermediate step'
     );
+    // Register item 14 — "more-help question after an explicit goodbye",
+    // seen on real vendor and job-inquiry calls. The take-the-lead rule
+    // above could re-open it, so the precedence is stated outright.
+    expect(backendPrompt).toContain('A farewell outranks the offer');
     expect(backendPrompt).toContain("end_call({reason:'spam'}) for clear spam");
     expect(backendPrompt).toContain('Do not generate a pre-tool farewell');
     expect(backendPrompt).toContain('Follow the result note');
