@@ -4132,7 +4132,7 @@ export class TwilioRealtimeCall {
         rescheduled: true,
         moved,
         date: payload.date,
-        note: 'The whole visit moved. Confirm it in ONE short sentence naming each service and its new time exactly as given, then stop. Do not recount the steps or mention availability.',
+        note: 'The whole visit moved. Confirm it in ONE short sentence naming each service and its new time exactly as given, then ask once if they need anything else. Do not recount the steps or mention availability.',
       };
     } catch (error) {
       logger.error(

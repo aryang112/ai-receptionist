@@ -141,6 +141,25 @@ describe('reschedule_visit', () => {
     expect(write).toHaveBeenCalledTimes(2);
   });
 
+  it('asks once if anything else is needed after the visit moves', async () => {
+    vi.spyOn(phorest, 'updateAppointment').mockResolvedValue({ ok: true } as any);
+    const call = await servedCall();
+    await call.handleRescheduleVisit({
+      appointmentIds: ['appt-lip', 'appt-brow'],
+      date: DATE,
+      preferredTime: '17:45',
+    });
+    const result = await call.handleRescheduleVisit({
+      appointmentIds: ['appt-lip', 'appt-brow'],
+      date: DATE,
+      startTime: '17:45',
+      confirmed: true,
+    });
+    // This note used to say "then stop", which forbade the follow-up question.
+    expect(result.note).toMatch(/ask once if they need anything else/i);
+    expect(result.note).not.toMatch(/then stop/i);
+  });
+
   it('handles THREE appointments, not just two', async () => {
     mockAppointments([
       { appointmentId: 'a1', serviceName: 'Lip Threading', timeDisplay: '6:00 PM' },

@@ -140,6 +140,16 @@ describe('Live speech prompt', () => {
     expect(backendPrompt).toContain(
       'never tell the caller you cannot check a combined opening'
     );
+
+    // 2026-09-15: she confirmed a finished reschedule and then went quiet —
+    // nothing told her that finishing a request is the cue to lead. The guard
+    // against asking mid-flow matters as much as the prompt to ask at all.
+    expect(backendPrompt).toContain(
+      'take the lead: ask once whether they need anything else'
+    );
+    expect(backendPrompt).toContain(
+      'Never ask this after an intermediate step'
+    );
     expect(backendPrompt).toContain("end_call({reason:'spam'}) for clear spam");
     expect(backendPrompt).toContain('Do not generate a pre-tool farewell');
     expect(backendPrompt).toContain('Follow the result note');
