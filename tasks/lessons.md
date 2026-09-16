@@ -542,3 +542,64 @@ The owner clarified that 9 AM–8 PM is not an every-day permission. Use the exi
 Live now supports real single-appointment proposals. A successful write must be followed by verified provider state, with at most bounded read-only retries; never resend a mutation to resolve uncertainty. Phorest start times can include fractional seconds (`12:15:00.000`), and immediate reads may not yet expose a saved change. Create verification targets client_id + appointment date; cancellation verification includes fetch_canceled=true and requires explicit canceled/inactive state. Unknown outcomes clear warmed appointment lists and block further mutations for that call. Owner communication mode is independent of appointment writes.
 
 Remote controller-probe.mjs cannot force hosted writes to simulate. It now checks hosted mode and requires PROBE_ALLOW_REAL_BACKEND=true for an explicitly scoped real-backend probe. Keep automated voice scenarios that could book/move/cancel away from the real target unless those exact real effects and cleanup are intended.
+
+## 2026-09-15 — GPT-Live has TWO prompts; the one you edit may be inert
+`livePrompts.ts` builds its own CONVERSATION FLOW for the backend model instead
+of reusing the production prompt's `SERVE`. **Editing `SERVE` in
+`twilioStream.ts` changes nothing on the Live path.** A visit-aware RESCHEDULE
+rewrite passed its tests and never reached the model.
+**Rule:** change Live behaviour in `livePrompts.ts` or in a tool-result note.
+Prefer the note — coaching rides with the data and only appears when relevant,
+which is why the `list_appointments` fix worked live when the prompt fix did not.
+**Always** `render-live-prompts.ts` and read what the model actually receives.
+
+## 2026-09-15 — a tool the backend may not call does not exist
+Adding to `TOOL_DEFINITIONS` is not enough on the Live path. The backend prompt
+bans raw write tools; a new write-ish tool needs an explicit carve-out in
+`BACKEND TOOL USE`. `reschedule_visit` shipped invisible and Erica told a caller
+*"I'm unable to check a combined opening for both services right now."*
+There were **two** copies of that ban in different sections — grep for every one.
+
+## 2026-09-15 — fuzzy name matching must never see filler words
+"eyebrow threading and upper lip" resolved to the stylist **Manu**: the word
+**"and" is two edits from "manu"**, and token matching allowed two. Any sentence
+containing "and" could produce a confident staff match.
+The distance bound could NOT be tightened — the phone renders Richa as "Richard"
+and "Rishka", both two edits, and the prompt documents that. So the fix removes
+filler words from the matcher (`STAFF_MATCH_STOPWORDS`), including a bare
+single-word query, which bypasses token matching entirely.
+**Rule:** before loosening a fuzzy threshold, check what ordinary English words
+fall inside it.
+
+## 2026-09-15 — check the source system before compensating downstream
+Erica spoke odd times (6:03, 7:27) because Phorest's *"Booking slots: show
+available slots every…"* was set to **0 minutes**. Someone had written rounding
+code to hide it, and that rounding is what double-booked real clients. Setting
+the interval to **5 minutes** removed the problem at source AND raised bookable
+openings from 8 to 20 for one day.
+**Rule:** when the integration produces awkward data, look for the setting
+before writing code to clean it up.
+
+## 2026-09-15 — when a prompt rule and the behaviour disagree, suspect the code
+The prompt already said *"never round, shift, or approximate"* and *"never
+invent a time"* while the code did exactly that. No prompt rule needed changing.
+Fixing the code made it obey an instruction that had been correct all along.
+
+## 2026-09-15 — an instruction written to stop rambling can forbid something you want
+A success note read *"confirm it in ONE short sentence … then stop."* Written to
+prevent waffle; it also banned the follow-up question that makes a call feel
+finished. Same shape as *"lead with just the soonest one"* (hid the second
+appointment) and *"prepare at most one appointment action at a time"* (disabled
+the visit tools).
+**Rule:** when adding a restrictive instruction, name what it must NOT suppress.
+
+## 2026-09-15 — a booted container is not a deployment check
+`railway up` from the wrong worktree shipped old `main` and rolled production
+back three days; the boot log looked perfect. Verify with a route that exists
+ONLY in the intended build (`/admin/voice-test` → `engine: "live"`).
+
+## 2026-09-15 — verify capability claims by running them, not by reading code
+Asked "can she move three appointments, or only some?", writing a test found the
+answer AND a real bug: the closest plan was being demoted behind an earlier one,
+so Erica would have offered the wrong option. Two more defects surfaced the same
+way (consecutive-slot alternatives, a divide-by-zero in `spreadAcross`).

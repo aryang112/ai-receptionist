@@ -4289,3 +4289,484 @@ call the Phorest salon API. No STT/TTS vendors — it's a single speech-to-speec
 - fbc5bbc lessons: Phorest notes are write-only (POST only; no delete/edit verb; appointment PUT ignores `notes`)
 - Verified live this session: note plumbing works end-to-end (user saw the note in the Phorest app); TPM starvation reproduced on a real call (40k tier, drained to 1,596 → response failed 2×, silence) — OWNER tier raise now urgent
 - All 124 tests green + tsc clean after each change; dev server hot-reloads via tsx watch
+
+---
+# ⚠️ WORKTREE SPLIT — read this
+Entries below were written during the 2026-09-14/15 session into the **main**
+checkout's `state.md` (`~/Documents/Dev/ai-receptionist`) while all the CODE
+landed on THIS branch (`codex/gpt-live-taste-test`). They are ported here so the
+deployed line carries its own history. Main's copy holds the same text.
+**Production deploys from THIS worktree only** — `railway up` from the main repo
+silently ships old `main` (it happened on 2026-09-15, see the 20:05 entry).
+---
+## 2026-09-14 ~19:38 — Transfer to Richa was disabled in prod (diagnosis + fix)
+- **Symptom:** live test calls — Erica says "I'm not able to place that call in
+  this test"; the failed-transfer failback fix could not be exercised.
+- **Root cause:** Railway had `OWNER_TRANSFER_MODE=simulate` (GPT-Live taste-test
+  guard). `twilioStream.ts` short-circuits BEFORE the Twilio `<Dial>`, records
+  `transfer_to_owner ok:true {simulated:true}`, and returns a note instructing
+  Erica to tell the caller the transfer was simulated. No dial ⇒ no ring-out ⇒
+  `POST /twilio/dial-status` never fires ⇒ `transferFailed=1` failback is
+  unreachable by design.
+- Evidence: call `CA5e37463cdbd15ea42fadfdc15083e0ad` (19:26 ET) — transcript +
+  `tools:[{transfer_to_owner, ok:true}]`, `outcome:none`. Window/vacation gates
+  both passed (19:26 is inside 09:00–21:00; vacation ended 09-09).
+- **Note:** prod runs branch `codex/gpt-live-taste-test` (worktree
+  `../ai-receptionist-live-2026-09-12`), NOT `main` — main has no GPT-Live code,
+  no `src/voice/`, and no `OWNER_TRANSFER_MODE`. Don't debug prod from main.
+- **Fix applied (Aryan-approved):** `OWNER_TRANSFER_MODE=real` on Railway +
+  `railway redeploy` (deployment `9b5f90c8`, 23:36 UTC). Verified live via
+  `GET /admin/voice-test` → `ownerTransfers:"real"`.
+  `OWNER_SMS_MODE` deliberately left `simulate` (no texts to Richa while testing).
+- **Still open:** `OWNER_TRANSFER_MODE` should go back to `simulate` when taste
+  testing resumes. `PHOREST_WRITE_MODE=real` — test bookings hit the real
+  calendar (one Brow Threading 2026-09-15 18:00 booked during today's testing).
+
+## 2026-09-14 ~20:06 — Testing-window config (TEMPORARY — revert after testing)
+- `TRANSFER_WINDOW_END=23:00` on Railway (was unset ⇒ 20:00 default in this build).
+  Aryan asked for 11 PM so evening transfer testing is possible. **Revert to unset
+  (or 20:00) when testing ends** — until then a real 10 PM caller can ring Richa.
+- Still set from earlier today: `OWNER_TRANSFER_MODE=real`, `OWNER_SMS_MODE=simulate`.
+- Deployment `31b58bc8` (2026-09-15T00:04Z) carries both.
+- NOTE: this build's `isWithinTransferWindow` ALSO requires the salon to have hours
+  that weekday (`8607ef1`) — Sundays stay transfer-free regardless of the window.
+
+## 2026-09-14 ~20:08 — SMS readiness check on +1 410 304-6449 (voice number)
+- Number capabilities: SMS ✅ MMS ✅ Voice ✅ — one number can serve both lanes;
+  Twilio routes voice and SMS to independent webhooks. No conflict by design.
+- A2P 10DLC: brand `BN7913…` **APPROVED** (STANDARD); campaign `QE2c68…`
+  **VERIFIED**, use case `LOW_VOLUME`. Number IS in Messaging Service
+  `MGe6d6c080997f3dfa6469d103f06848c6` sender pool. Registration is NOT a blocker.
+- ❌ **Inbound SMS webhook is still Twilio's demo URL**
+  (`https://demo.twilio.com/welcome/sms/reply`). Anyone texting the salon number
+  right now gets Twilio's canned demo reply. Messaging Service
+  `inbound_request_url` is also unset.
+- ⇒ Before the SMS lane goes live: point the number's SMS webhook at the app's
+  `/twilio/sms` route (or set the Messaging Service inbound URL) — the SMS lane
+  itself (`aab4d04`+) is also still undeployed.
+
+## 2026-09-14 20:33 ET — "technical problem" on call CA55a06facf701baf045781615ca3b96e3
+- Cause: `GPT-Live session.start acknowledgment timed out` — the OpenAI Live
+  WebSocket CONNECTED (so auth/network fine), but OpenAI never acked
+  `session.start` inside `startupTimeoutMs` (hardcoded **5 s**,
+  `liveSession.ts:199`). Erica's session never came up ⇒ fatal error ⇒ failover.
+- Normal ack latency on this build: **360–790 ms** (four prior calls today).
+  This one exceeded 5,000 ms — a 6–14× outlier. OpenAI status page: operational.
+  First call on new container `2c5b361cf27d` (booted 00:06Z, call at 00:33Z, so
+  not a cold start). Single occurrence so far — treat as transient until it repeats.
+- ⚠️ SIDE EFFECT of today's temp config: the fatal-error failover is gated by
+  `isWithinTransferWindow()`. With `TRANSFER_WINDOW_END=23:00` +
+  `OWNER_TRANSFER_MODE=real`, a fatal error at 8:33 PM **dialed Richa's real
+  phone** ("technical problem — let me connect you with the salon"). Under the
+  old 20:00 window it would have apologized and hung up instead.
+- If it recurs: `startupTimeoutMs` has no env override — would need a small code
+  change in `src/voice/liveSession.ts` to make it tunable / raise it.
+
+## 2026-09-14 ~21:00 ET — 🔴 P0 availability bug found during owner testing
+Three findings from calls `MZ44e5a955…` (00:51Z) and `MZ78d40a7a…` (00:53Z):
+
+1. **🔴 Erica offers times Phorest never said were free** (root cause).
+   `snapSlotsToGrid` ceil-rounds real free starts to :00/:15/:30/:45 and the
+   snapped value is both spoken AND written. Verified live against Phorest for
+   2026-09-15: real starts `17:10 17:25 17:40 17:55 18:05 18:20 18:35 18:50`
+   → offered `5:15 5:30 5:45 6:00 6:15 6:30 6:45`. Zero overlap.
+   The gaps between real starts are OCCUPIED appointments — 5:30 PM is another
+   client's slot (the "Loretta Douglas" collision the owner spotted), 6:00 PM
+   held the owner's own two bookings and was STILL being offered.
+   Availability and writes are both scoped to `PHOREST_PRIMARY_STAFF_ID`, so a
+   second stylist does NOT explain it. See `tasks/lessons.md` 2026-09-14.
+   Repro: `npx tsx scripts/diag-visit-2026-09-15.ts`.
+2. **🟠 Same-client double-booking.** `list_appointments` returned Brow Threading
+   6:00 PM; 30 s later `book_appointment` wrote Lip Threading at 6:00 PM for the
+   same client. No check that the caller is already busy. Live records:
+   `beAHoej1teD8QaXaRM9j7Q` (Brow) + `3mh20Q3lrQ7kVEy9VMP9Fg` (Lip), both 6 PM
+   2026-09-15 — **real calendar rows, need cleanup.**
+3. **🟡 Reschedule named only one appointment.** Tool returned BOTH (count=2);
+   the model narrated only Lip Threading. Data was correct — model/prompt issue,
+   matches register item [08] whole-visit planning.
+   No write occurred on that call (no `reschedule_appointment` in the log), so
+   the other client's 5:30 PM slot was NOT touched.
+
+**Blocks the voice production push** — item 1 can double-book real customers.
+
+## 2026-09-14 ~22:30 ET — ✅ Loretta bug FIXED (commit 7623802, branch codex/gpt-live-taste-test)
+Two-part fix — one setting, one code change:
+
+**1. Phorest setting (owner changed, verified reaching our API).**
+Settings → Online → Booking Rules → **"Booking slots: show available slots
+every…" 0 min → 5 min**. Verified with `scripts/diag-visit-2026-09-15.ts`:
+2026-09-15 went from 8 odd-minute starts to **20 clean 5-minute starts**, and
+the occupied times (17:30/17:35 = another client, 18:00 = the owner's own
+double-booking) are now visibly ABSENT. NOTE: Minimum Gap Time was briefly set
+to 5 min by mistake — must be back at **0**.
+
+**2. Code (commit 7623802).** `snapSlotsToGrid` deleted.
+- `core/slots.ts`: mutating snap → `isOnGrid` / `isOnGridValue` /
+  `partitionByGrid` (selection only, nothing is moved).
+- `fetchOpenSlots`: Phorest starts pass through verbatim.
+- `selectOfferedSlots`: lead with quarter-hours; fall back to real odd-minute
+  starts only when < `MIN_OFFERED_SLOTS` (3) tidy ones exist; an explicit
+  `preferredTime` still wins with the nearest REAL starts. Shared by the
+  ordinary AND nearby-date paths — rule defined once.
+- `suggest_availability` note gains squeeze-in coaching ONLY when odd-minute
+  starts surface (coaching-rides-with-data idiom; no global prompt prose).
+
+**No prompt conflict.** The prompt already said "never round, shift, or
+approximate" and "never invent a time" — only the code was violating it.
+
+Verified live (`scripts/sim-availability.ts 2026-09-15`): normal ask →
+5:00/5:15/5:45/6:15/6:30/6:45; asking for the taken 5:30 → nearest real starts,
+never 5:30; **zero invented times on any path**. 762 tests green, tsc clean.
+
+**Still open:**
+- 🟠 Same-client double-booking has NO guard (register item 09 / R03). The two
+  6 PM rows `beAHoej1teD8QaXaRM9j7Q` + `3mh20Q3lrQ7kVEy9VMP9Fg` on 2026-09-15
+  are still on the real calendar and need cancelling.
+- 🟡 Reschedule narrated only one of two appointments (register item 08).
+- ⚙️ NOT DEPLOYED — prod still runs the 09-13 build. Needs `railway up`.
+- ⏰ `TRANSFER_WINDOW_END=23:00` + `OWNER_TRANSFER_MODE=real` still temporary.
+
+## 2026-09-14 ~22:45 ET — Availability fix VERIFIED in production ✅
+Call `CA57b7d8e37eb91ed3ecea117a3cdd3f34` on the new build: caller asked for
+5:30 PM; Erica said *"5:30 isn't available, but I can move both to 5:25 or
+5:40"* — the exact behaviour the old build got wrong. Zero invented times.
+Side effect: the owner's two 6:00 PM rows are no longer double-booked (moved to
+5:45 lip / 5:50 brow, back-to-back), so that cleanup item is closed.
+
+## 2026-09-14 ~22:50 ET — 4 new findings from the same call (NOT yet fixed)
+Transcript + logs for `CA57b7d8e37eb91ed3ecea117a3cdd3f34`.
+
+**F1 — only the soonest appointment is named. ROOT CAUSE FOUND, not a model
+failure.** Two instructions explicitly order it:
+- prompt line ~738: `RESCHEDULE: list_appointments → lead with the soonest,
+  confirm it's the one they mean (if not, mention the next) → …`
+- `handleListAppointments` success note: *"Sorted soonest-first. Lead with just
+  the soonest one … never a long list."*
+`list_appointments` DID return both (count=2). Erica obeyed. Fix = make the
+note/flow VISIT-aware: appointments sharing the soonest DATE are one visit and
+must be named together; "lead with the soonest / no long list" should only
+apply ACROSS different days.
+
+**F2 — narration between the two writes.** Sequence: reschedule lip → success →
+spoke to caller → suggest_availability brow → spoke → reschedule brow. Two
+separate confirmations, ~50 s apart.
+KEY EVIDENCE it is fixable: at 02:41:59 the model emitted TWO
+`suggest_availability` calls in the SAME millisecond (…115919 / …115920), and
+`liveSession.ts` already batches ("One continuation only after every result in
+this backend response batch"). So parallel tool calls WORK today — the model
+serialises the WRITES only because the prompt walks it through one at a time.
+Real constraint: moving appt A changes availability for B, so a blind parallel
+write is unsafe — the server must compute the JOINT plan before writing.
+
+**F3 — "together" not inferred.** Caller had to ask twice ("just make them
+connected together") before Erica put them back-to-back. Final 5:45/5:50 was
+correct but owner-steered.
+
+**F1–F3 are one problem: the unit of work is the APPOINTMENT, should be the
+VISIT.** Proposed: server-side visit planning (find times where the whole visit
+fits consecutively) + one grouped write, serialised. REUSE: the same primitive
+fixes the same-client double-booking found earlier today (register item 09/R03)
+— booking lip+brow currently has the identical flaw. One build, two bugs closed.
+
+**F4 — call does not close on "All right". NEEDS MORE DATA.** Caller said
+"All right" at +142.7 s; Erica produced NO response at all; call ended 22 s
+later by caller hangup. No `end_call`, no silence check-in logged
+(`SILENCE_CHECKIN_MS`=20000). Note this build has NO `wait_for_user` tool, so
+deliberate silence is not an available model choice — the empty turn is
+suspicious and may be GPT-Live turn detection, not prompt. Prompt says end_call
+only when caller is "CLEARLY done"; a bare "All right" after a completion
+summary is not covered. Needs: response-level logging for empty turns, and/or a
+recording listen.
+
+## 2026-09-14 ~23:20 ET — F4 ROOT CAUSE: Erica is forbidden from closing on her own
+Investigated `CA57b7d8e37eb91ed3ecea117a3cdd3f34` (+142.7 s "All right" → total
+silence → caller hung up 22 s later). It IS the prompt, and it is GPT-Live
+specific.
+
+**Direct cause — `src/voice/livePrompts.ts:188` (Delegation policy).** In the
+Live split the voice model may NOT end a call itself; closing belongs to the
+backend:
+> "…and call closing. **Ending the phone connection is an application action:
+> always delegate when the caller says "that is all", "goodbye", or asks to
+> hang up.**"
+Three literal triggers. "All right" / "okay" / "great" / "thanks" match NONE.
+So the voice model had no permitted action for that turn and emitted nothing.
+This is why the silence was TOTAL rather than a wrong reply.
+
+**Compounding — main prompt biases hard toward silence:**
+- L679 `LET THE CALLER LEAD`: "…An empty or noise-only turn gets silence, not
+  another greeting, question, or menu. Clarify only intelligible but INCOMPLETE
+  addressed speech." — "All right" is complete but contentless: unhandled.
+- L698 `UNCLEAR AUDIO`: "Empty audio, noise, media, silence, and side
+  conversation get no response."
+- L711 `end_call`: "only when caller is CLEARLY done."
+
+**Missing rule:** nothing routes her into `CLOSE` (L744) after she COMPLETES a
+task. She confirmed the new times as instructed, then stopped. CLOSE only fires
+"when clearly done" / "otherwise ask once if they need anything else" — but no
+rule says a finished booking/reschedule/cancel enters CLOSE.
+
+**Safety net too slow to matter.** `SILENCE_CHECKIN_MS`=20 000 and
+`lastActivityAt` resets on caller speech, so the check-in was due ~02:44:00 —
+the same second the caller hung up. No `🤫 silence check-in` line in the logs.
+Even working perfectly that is 20 s of dead air after a finished task.
+
+**Proposed fix — prompt/notes only, no code:**
+1. `livePrompts.ts` delegation triggers: add closing acknowledgements
+   ("all right", "okay", "great", "thanks", "perfect", "sounds good", "that's
+   it") — but ONLY after a completed+confirmed task, so mid-conversation
+   acknowledgements never end a call.
+2. Completed-action result notes (book/reschedule/cancel/reschedule_visit):
+   after confirming, ask ONCE if they need anything else. Coaching-rides-with-
+   data idiom ⇒ zero global prompt tokens (budget has ~9 tokens spare).
+3. Leave end_call's "CLEARLY done" bar alone — the backend still decides; this
+   only lets the front-end hand the turn over.
+
+RISK to respect: closing too eagerly is worse than closing late. Ambiguous
+acknowledgement ⇒ "anything else?", never a direct hangup.
+
+## 2026-09-15 ~00:05 ET — F4 FIXED (commit 96dc707) — two sentences, no code
+- **Voice model** (`livePrompts.ts` delegation policy): now delegates the
+  done-close whenever the caller SIGNALS they are finished, including "a bare
+  acknowledgement after something you completed". Describes the situation, not
+  a keyword list (a list would miss "cool"/"yep"/"lovely" and grow forever).
+- **Thinking model** (backend end_call bullet): "A request you have completed
+  and confirmed, followed by an acknowledgement that asks for nothing further,
+  counts as clearly done; when it is genuinely unclear, ask once whether they
+  need anything else instead of ending." end_call's bar otherwise untouched.
+- **Both prompts were AT their caps** (voice 899/900, main 4186/4200) so
+  nothing could be appended. The delegation policy already restated "ending is
+  an application action" one sentence after "the backend handles … call
+  closing" and repeated the delegate-on-finish idea twice — merging those
+  reclaimed 170 chars and paid for the wider trigger. **Voice prompt back to
+  899/900, net zero.**
+- Deliberately NOT done: no per-tool closing notes (one rule × four copies =
+  drift); no change to `SILENCE_CHECKIN_MS` (dead-air backstop, not a
+  conversation rule — shortening clips callers who pause to think).
+- 777 tests green, tsc clean. `livePrompts.test.ts` now asserts the RULE and
+  its widened trigger rather than the old sentence.
+
+### ⚠️ Deploy state
+`7623802` (slot integrity) is LIVE. `8b6f3bf` (visit planning) and `96dc707`
+(closing) are committed but **NOT deployed** — owner runs
+`railway up --service erica --detach` from the live worktree; the harness
+blocks production deploys from the agent.
+
+## 2026-09-15 ~20:05 ET — deploy mishap + reschedule_visit was unreachable
+
+**⚠️ Wrong directory deployed first.** `railway up` was run from
+`~/Documents/Dev/ai-receptionist` (main, 577693d) instead of the live worktree.
+BOTH folders are linked to the same Railway service, so it silently rolled
+production back to Sept 12 — GPT-Live gone, Loretta bug live again. Caught by
+`/admin/voice-test` returning **404** (that route exists only on the live
+branch) while `/admin/api/calls` still returned 200.
+**Verification rule from now on: a booted container proves NOTHING. Hit an
+endpoint that exists only in the intended build.** Re-deployed from the live
+worktree; `/admin/voice-test` now reports `engine: live`.
+
+**✅ F1 confirmed fixed live** (call `CA4fc18ea61a5343563e751ca5721edcbe`):
+> "I see Brow Threading at 4:00 PM and Chin Threading at 4:05 PM tomorrow.
+>  Would you like to move the whole visit or just one service?"
+
+**🔴 F2/F3 failed — reschedule_visit was never called.** Erica said
+*"Sorry, I'm unable to check a combined opening for both services right now."*
+Root cause was NOT the tool list (`liveToolDefinitions` only strips
+book/reschedule/cancel_appointment, so reschedule_visit passed through). Two
+BACKEND PROMPT rules forbade it:
+- "Never call a raw booking, reschedule, or cancellation write tool."
+- "prepare at most one appointment action at a time. Do not create an aggregate
+  plan or promise combined feasibility without returned evidence."
+She obeyed both, had no path left, and apologised.
+
+**Fixed in `dae29c7`** — backend prompt carve-out naming reschedule_visit as
+the one exception, with its two-phase contract and "its returned options ARE
+the evidence of combined feasibility". Safe because
+`AppointmentProposals.execute` calls the SAME `handleReschedule`, so write
+guards are identical; the proposal layer's read-back/approve machine is
+replaced by reschedule_visit's own plan → confirmed gate.
+Guard test added so the ban cannot silently return.
+
+**LESSON:** adding a tool to `TOOL_DEFINITIONS` is not enough on the Live path
+— the BACKEND PROMPT must also permit it. Check `livePrompts.ts` BACKEND TOOL
+USE for conflicting bans whenever a write-ish tool is added.
+
+**Minor, not yet fixed:** caller said "both of them to 3 PM"; Erica then asked
+"What day would you like to move both appointments to?" — carry-over miss on a
+day already implied ("tomorrow" established earlier in the call).
+
+**NOT DEPLOYED:** `dae29c7`. Owner must run `railway up --service erica
+--detach` **from `~/Documents/Dev/ai-receptionist-live-2026-09-12`**.
+
+## 2026-09-15 ~20:35 ET — blocked-visit-time handling (commits fdfc73b, 78ecd3a)
+Owner asked: 3 × 10-min services, caller wants 3 PM, another client at 3:15 —
+does Erica shift the block? Tested rather than assumed. Two real defects found:
+
+1. **Alternatives were near-duplicates.** Ranking plans purely by distance from
+   the requested time returned **2:50 / 2:45 / 2:40** — three overlapping
+   versions of one answer — and never surfaced the run AFTER the obstacle.
+   Fixed: option starts must sit ≥ one whole visit apart (floor 15 min) ⇒
+   `['14:50', '15:25']`. Same reasoning as the original selectOfferedSlots
+   spread guard.
+2. **She never said the requested time was the problem.** Plan result now
+   carries `requestedUnavailable` (spoken form, e.g. "5:30 PM") and the note
+   tells her to say so in the same breath as offering the nearest fit — "never
+   present an alternative as if it were the time they asked for".
+
+Already worked, now covered directly: shifting the whole run (3 PM blocked →
+2:50/3:00/3:10, every start real, 3:00 never offered); N appointments (3 with
+10/15/20-min services); subset moves (2 of 3 → exactly 2 writes, the unnamed
+one never touched).
+
+**Deliberate limitation:** the planner keeps a visit CONTIGUOUS and will not
+split it around an obstacle (two before, one after). Splitting makes the caller
+wait mid-visit; if wanted, it should be a deliberate offer, not a silent one.
+
+**Known perf note:** availability is fetched once per appointment sequentially
+(~150–350 ms each). Fine at 2–3; parallelise if 5-service visits become normal.
+
+**NOT DEPLOYED:** `dae29c7`, `fdfc73b`, `78ecd3a`. Deploy from
+`~/Documents/Dev/ai-receptionist-live-2026-09-12` ONLY.
+
+## 2026-09-15 ~20:55 ET — closing: the missing half (commit 2cbf7b1)
+`96dc707` taught Erica to close when the CALLER speaks first ("all right").
+Nothing told her that FINISHING a job is itself the cue to lead — so she
+confirmed a completed reschedule and went silent. Owner spotted it.
+
+Why nothing covered it:
+- book/reschedule/cancel success notes only describe what to do if the caller
+  LATER wants to change the booking — nothing about the conversation ending.
+- `CLOSE` only fires "when clearly done"; no rule sets that state.
+- **Self-inflicted:** `8b6f3bf`'s reschedule_visit note said "…then stop",
+  written to stop rambling but it forbade the follow-up question outright.
+
+Fixed in the BACKEND closing rule (uncapped section — production prompt
+untouched, voice still 899/900):
+> "When the caller's request is fully handled — the booking, change,
+> cancellation, or message is done, or their question is answered and nothing
+> is pending — take the lead: ask once whether they need anything else, then
+> wait. **Never ask this after an intermediate step, while any part of their
+> request is still open, or a second time in the same call.**"
+
+The guard is the important half: without it a mid-booking price question would
+trigger "anything else?" and derail the flow. Covers short calls too (hours,
+price) which previously just trailed off.
+`then stop` → `then ask once if they need anything else` in the visit note.
+Tests assert the rule, the guard, and the removal of "then stop". 785 green.
+
+**NOT DEPLOYED (4 commits):** `dae29c7`, `fdfc73b`, `78ecd3a`, `2cbf7b1`.
+Deploy from `~/Documents/Dev/ai-receptionist-live-2026-09-12` ONLY — deploying
+from the main repo silently rolls production back (see 20:05 entry).
+
+## 2026-09-15 ~21:00 ET — multi-appointment coverage: where the gaps are
+Owner asked whether the visit work covers book / reschedule / cancel. It covers
+**reschedule only**. Schema check: only `reschedule_visit` takes an array;
+`book_appointment`, `cancel_appointment` and `log_running_late` are all single.
+
+- **RESCHEDULE — done** (`reschedule_visit`, 8b6f3bf + dae29c7 + 78ecd3a).
+- **BOOK — the dangerous half is fixed, the smooth half is not.** Same-time
+  double-booking is now PREVENTED because availability is truthful. Proven in
+  tonight's log: Brow booked 16:00 → the very next `suggest_availability` for
+  Chin returned `3:25…3:50, 4:05…4:20` with **3:55 and 4:00 absent** (the new
+  brow appointment), and Chin went to 16:05. But there is no joint plan: she
+  books one, re-checks, books the next, narrating between — the same UX the
+  visit tool removed for reschedules. Adjacency tonight was luck (nearest to
+  the asked time), not design.
+- **CANCEL — not grouped.** `list_appointments` now names both (visit-aware
+  note), but cancelling is one call each with narration between and two
+  confirmations. No scheduling risk — purely conversational.
+
+Gaps the owner had NOT raised:
+- **`log_running_late` takes ONE appointmentId.** A caller with a two-service
+  visit running late gets only one appointment flagged; Richa's FYI text names
+  one service and one time. Misleading for a grouped visit.
+- **Adding a service to an existing visit** ("I have brow at 4, add lip right
+  after") — no special handling; treated as an unrelated booking.
+- **Mixed operations** (cancel one, move the other in the same call) — each
+  runs separately; no combined read-back.
+
+Suggested order if pursued: cancel grouping (cheapest, no planning needed) →
+book-visit planning (most common call) → running-late for a visit.
+
+## 2026-09-15 ~21:30 ET — multi-appointment coverage completed (commit 423c7c1)
+All three write paths now handle a sitting, plus running-late.
+- **book_visit** — booking twin of reschedule_visit; the direct fix for the two
+  stacked 6 PM appointments (booking one at a time only asks whether each
+  service is individually free, never whether they fit together). Two phases,
+  non-overlapping option spread, "will not all fit at 5:30" honesty, refuses to
+  write without an identified caller.
+- **cancel_visit** — no planning phase; one yes, one result, same scope
+  discipline (only ids the caller agreed to).
+- **log_running_late `alsoAppointmentIds`** (optional) — the SAME note on every
+  appointment in the sitting. Previously Richa saw a late flag on the brow
+  threading and nothing on the lip threading five minutes later.
+
+All execute sequentially through the existing single-appointment handlers, so
+every write guard applies unchanged; partial success reported honestly.
+**Backend prompt updated in the same commit** — dae29c7's lesson: a tool the
+backend is forbidden to call is a tool that does not exist. Tests now assert
+all three tool names survive in the backend prompt. 792 green, tsc clean.
+
+## 2026-09-15 ~21:35 ET — GPT-5.6 Terra/Luna deprecation rumour: FALSE
+Owner asked about Sam Altman "discontinuing Luna or Terra". Searched: **no
+deprecation**. What actually happened was a **price cut on 2026-07-30** — Luna
+−80% ($1/$6 → $0.20/$1.20 per M tokens), Terra −20% ($2.50/$15 → $2/$12).
+OpenAI's deprecations page lists no shutdown date for sol/terra/luna; GPT-6
+Astra shipped 2026-09-03 above Sol without a GPT-5.6 sunset notice.
+Our config is `OPENAI_LIVE_BACKEND_MODEL=gpt-5.6-terra` — **not affected**.
+NOTE: Luna is now ~10× cheaper than Terra on both input and output. The
+taste-test harness already supports switching (`POST /admin/voice-test/variant`
+with terra|luna|realtime), so a Luna A/B is cheap to run if cost matters.
+
+## 2026-09-15 ~22:00 ET — POST-GPT-LIVE PROMPT AUDIT (commits 1f201b8, 626890e)
+First audit since the Live split. All prior audits (Sept 1, Sept 3) predate it.
+
+### 🔴 STRUCTURAL FINDING — read this before editing any prompt
+`livePrompts.ts` builds its **OWN** `CONVERSATION FLOW` block for the backend
+instead of reusing the production prompt's SERVE section. **Every edit to SERVE
+in `twilioStream.ts` is INERT on the Live path** — including this session's
+RESCHEDULE rewrite. The visit-aware `list_appointments` note worked live only
+because coaching rides with TOOL RESULTS, not the prompt.
+⇒ When changing behaviour: edit `livePrompts.ts` (backend flow) or a tool note.
+⇒ The main prompt now only really drives the Realtime fallback path.
+
+### Conflicts fixed (7)
+1. **"Do not build a separate visit plan; prepare at most one appointment
+   action at a time"** — a SECOND copy of the ban `dae29c7` fixed, sitting
+   EARLIER in the prompt. Would have re-broken all three visit tools.
+2. RESCHEDULE "identify the exact one they mean" (singular).
+3. CANCEL "prepare one cancellation proposal" — no route to `cancel_visit`.
+4. BOOK "preparing one exact proposal" — excluded `book_visit`.
+5. RUNNING LATE "find today's appointment" (singular), no `alsoAppointmentIds`.
+6. Live "suggest another task" vs backend "ask once whether they need anything
+   else" → "propose a specific task".
+7. A farewell now outranks the anything-else offer (register item 14).
+
+### Defects found by the scenario sweep (`scripts/sim-scenarios.ts`)
+- **Register item 05 (open since Sept 10) REPRODUCED + FIXED.** "eyebrow
+  threading and upper lip" → stylist **MANU**: the word **"and" is 2 edits from
+  "manu"** and token matching allowed 2. The bound can't be tightened (phone
+  renders Richa as "Richard"/"Rishka", both 2 edits), so filler words no longer
+  reach the matcher. Now returns **"Brow Thread + Lip Thread"** as closest.
+- **Ten CONSECUTIVE starts** offered when the requested time was gone
+  (12:55/1:00/1:05/1:10 for a 6:45 PM ask). Nearest few kept, rest spread.
+  Scoped to the same-day list — nearby-DATE summaries must stay close.
+- **Latent divide-by-zero in `spreadAcross`** (mine, 78ecd3a): `max === 1`
+  divides by `(max-1)` → `list[NaN]`. Caught by the nearby tests.
+
+### Verified healthy by the same sweep
+eyebrow threading → Brow Threading · eyebrow tattoo → Micro Blading/Shading ·
+microblading touch-up → the 6-month touch-up (not the full treatment) ·
+"henna brows" → no silent substitution (O06) · unknown service and closed day
+both carry correct coaching · "Richa" correctly read as a person.
+
+### Still open
+- **Register item 15 (narration)** — `5769300` focused cleanup confirmed NOT in
+  the deployed line. Heard live: "Okay, checking that", "Okay, rescheduling for
+  you now". Prompt already forbids it; this is a compliance gap, not a conflict.
+- **Item 05's deeper half:** the PRICE path resolves "brow threading and upper
+  lip" to the bundle while the AVAILABILITY path does not — the two tools still
+  use different service selection. Register recommends unifying them.
+- `scripts/sim-scenarios.ts` is the reusable harness for this (read-only).
+
+**NOT DEPLOYED (7 commits):** dae29c7, fdfc73b, 78ecd3a, 2cbf7b1, 423c7c1,
+1f201b8, 626890e.

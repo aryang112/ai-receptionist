@@ -189,9 +189,22 @@ Caller dials Twilio number
   hours, closedDates and vacations for the single-provider working-day calendar.
   The window can extend before opening/after closing on those days. Shared by
   prompt status, normal transfer and technical-error failover.
-- **slots.ts** — `snapSlotsToGrid(slots, gridMin)` / `ceilToGrid`. Snaps Phorest's
-  re-anchored odd-minute availability starts UP to a clean clock grid before Erica
-  offers them (see lessons.md). Called in `handleSuggestAvailability`.
+- **slots.ts** — `isOnGrid` / `isOnGridValue` / `partitionByGrid`.
+  **PRESENTATION ONLY — nothing here may MOVE a start time.** Replaced
+  `snapSlotsToGrid` on 2026-09-14: that version rounded Phorest's real free
+  starts UP to a clean grid and the rounded value was then spoken AND booked,
+  which double-booked live clients (the "Loretta call" — Phorest anchors its
+  grid to appointment ENDS, so the gaps between free starts are other people's
+  appointments). Source tidiness now belongs to the salon's Phorest *Booking
+  slots* interval (set to 5 min). `selectOfferedSlots` only CHOOSES which real
+  starts to read out: quarter-hours lead, odd minutes stay in reserve.
+- **visits.ts** — `clusterSameVisit(entries, maxGapMin)` groups a day into
+  sittings (`SAME_VISIT_GAP_MIN` = 30); `planConsecutive(available, durations,
+  preferred, max)` places services back-to-back where EVERY placed start is a
+  start Phorest actually returned. Options never overlap each other, so the
+  caller hears real alternatives rather than three versions of one.
+  **Togetherness belongs to the appointments, not the day** — a noon and a 5 PM
+  on one date are two visits and must never move as a pair.
 - **logger.ts** — pino logger. In dev it tees stdout → `data/dev.log`
   (truncated on every boot, gitignored) so any call can be inspected after the
   fact. `LOG_FILE=off` disables; skipped in production/test. `npm run logs`
@@ -335,4 +348,44 @@ re-check" (A1).
 - `twilioStream.ts`: real Live fresh checks fail closed; caller-ID/phone-match binding gates explicit client IDs; uncertain writes invalidate warm appointment lists. Live tool notes retain prepare/confirm for subsequent changes.
 - `env.ts`: PHOREST_WRITE_MODE=real allows direct callers; independent OWNER_TRANSFER_MODE and OWNER_SMS_MODE keep communications simulated during this pilot. Digest/summary are disabled in runtime.
 - `controller-probe.mjs`: hosted real mode requires explicit PROBE_ALLOW_REAL_BACKEND=true; default remote refusal protects against mistaken reliance on local simulate settings.
-- Grouped visits remain a design in `docs/GPT_LIVE_GROUPED_VISIT_PLAN_2026-09-12.md`, not runtime functionality.
+- Grouped visits are now RUNTIME functionality (2026-09-15), superseding
+  `docs/GPT_LIVE_GROUPED_VISIT_PLAN_2026-09-12.md`: `book_visit`,
+  `reschedule_visit` (both two-phase — plan, then one yes, then confirmed) and
+  `cancel_visit` (single phase, `confirmed` required). All execute sequentially
+  through the existing single-appointment handlers, so every write guard applies
+  unchanged, and partial success is reported honestly. `log_running_late` takes
+  optional `alsoAppointmentIds` so a late caller's whole sitting is noted.
+  ⚠️ Each needed an explicit carve-out in `livePrompts.ts` → BACKEND TOOL USE:
+  the backend bans raw write tools, so a tool it may not call does not exist.
+
+## Prompt layers (GPT-Live) — read before editing any prompt
+- `twilioStream.ts` `buildInstructions()` builds the PRODUCTION prompt. Budget
+  ~4200 est. tokens, enforced by `twilioStream.prompt.test.ts`.
+- `livePrompts.ts` `buildLivePrompt()` — the VOICE model's prompt. Budget 900
+  est. tokens. Conversation only; it delegates everything factual.
+- `livePrompts.ts` `buildBackendPrompt()` — the THINKING model's prompt: a
+  filtered copy of the production prompt **plus its own CONVERSATION FLOW and
+  BACKEND TOOL USE sections**, which are NOT budget-capped.
+- ⚠️ **`livePrompts.ts` REPLACES the production prompt's `SERVE` section.**
+  Editing `SERVE` in `twilioStream.ts` is inert on the Live path. Change Live
+  behaviour in `livePrompts.ts`, or (preferred) in a tool-result note, which
+  rides with the data and only appears when relevant.
+- `livePrompts.test.ts` pins a SHA of the production prompt as a
+  deliberate-change tripwire; update it only with an intentional edit and say
+  what changed.
+- Render what the model actually receives:
+  `node --env-file=.env --import tsx scripts/render-live-prompts.ts`
+
+## Read-only diagnostics added 2026-09-14/15
+- `scripts/sim-scenarios.ts` — production scenarios (register item numbers)
+  through the REAL handlers against REAL Phorest reads. Re-run after ANY service
+  matcher or prompt change.
+- `scripts/sim-visit.ts` — visit planning against the live calendar.
+- `scripts/sim-availability.ts` — slot integrity; proves no invented times.
+
+## Deploying
+`railway up --service erica --detach` from
+`~/Documents/Dev/ai-receptionist-live-2026-09-12` **only**. The main checkout is
+linked to the same Railway service and silently ships old `main`. Verify with
+`GET /admin/voice-test` (live-branch-only route) → `engine: "live"`; a booted
+container proves nothing.
