@@ -55,6 +55,10 @@ function mockAppointments(
   );
 }
 
+function result0Start(_call: any) {
+  return '17:15';
+}
+
 const ONE_SITTING = [
   { appointmentId: 'appt-lip', serviceName: 'Lip Threading', timeDisplay: '6:00 PM' },
   { appointmentId: 'appt-brow', serviceName: 'Brow Threading', timeDisplay: '6:00 PM' },
@@ -135,6 +139,62 @@ describe('reschedule_visit', () => {
       { service: 'Brow Threading', time: '5:55 PM' },
     ]);
     expect(write).toHaveBeenCalledTimes(2);
+  });
+
+  it('handles THREE appointments, not just two', async () => {
+    mockAppointments([
+      { appointmentId: 'a1', serviceName: 'Lip Threading', timeDisplay: '6:00 PM' },
+      { appointmentId: 'a2', serviceName: 'Brow Threading', timeDisplay: '6:10 PM' },
+      { appointmentId: 'a3', serviceName: 'Eyebrow Tinting', timeDisplay: '6:25 PM' },
+    ]);
+    const call = buildCall();
+    await call.handleListAppointments({ clientId: CLIENT });
+    mockSlots();
+    const result = await call.handleRescheduleVisit({
+      appointmentIds: ['a1', 'a2', 'a3'],
+      date: DATE,
+      preferredTime: '17:15',
+    });
+    expect(result.planned).toBe(true);
+    expect(result.options[0].items).toHaveLength(3);
+    // Each service starts exactly where the previous one ends, and every
+    // placed start is a real Phorest start.
+    for (const item of result.options[0].items) {
+      const [h, m] = item.time.replace(/ (AM|PM)/, '').split(':').map(Number);
+      const v = `${String(h + 12).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      expect(REAL).toContain(v);
+    }
+  });
+
+  it('moves only the SUBSET the caller agreed to, leaving the rest alone', async () => {
+    const write = vi
+      .spyOn(phorest, 'updateAppointment')
+      .mockResolvedValue({ ok: true } as any);
+    mockAppointments([
+      { appointmentId: 'a1', serviceName: 'Lip Threading', timeDisplay: '6:00 PM' },
+      { appointmentId: 'a2', serviceName: 'Brow Threading', timeDisplay: '6:10 PM' },
+      { appointmentId: 'a3', serviceName: 'Eyebrow Tinting', timeDisplay: '6:25 PM' },
+    ]);
+    const call = buildCall();
+    await call.handleListAppointments({ clientId: CLIENT });
+    mockSlots();
+    await call.handleRescheduleVisit({
+      appointmentIds: ['a1', 'a3'],
+      date: DATE,
+      preferredTime: '17:15',
+    });
+    const result = await call.handleRescheduleVisit({
+      appointmentIds: ['a1', 'a3'],
+      date: DATE,
+      startTime: result0Start(call),
+      confirmed: true,
+    });
+    expect(result.rescheduled).toBe(true);
+    expect(result.moved).toHaveLength(2);
+    // a2 was never named to the tool, so it must never be written.
+    expect(write).toHaveBeenCalledTimes(2);
+    const movedIds = write.mock.calls.map((c: any) => c[0]);
+    expect(movedIds).not.toContain('a2');
   });
 
   it('refuses appointments this call never surfaced', async () => {
