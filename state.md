@@ -4770,3 +4770,11 @@ both carry correct coaching · "Richa" correctly read as a person.
 
 **NOT DEPLOYED (7 commits):** dae29c7, fdfc73b, 78ecd3a, 2cbf7b1, 423c7c1,
 1f201b8, 626890e.
+
+## 2026-09-15 ~21:45 — REVIEW of the post-GPT-Live audit (Jarvis / Fable 5.1, read-only)
+- Wrote `docs/AUDIT_REVIEW_2026-09-15.md` — verdicts on audit §5. No code, no deploy, no config change.
+- Verified: 797 tests green, tsc clean, prod `/admin/voice-test` → engine live / terra / writes real / transfers real. Temporary transfer config (`OWNER_TRANSFER_MODE=real`, `TRANSFER_WINDOW_END=23:00`) is STILL in place.
+- **New defect found (read-only probe):** `resolveService("brow and lip")` → **match "Brow Wax and Lip Wax"**. The catalog's own "and" wins over the threading bundle whose "+" normalises away. Silent substitution class (O06). Not fixed.
+- Item 05 "two selectors" is a misdiagnosis: `get_prices` and `suggest_availability` share `resolveService`; they differ only in notOffered handling. Fix the resolver once.
+- Positions: keep two authored rule sets + shared computed facts (not one regex-transformed source); staff stopwords = safety net, real fix is length-scaled bound + gate on `closest`; closing judgement stays prose, mechanics (offer counter, farewell detect) server-side; `cancel_visit` SHOULD get a planning phase; three visit tools right, next step is visit tools accepting one service; enable `no-non-null-assertion`.
+- PENDING — action items: (1) Aryan decides which review recommendations to implement; (2) revert temporary transfer config when testing ends; (3) deploy-capability setup — see chat: unlink main worktree from Railway, standing deploy policy.
