@@ -124,6 +124,22 @@ describe('Live speech prompt', () => {
     expect(backendPrompt).toContain(
       "Call end_call({reason:'done'}) for a caller who is clearly done"
     );
+
+    // 2026-09-15 live call: Erica named both appointments correctly, then said
+    // "I'm unable to check a combined opening for both services right now".
+    // reschedule_visit WAS in the tool list, but the backend prompt said
+    // "Never call a raw booking, reschedule, or cancellation write tool" and
+    // "prepare at most one appointment action at a time" — so she obeyed and
+    // had no way to move a sitting. The carve-out must survive.
+    expect(backendPrompt).toContain(
+      'use reschedule_visit, not prepare_appointment_action'
+    );
+    expect(backendPrompt).toContain(
+      'reschedule_visit is the one exception'
+    );
+    expect(backendPrompt).toContain(
+      'never tell the caller you cannot check a combined opening'
+    );
     expect(backendPrompt).toContain("end_call({reason:'spam'}) for clear spam");
     expect(backendPrompt).toContain('Do not generate a pre-tool farewell');
     expect(backendPrompt).toContain('Follow the result note');
