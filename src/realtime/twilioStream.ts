@@ -793,16 +793,45 @@ async function getServiceCatalog() {
  * Only ever consulted on the notOffered path, so a real service name can
  * never be swallowed by this.
  */
+/**
+ * Ordinary conversation words are never a staff name, and a fuzzy match can be
+ * catastrophically confident when they collide.
+ *
+ * 2026-09-10 (register item 05) and reproduced 2026-09-15: "eyebrow threading
+ * and upper lip" resolved to the stylist MANU, because the word "and" is two
+ * edits from "manu" and the token threshold allows two. The caller was then
+ * asked which service they wanted — a service they had just named in full.
+ *
+ * The distance-2 boundary itself has to stay: phone transcription renders
+ * Richa as "Richard" and "Rishka", both two edits away. So the fix is to stop
+ * feeding filler words to the matcher, not to tighten the distance.
+ */
+const STAFF_MATCH_STOPWORDS = new Set([
+  'and', 'the', 'for', 'with', 'you', 'can', 'our', 'are', 'was', 'has',
+  'have', 'that', 'this', 'they', 'them', 'then', 'than', 'what', 'when',
+  'want', 'would', 'could', 'should', 'just', 'like', 'need', 'get', 'got',
+  'put', 'see', 'say', 'ask', 'one', 'two', 'all', 'any', 'but', 'not',
+  'now', 'out', 'off', 'over', 'into', 'from', 'about', 'please', 'thanks',
+  'thank', 'yes', 'yeah', 'okay', 'sure', 'also', 'some', 'more', 'much',
+  'very', 'next', 'last', 'back', 'book', 'time', 'date', 'today', 'plus',
+  'upper', 'lower', 'full', 'half', 'new', 'old', 'her', 'his', 'him',
+]);
+
 export function matchStaffName(
   query: string,
   staffNames: string[]
 ): string | null {
   const q = query.trim().toLowerCase();
   if (!q) return null;
+  // A bare filler word reaches the whole-query comparison below, which the
+  // token filter never sees — "and" alone is still two edits from "manu".
+  if (STAFF_MATCH_STOPWORDS.has(q)) return null;
   // Token-wise too: the model passes phrases like "Richa availability" or
   // "with Risha" (seen live 9:56 PM — whole-string distance never matches).
   // Tiny tokens are skipped so "a"/"at" can't false-hit a name.
-  const tokens = q.split(/[^a-z]+/).filter((t) => t.length >= 3);
+  const tokens = q
+    .split(/[^a-z]+/)
+    .filter((t) => t.length >= 3 && !STAFF_MATCH_STOPWORDS.has(t));
   for (const name of staffNames) {
     const n = name.trim().toLowerCase();
     if (!n) continue;
@@ -3293,6 +3322,8 @@ export class TwilioRealtimeCall {
   private spreadAcross(list: DateTime[], max: number): DateTime[] {
     if (max <= 0 || list.length === 0) return [];
     if (list.length <= max) return [...list];
+    // Guard the single-pick case: the even-step formula divides by (max - 1).
+    if (max === 1) return [list[Math.floor((list.length - 1) / 2)]!];
     const step = (list.length - 1) / (max - 1);
     return Array.from({ length: max }, (_, i) => list[Math.round(i * step)]!);
   }
@@ -3302,7 +3333,11 @@ export class TwilioRealtimeCall {
     available: DateTime[],
     date: string,
     preferredTime?: string,
-    max = 10
+    max = 10,
+    // Only the same-day list spreads its runners-up. A nearby-DATE summary is
+    // three slots standing in for a whole other day, where staying close to
+    // the caller's requested time is the point — see nearby.test.ts.
+    spreadAlternatives = false
   ) {
     // CRITICAL: don't just take the earliest N (that hid afternoon/evening
     // slots). If the caller asked for a time, return the slots CLOSEST to it;
@@ -3317,13 +3352,37 @@ export class TwilioRealtimeCall {
     if (pref && pref.isValid) {
       // An explicit request wins over tidiness: the caller asked for a time,
       // so answer with the REAL starts nearest it, on-grid or not.
-      picked = [...available]
-        .sort(
-          (a, b) =>
-            Math.abs(a.toMillis() - pref.toMillis()) -
-            Math.abs(b.toMillis() - pref.toMillis())
+      const byDistance = [...available].sort(
+        (a, b) =>
+          Math.abs(a.toMillis() - pref.toMillis()) -
+          Math.abs(b.toMillis() - pref.toMillis())
+      );
+      // …but not ten consecutive starts. A 6:45 PM request on a full evening
+      // returned 12:55, 1:00, 1:05, 1:10 — the model offers three of those and
+      // the caller hears one answer three times. Keep the closest handful, then
+      // spread the rest across the day so there is a real second choice.
+      if (!spreadAlternatives) {
+        return byDistance
+          .slice(0, max)
+          .sort((a, b) => a.toMillis() - b.toMillis())
+          .map((dt) => ({
+            time: dt.toFormat('h:mm a'),
+            value: dt.toFormat('HH:mm'),
+          }));
+      }
+      const near = byDistance.slice(0, Math.max(1, Math.ceil(max / 2)));
+      const rest = this.spreadAcross(
+        byDistance
+          .slice(near.length)
+          .sort((a, b) => a.toMillis() - b.toMillis()),
+        max - near.length
+      );
+      picked = [...near, ...rest]
+        .filter(
+          (dt, index, all) =>
+            all.findIndex((other) => other.toMillis() === dt.toMillis()) ===
+            index
         )
-        .slice(0, max)
         .sort((a, b) => a.toMillis() - b.toMillis());
     } else {
       // OWNER RULE (2026-09-14): lead with tidy quarter-hour starts. Odd
@@ -3640,7 +3699,9 @@ export class TwilioRealtimeCall {
       const slots = this.selectOfferedSlots(
         inHours,
         payload.date,
-        payload.preferredTime
+        payload.preferredTime,
+        10,
+        true
       );
 
       // Remember exactly the 24h values we offered for this service+date so

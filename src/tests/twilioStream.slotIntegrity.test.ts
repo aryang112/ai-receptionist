@@ -123,3 +123,28 @@ describe('offered times must be real Phorest starts', () => {
     expect(offered).toContain('18:10');
   });
 });
+
+describe('alternatives when the requested time is gone', () => {
+  it('does not offer four consecutive starts as if they were four choices', async () => {
+    // Live sweep 2026-09-15: "lash lift at 6:45 PM" on a full evening returned
+    // 12:55 / 1:00 / 1:05 / 1:10 — the model offers three of those and the
+    // caller hears one answer three times.
+    mockAvailability();
+    const call = buildCall();
+    const result = await call.handleSuggestAvailability({
+      serviceName: 'Lash Lift',
+      date: DATE,
+      preferredTime: '18:55', // late; the nearest real starts are much earlier
+    });
+    const offered = result.slots.map((s: any) => s.value);
+    expect(offered.length).toBeGreaterThan(2);
+    for (const value of offered) expect(REAL_STARTS).toContain(value);
+    // The three the model will read out must not all sit inside one 15-minute
+    // block — there has to be a genuinely different option among them.
+    const minutes = offered.map((v: string) => {
+      const [h, m] = v.split(':').map(Number);
+      return h! * 60 + m!;
+    });
+    expect(Math.max(...minutes) - Math.min(...minutes)).toBeGreaterThan(15);
+  });
+});
