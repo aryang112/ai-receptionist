@@ -197,6 +197,24 @@ describe('reschedule_visit', () => {
     expect(movedIds).not.toContain('a2');
   });
 
+  it('tells the caller plainly when their requested time cannot hold the visit', async () => {
+    mockAppointments(ONE_SITTING);
+    const call = buildCall();
+    await call.handleListAppointments({ clientId: CLIENT });
+    mockSlots();
+    // 17:30 is another client's appointment, so no plan can start there.
+    const result = await call.handleRescheduleVisit({
+      appointmentIds: ['appt-lip', 'appt-brow'],
+      date: DATE,
+      preferredTime: '17:30',
+    });
+    expect(result.planned).toBe(true);
+    expect(result.requestedUnavailable).toBe('5:30 PM');
+    expect(result.note).toMatch(/does not fit at 5:30 PM/);
+    expect(result.note).toMatch(/never present an alternative as if it were/i);
+    expect(result.options.map((o: any) => o.startTime)).not.toContain('17:30');
+  });
+
   it('refuses appointments this call never surfaced', async () => {
     mockSlots();
     const call = buildCall();

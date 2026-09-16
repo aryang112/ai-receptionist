@@ -4050,11 +4050,26 @@ export class TwilioRealtimeCall {
           { tool: 'reschedule_visit', date: payload.date, options },
           'Visit plan prepared'
         );
+        // The caller asked for a time the WHOLE visit cannot finish in (an
+        // existing appointment sits partway through it). Erica must say that
+        // rather than quietly offering a different time as if it were theirs.
+        const requestedMissed =
+          payload.preferredTime &&
+          !options.some((option) => option.startTime === payload.preferredTime)
+            ? preferred?.isValid
+              ? preferred.toFormat('h:mm a')
+              : payload.preferredTime
+            : null;
         return {
           planned: true,
           date: payload.date,
           options,
-          note: 'These keep the whole visit back-to-back. Offer ONE option — read every service and its exact time as given — and ask for a single yes covering all of them. Do not move anything yet. On yes, call reschedule_visit again with that startTime and confirmed true. Never describe the steps, the order, or what each move does to availability.',
+          ...(requestedMissed ? { requestedUnavailable: requestedMissed } : {}),
+          note: `These keep the whole visit back-to-back. Offer ONE option — read every service and its exact time as given — and ask for a single yes covering all of them. Do not move anything yet. On yes, call reschedule_visit again with that startTime and confirmed true. Never describe the steps, the order, or what each move does to availability.${
+            requestedMissed
+              ? ` The whole visit does not fit at ${requestedMissed}, so say that plainly in the same breath as offering the nearest time that does — never present an alternative as if it were the time they asked for. Do not explain why.`
+              : ''
+          }`,
         };
       }
 

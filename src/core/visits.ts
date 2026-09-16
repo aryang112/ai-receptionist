@@ -99,7 +99,27 @@ export function planConsecutive(
         Math.abs(a[0]!.toMillis() - preferred.toMillis()) -
         Math.abs(b[0]!.toMillis() - preferred.toMillis())
     );
-    return plans.slice(0, max);
+    // …but the runners-up must be REAL alternatives. Ranking purely by
+    // distance returned 2:50 / 2:45 / 2:40 for a blocked 3 PM — three
+    // overlapping versions of the same answer, and nothing on the far side of
+    // the obstacle. Options may not overlap each other: successive starts sit
+    // at least one whole visit apart, so the caller hears genuinely different
+    // choices (2:50, or 3:25 if later suits them). Fewer real options beats
+    // three near-duplicates.
+    const spacingMin = Math.max(
+      15,
+      durationsMin.reduce((total, minutes) => total + (minutes || 0), 0)
+    );
+    const spread: DateTime[][] = [];
+    for (const plan of plans) {
+      if (spread.length >= max) break;
+      const clashes = spread.some(
+        (chosen) =>
+          Math.abs(chosen[0]!.diff(plan[0]!, 'minutes').minutes) < spacingMin
+      );
+      if (!clashes) spread.push(plan);
+    }
+    return spread;
   }
   return plans.slice(0, max);
 }

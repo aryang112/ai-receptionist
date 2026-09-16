@@ -90,3 +90,52 @@ describe('planConsecutive — option ordering', () => {
     ]);
   });
 });
+
+describe('planConsecutive — a blocked requested time', () => {
+  const at3 = (hhmm: string) =>
+    DateTime.fromISO(`2026-09-16T${hhmm}:00`, { zone: 'America/New_York' });
+
+  // 5-minute grid from 2:30 to 3:45, with 3:15 and 3:20 GONE — another
+  // client's 10-minute appointment sits there.
+  const AVAILABLE = [
+    '14:30', '14:35', '14:40', '14:45', '14:50', '14:55',
+    '15:00', '15:05', '15:10',
+    /* 15:15, 15:20 taken */
+    '15:25', '15:30', '15:35', '15:40', '15:45',
+  ].map(at3);
+
+  it('shifts the whole 30-minute visit to the nearest start that actually fits', () => {
+    // Caller asks for 3:00. 3:00 → 3:10 → 3:20 collides with the 3:15
+    // appointment, so 3:00 is NOT offerable for all three.
+    const plans = planConsecutive(AVAILABLE, [10, 10, 10], at3('15:00'), 3);
+    expect(plans.length).toBeGreaterThan(0);
+    const best = plans[0]!.map((d) => d.toFormat('HH:mm'));
+    expect(best).toEqual(['14:50', '15:00', '15:10']);
+    // Every start is real, and the run ends before the blocked slot.
+    for (const t of best) {
+      expect(['15:15', '15:20']).not.toContain(t);
+    }
+  });
+
+  it('never offers the requested start when the visit cannot finish there', () => {
+    const plans = planConsecutive(AVAILABLE, [10, 10, 10], at3('15:00'), 3);
+    expect(plans.map((p) => p[0]!.toFormat('HH:mm'))).not.toContain('15:00');
+    expect(plans.map((p) => p[0]!.toFormat('HH:mm'))).not.toContain('14:55');
+  });
+
+  it('also offers a later run on the far side of the obstacle', () => {
+    const plans = planConsecutive(AVAILABLE, [10, 10, 10], at3('15:00'), 3);
+    const starts = plans.map((p) => p[0]!.toFormat('HH:mm'));
+    // 2:50 is the nearest fit; the only other genuinely different answer is
+    // the run AFTER the 3:15 appointment. Ranking by distance alone used to
+    // return 2:50 / 2:45 / 2:40 and bury this one.
+    expect(starts).toEqual(['14:50', '15:25']);
+  });
+
+  it('a SHORTER visit still fits at the requested time', () => {
+    // Two 10-minute services end at 3:20 — wait, 3:10 + 10 = 3:20 is taken,
+    // so only the first two slots matter: 3:00 → 3:10, finishing at 3:20.
+    const plans = planConsecutive(AVAILABLE, [10, 10], at3('15:00'), 1);
+    expect(plans[0]!.map((d) => d.toFormat('HH:mm'))).toEqual(['15:00', '15:10']);
+  });
+});
