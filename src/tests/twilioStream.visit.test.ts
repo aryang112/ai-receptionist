@@ -257,3 +257,124 @@ describe('reschedule_visit', () => {
     expect(result.note).toMatch(/never move part of the visit without asking/i);
   });
 });
+
+describe('cancel_visit', () => {
+  it('drops the whole sitting with one confirmation', async () => {
+    const drop = vi
+      .spyOn(phorest, 'cancelAppointment')
+      .mockResolvedValue({ cancelled: true } as any);
+    mockAppointments(ONE_SITTING);
+    const call = buildCall();
+    await call.handleListAppointments({ clientId: CLIENT });
+    const result = await call.handleCancelVisit({
+      appointmentIds: ['appt-lip', 'appt-brow'],
+      confirmed: true,
+    });
+    expect(result.cancelled).toBe(true);
+    expect(result.cancelledServices).toEqual([
+      'Lip Threading',
+      'Brow Threading',
+    ]);
+    expect(drop).toHaveBeenCalledTimes(2);
+    expect(result.note).toMatch(/ask once if they need anything else/i);
+  });
+
+  it('refuses ids this call never surfaced', async () => {
+    const call = buildCall();
+    const result = await call.handleCancelVisit({
+      appointmentIds: ['nope-a', 'nope-b'],
+      confirmed: true,
+    });
+    expect(result.error).toMatch(/pull up your appointments/i);
+  });
+});
+
+describe('book_visit', () => {
+  it('plans two services back-to-back without booking', async () => {
+    const write = vi.spyOn(phorest, 'createAppointment');
+    mockSlots();
+    const call = buildCall();
+    const result = await call.handleBookVisit({
+      services: [{ serviceName: 'Lip Threading' }, { serviceName: 'Brow Threading' }],
+      date: DATE,
+      preferredTime: '17:45',
+    });
+    expect(result.planned).toBe(true);
+    // Lip is 10 min in the mock catalog, so brow follows at 17:55.
+    expect(result.options[0].items.map((i: any) => i.time)).toEqual([
+      '5:45 PM',
+      '5:55 PM',
+    ]);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it('says plainly when the services will not all fit at the requested time', async () => {
+    mockSlots();
+    const call = buildCall();
+    const result = await call.handleBookVisit({
+      services: [{ serviceName: 'Lip Threading' }, { serviceName: 'Brow Threading' }],
+      date: DATE,
+      preferredTime: '17:30', // another client sits there
+    });
+    expect(result.requestedUnavailable).toBe('5:30 PM');
+    expect(result.options.map((o: any) => o.startTime)).not.toContain('17:30');
+  });
+
+  it('will not book without knowing who it is for', async () => {
+    mockSlots();
+    const call = buildCall();
+    const result = await call.handleBookVisit({
+      services: [{ serviceName: 'Lip Threading' }, { serviceName: 'Brow Threading' }],
+      date: DATE,
+      startTime: '17:45',
+      confirmed: true,
+    });
+    expect(result.error).toMatch(/who this is for/i);
+  });
+});
+
+describe('log_running_late across a sitting', () => {
+  it('notes EVERY appointment in the visit, not just the first', async () => {
+    const note = vi
+      .spyOn(phorest, 'addAppointmentNote')
+      .mockResolvedValue(undefined as any);
+    vi.spyOn(phorest, 'getTodayAppointments').mockResolvedValue([] as any);
+    mockAppointments(ONE_SITTING);
+    const call = buildCall();
+    await call.handleListAppointments({ clientId: CLIENT });
+    const result = await call.handleLogRunningLate({
+      clientId: CLIENT,
+      appointmentId: 'appt-lip',
+      alsoAppointmentIds: ['appt-brow'],
+      detail: 'about ten minutes late',
+    });
+    expect(result.noted).toBe(true);
+    expect(result.alsoNoted).toEqual(['Brow Threading']);
+    // Both appointments carry the same note, so Richa's calendar does not show
+    // a late flag on one service and nothing on the other five minutes later.
+    expect(note).toHaveBeenCalledTimes(2);
+    const notedIds = note.mock.calls.map((c: any) => c[0]);
+    expect(notedIds).toContain('appt-lip');
+    expect(notedIds).toContain('appt-brow');
+    const texts = note.mock.calls.map((c: any) => c[1]);
+    expect(new Set(texts).size).toBe(1);
+  });
+
+  it('ignores an id this call never surfaced', async () => {
+    const note = vi
+      .spyOn(phorest, 'addAppointmentNote')
+      .mockResolvedValue(undefined as any);
+    vi.spyOn(phorest, 'getTodayAppointments').mockResolvedValue([] as any);
+    mockAppointments(ONE_SITTING);
+    const call = buildCall();
+    await call.handleListAppointments({ clientId: CLIENT });
+    const result = await call.handleLogRunningLate({
+      clientId: CLIENT,
+      appointmentId: 'appt-lip',
+      alsoAppointmentIds: ['someone-elses-appointment'],
+    });
+    expect(result.noted).toBe(true);
+    expect(result.alsoNoted).toBeUndefined();
+    expect(note).toHaveBeenCalledTimes(1);
+  });
+});

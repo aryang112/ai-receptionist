@@ -40,6 +40,38 @@ export const TOOL_SCHEMAS = {
   cancel_appointment: z.object({
     appointmentId: z.string(),
   }),
+  // Cancel a whole sitting in one step. No planning phase — there are no times
+  // to work out — but the write still needs one explicit yes covering all of
+  // them, so `confirmed` is required rather than inferred.
+  cancel_visit: z.object({
+    appointmentIds: z.array(z.string()).min(2),
+    confirmed: z.literal(true),
+  }),
+  // Book several services as one sitting. Same two phases as reschedule_visit:
+  // plan (no startTime) → back-to-back options; execute (startTime +
+  // confirmed) → one write per service, in order.
+  book_visit: z.object({
+    services: z
+      .array(
+        z.object({
+          serviceName: z.string(),
+          serviceId: z.string().min(1).optional(),
+        })
+      )
+      .min(2),
+    date: z.string(),
+    preferredTime: z.string().optional(),
+    startTime: z.string().optional(),
+    confirmed: z.boolean().optional(),
+    clientId: z.string().optional(),
+    customer: z
+      .object({
+        name: z.string(),
+        phone: z.string().optional(),
+        email: z.string().optional(),
+      })
+      .optional(),
+  }),
   // One sitting, decided in full before anything is written (the 2026-09-14
   // two-appointment reschedule call). Two phases through one tool, mirroring
   // the prepare/confirm shape AppointmentProposals already uses:
@@ -67,6 +99,9 @@ export const TOOL_SCHEMAS = {
   log_running_late: z.object({
     clientId: z.string(),
     appointmentId: z.string(),
+    // A caller running late is late for the WHOLE sitting, not one service.
+    // Optional so every existing single-appointment call keeps working.
+    alsoAppointmentIds: z.array(z.string()).optional(),
     detail: z.string().optional(),
   }),
   transfer_to_owner: z.object({}),

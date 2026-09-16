@@ -132,11 +132,14 @@ describe('Live speech prompt', () => {
     // "prepare at most one appointment action at a time" — so she obeyed and
     // had no way to move a sitting. The carve-out must survive.
     expect(backendPrompt).toContain(
-      'use reschedule_visit, not prepare_appointment_action'
+      'use the visit tools, not prepare_appointment_action'
     );
-    expect(backendPrompt).toContain(
-      'reschedule_visit is the one exception'
-    );
+    expect(backendPrompt).toContain('the visit tools are the exception');
+    // All three write paths must be reachable, not just the reschedule one.
+    for (const tool of ['book_visit', 'reschedule_visit', 'cancel_visit']) {
+      expect(backendPrompt).toContain(tool);
+    }
+    expect(backendPrompt).toContain('late for the WHOLE sitting');
     expect(backendPrompt).toContain(
       'never tell the caller you cannot check a combined opening'
     );

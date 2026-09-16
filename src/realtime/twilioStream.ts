@@ -1067,6 +1067,75 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     type: 'function',
+    name: 'cancel_visit',
+    description:
+      'Cancel TWO OR MORE appointments the caller is dropping together. Name every service, day and time first, get ONE yes covering all of them, then call this with confirmed true. Only pass appointmentIds the caller agreed to cancel — appointments hours apart on the same day are separate visits, so ask which they mean. Use cancel_appointment for a single one.',
+    parameters: {
+      type: 'object',
+      properties: {
+        appointmentIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Two or more appointmentIds the caller agreed to cancel',
+        },
+        confirmed: {
+          type: 'boolean',
+          description: 'True only after one explicit yes covering every service',
+        },
+      },
+      required: ['appointmentIds', 'confirmed'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'book_visit',
+    description:
+      'Book TWO OR MORE services as one sitting so they run back-to-back. Call it twice: first without startTime to get options, then again with the chosen startTime and confirmed true after ONE yes covering every service. Identify the caller first, exactly as for book_appointment. Use book_appointment for a single service.',
+    parameters: {
+      type: 'object',
+      properties: {
+        services: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              serviceName: { type: 'string' },
+              serviceId: { type: 'string' },
+            },
+            required: ['serviceName'],
+          },
+          description: 'Two or more services, in the order they should happen',
+        },
+        date: { type: 'string', description: 'ISO date YYYY-MM-DD' },
+        preferredTime: {
+          type: 'string',
+          description: '24h HH:MM the caller asked for, if any',
+        },
+        startTime: {
+          type: 'string',
+          description:
+            "24h HH:MM — the chosen option's startTime. Only with confirmed.",
+        },
+        confirmed: {
+          type: 'boolean',
+          description: 'True only after one explicit yes covering every service',
+        },
+        clientId: { type: 'string' },
+        customer: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            phone: { type: 'string' },
+            email: { type: 'string' },
+          },
+          required: ['name'],
+        },
+      },
+      required: ['services', 'date'],
+    },
+  },
+  {
+    type: 'function',
     name: 'cancel_appointment',
     description:
       'Cancel only after the caller explicitly confirms the exact appointment. Announce cancellation only after a successful result.',
@@ -1159,6 +1228,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         appointmentId: {
           type: 'string',
           description: 'The appointment they are running late for',
+        },
+        alsoAppointmentIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Every OTHER appointmentId in the same sitting — a caller is late for the whole visit, not one service.',
         },
         detail: {
           type: 'string',
@@ -1708,6 +1783,10 @@ export class TwilioRealtimeCall {
     this.registerTrackedTool('reschedule_visit', (args) =>
       this.handleRescheduleVisit(args)
     );
+    this.registerTrackedTool('cancel_visit', (args) =>
+      this.handleCancelVisit(args)
+    );
+    this.registerTrackedTool('book_visit', (args) => this.handleBookVisit(args));
       this.registerTrackedTool('cancel_appointment', (args) =>
         this.handleCancel(args)
       );
@@ -3945,6 +4024,285 @@ export class TwilioRealtimeCall {
    * model was given, which the ownership guard requires were surfaced on this
    * call. Same-day is NOT the same visit — see core/visits.ts.
    */
+  /**
+   * Drop a whole sitting in one step. No planning phase — there are no times
+   * to work out — but scope is still never inferred: only the ids the caller
+   * agreed to, each of which handleCancel re-checks was surfaced on this call.
+   */
+  /**
+   * Book several services as ONE sitting — the booking-side twin of
+   * handleRescheduleVisit, and the reason the owner's two 6 PM appointments
+   * could stack: booking one at a time never asks whether the services fit
+   * together, only whether each is individually free.
+   */
+  private async handleBookVisit(args: unknown) {
+    try {
+      const parsed = parseToolArgs('book_visit', args);
+      if (!parsed.success) {
+        logger.error(
+          { tool: 'book_visit', error: parsed.error },
+          'Tool arg validation failed: book_visit'
+        );
+        return { error: parsed.error };
+      }
+      const payload = parsed.data as {
+        services: { serviceName: string; serviceId?: string }[];
+        date: string;
+        preferredTime?: string;
+        startTime?: string;
+        confirmed?: boolean;
+        clientId?: string;
+        customer?: { name: string; phone?: string; email?: string };
+      };
+      logger.info(
+        { tool: 'book_visit', args: payload },
+        'Tool called: book_visit'
+      );
+
+      if (!getOpenClose(payload.date)) {
+        return {
+          error: 'The salon is closed on that date. Nothing was booked.',
+        };
+      }
+
+      // Resolve each service and intersect the real availability across them.
+      const items: { service: Service }[] = [];
+      let shared: DateTime[] | null = null;
+      for (const requested of payload.services) {
+        const open = await this.fetchOpenSlots(
+          requested.serviceName,
+          payload.date,
+          requested.serviceId
+        );
+        if ('notOffered' in open) {
+          return {
+            notOffered: true,
+            service: requested.serviceName,
+            closest: open.closest.map((c) => c.name),
+            note: 'One of the services is not in the catalog. Never say it is not in the system or catalog — ask which of the closest real services they meant, then call book_visit again.',
+          };
+        }
+        if ('ambiguous' in open) {
+          return {
+            ambiguous: open.ambiguous.map((c) => c.name),
+            note: 'One of the services matched more than one catalog entry. Ask one short question about which they meant, then call book_visit again.',
+          };
+        }
+        items.push({ service: open.service });
+        shared =
+          shared === null
+            ? open.slots
+            : shared.filter((dt) =>
+                open.slots.some((other) => other.toMillis() === dt.toMillis())
+              );
+      }
+      const available = shared ?? [];
+      const durations = items.map((i) => i.service.durationMin || 0);
+      const preferred = payload.preferredTime
+        ? DateTime.fromISO(`${payload.date}T${payload.preferredTime}`, {
+            zone: env.TIMEZONE,
+          })
+        : undefined;
+
+      // ---- PLAN -------------------------------------------------------
+      if (!payload.confirmed || !payload.startTime) {
+        const plans = planConsecutive(available, durations, preferred, 3);
+        if (!plans.length) {
+          return {
+            planned: false,
+            options: [],
+            note: 'Those services will not fit back-to-back that day. Say so plainly, then offer another day or booking them separately — never book part of the visit without asking.',
+          };
+        }
+        for (const [index, item] of items.entries()) {
+          const key = this.slotKey(item.service.name, payload.date);
+          const existing = this.offeredSlots.get(key) ?? new Set<string>();
+          for (const plan of plans) existing.add(plan[index]!.toFormat('HH:mm'));
+          this.offeredSlots.set(key, existing);
+        }
+        const options = plans.map((plan) => ({
+          startTime: plan[0]!.toFormat('HH:mm'),
+          items: items.map((item, index) => ({
+            service: item.service.name,
+            price: item.service.price,
+            time: plan[index]!.toFormat('h:mm a'),
+          })),
+        }));
+        const requestedMissed =
+          payload.preferredTime &&
+          !options.some((option) => option.startTime === payload.preferredTime)
+            ? preferred?.isValid
+              ? preferred.toFormat('h:mm a')
+              : payload.preferredTime
+            : null;
+        logger.info(
+          { tool: 'book_visit', date: payload.date, options },
+          'Visit booking plan prepared'
+        );
+        return {
+          planned: true,
+          date: payload.date,
+          options,
+          ...(requestedMissed ? { requestedUnavailable: requestedMissed } : {}),
+          note: `These keep the services back-to-back. Offer ONE option — read every service and its exact time as given — and ask for a single yes covering all of them. Identify the caller per IDENTIFY before confirming. Do not book anything yet. On yes, call book_visit again with that startTime and confirmed true.${
+            requestedMissed
+              ? ` They will not all fit at ${requestedMissed}, so say that plainly in the same breath as offering the nearest time that does — never present an alternative as if it were the time they asked for. Do not explain why.`
+              : ''
+          }`,
+        };
+      }
+
+      // ---- EXECUTE ----------------------------------------------------
+      const start = DateTime.fromISO(`${payload.date}T${payload.startTime}`, {
+        zone: env.TIMEZONE,
+      });
+      const chosen = planConsecutive(available, durations, start, 3).find(
+        (plan) => plan[0]!.toFormat('HH:mm') === payload.startTime
+      );
+      if (!chosen) {
+        return {
+          error:
+            'That start no longer fits every service. Check the options again before confirming anything.',
+        };
+      }
+      if (!payload.customer && !payload.clientId) {
+        return {
+          error:
+            'I need to know who this is for first — identify the caller per IDENTIFY, then call book_visit again.',
+        };
+      }
+
+      // Sequential, never parallel: each booking changes what is free for the
+      // next (FR-02 / R03). Partial success is reported honestly.
+      const booked: { service: string; time: string; price?: number }[] = [];
+      const failed: { service: string; error: string }[] = [];
+      for (const [index, item] of items.entries()) {
+        const result = (await this.handleBookAppointment({
+          serviceName: item.service.name,
+          serviceId: item.service.id,
+          date: payload.date,
+          time: chosen[index]!.toFormat('HH:mm'),
+          ...(payload.clientId ? { clientId: payload.clientId } : {}),
+          ...(payload.customer ? { customer: payload.customer } : {}),
+        })) as { error?: string; price?: number };
+        if (result?.error) {
+          failed.push({ service: item.service.name, error: result.error });
+        } else {
+          booked.push({
+            service: item.service.name,
+            time: chosen[index]!.toFormat('h:mm a'),
+            ...(item.service.price != null
+              ? { price: item.service.price }
+              : {}),
+          });
+        }
+      }
+      logger.info(
+        { tool: 'book_visit', booked, failed },
+        'Visit booking complete'
+      );
+      if (failed.length && !booked.length) {
+        return {
+          booked: false,
+          failed,
+          note: 'Nothing was booked. Apologise briefly without internal detail and offer another time.',
+        };
+      }
+      if (failed.length) {
+        return {
+          booked: true,
+          partial: true,
+          bookedServices: booked,
+          failed,
+          note: 'Only part of the visit was booked. Say exactly which services are booked and at what times, say plainly which could not be, and offer to sort the rest. Never imply everything was booked.',
+        };
+      }
+      return {
+        booked: true,
+        bookedServices: booked,
+        date: payload.date,
+        note: 'The whole visit is booked. Confirm it in ONE short sentence naming each service and its time exactly as given, then ask once if they need anything else. Do not recount the steps or mention availability.',
+      };
+    } catch (error) {
+      logger.error(
+        { tool: 'book_visit', error: this.formatError(error) },
+        'Tool error: book_visit'
+      );
+      return { error: this.formatError(error) };
+    }
+  }
+
+  private async handleCancelVisit(args: unknown) {
+    try {
+      const parsed = parseToolArgs('cancel_visit', args);
+      if (!parsed.success) {
+        logger.error(
+          { tool: 'cancel_visit', error: parsed.error },
+          'Tool arg validation failed: cancel_visit'
+        );
+        return { error: parsed.error };
+      }
+      const payload = parsed.data as {
+        appointmentIds: string[];
+        confirmed: true;
+      };
+      logger.info(
+        { tool: 'cancel_visit', args: payload },
+        'Tool called: cancel_visit'
+      );
+      const unique = [...new Set(payload.appointmentIds)];
+      if (unique.some((id) => !this.servedAppointmentIds.has(id))) {
+        return {
+          error:
+            'I need to pull up your appointments first — please call list_appointments.',
+        };
+      }
+
+      const cancelled: string[] = [];
+      const failed: { service: string; error: string }[] = [];
+      for (const appointmentId of unique) {
+        const service =
+          this.servedAppointmentServices.get(appointmentId) ?? 'that service';
+        const result = (await this.handleCancel({ appointmentId })) as {
+          error?: string;
+        };
+        if (result?.error) failed.push({ service, error: result.error });
+        else cancelled.push(service);
+      }
+      logger.info(
+        { tool: 'cancel_visit', cancelled, failed },
+        'Visit cancellation complete'
+      );
+      if (failed.length && !cancelled.length) {
+        return {
+          cancelled: false,
+          failed,
+          note: 'Nothing was cancelled. Apologise briefly without internal detail and offer to try again.',
+        };
+      }
+      if (failed.length) {
+        return {
+          cancelled: true,
+          partial: true,
+          cancelledServices: cancelled,
+          failed,
+          note: 'Only part of the visit was cancelled. Say exactly which services are cancelled and which could not be, then offer to sort the rest. Never imply everything was cancelled.',
+        };
+      }
+      return {
+        cancelled: true,
+        cancelledServices: cancelled,
+        note: 'The whole visit is cancelled. Confirm it in ONE short sentence naming each service, then ask once if they need anything else. Do not recount the steps.',
+      };
+    } catch (error) {
+      logger.error(
+        { tool: 'cancel_visit', error: this.formatError(error) },
+        'Tool error: cancel_visit'
+      );
+      return { error: this.formatError(error) };
+    }
+  }
+
   private async handleRescheduleVisit(args: unknown) {
     try {
       const parsed = parseToolArgs('reschedule_visit', args);
@@ -5030,6 +5388,7 @@ export class TwilioRealtimeCall {
       const payload = parsed.data as {
         clientId: string;
         appointmentId: string;
+        alsoAppointmentIds?: string[];
         detail?: string;
       };
       logger.info(
@@ -5053,12 +5412,10 @@ export class TwilioRealtimeCall {
       // Carry the caller's own words onto the note so the owner sees HOW late,
       // not just that a call happened. Capped — notes are for a calendar glance.
       const detail = payload.detail?.trim().slice(0, 200);
-      await phorest.addAppointmentNote(
-        payload.appointmentId,
-        detail
-          ? `Customer called ahead — ${detail}`
-          : 'Customer called ahead — running late'
-      );
+      const noteText = detail
+        ? `Customer called ahead — ${detail}`
+        : 'Customer called ahead — running late';
+      await phorest.addAppointmentNote(payload.appointmentId, noteText);
 
       const todayAppts = await phorest.getTodayAppointments();
       const callerAppt = todayAppts.find(
@@ -5102,7 +5459,38 @@ export class TwilioRealtimeCall {
         ok: true,
         detail: { appointmentId: payload.appointmentId, squeezed },
       });
-      return { noted: true, squeezed };
+      // A caller is late for the whole SITTING, not one service. Note every
+      // other appointment they named too, so Richa's calendar does not show a
+      // late note on the brow threading and nothing on the lip threading
+      // five minutes later. Best-effort: the primary note already succeeded.
+      const alsoIds = [...new Set(payload.alsoAppointmentIds ?? [])].filter(
+        (id) => id !== payload.appointmentId && this.servedAppointmentIds.has(id)
+      );
+      const alsoNoted: string[] = [];
+      for (const id of alsoIds) {
+        try {
+          await phorest.addAppointmentNote(id, noteText);
+          alsoNoted.push(
+            this.servedAppointmentServices.get(id) ?? 'another service'
+          );
+        } catch (error) {
+          logger.warn(
+            { tool: 'log_running_late', appointmentId: id, error: this.formatError(error) },
+            'Could not note a follow-on appointment in the sitting'
+          );
+        }
+      }
+      if (alsoNoted.length) {
+        logger.info(
+          { tool: 'log_running_late', alsoNoted },
+          'Running-late note applied across the sitting'
+        );
+      }
+      return {
+        noted: true,
+        squeezed,
+        ...(alsoNoted.length ? { alsoNoted } : {}),
+      };
     } catch (error) {
       logger.error(
         { tool: 'log_running_late', error: this.formatError(error) },
