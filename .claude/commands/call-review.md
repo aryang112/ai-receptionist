@@ -56,6 +56,12 @@ Per call, check:
 - **Endings**: no abrupt/mid-task hangups; `endReason` should make sense
   (flag `silence — no response` on a call where the caller was mid-flow,
   `duration cap` on any real conversation).
+- **Closing (register item 14 + mirror)**: a more-help question ("anything
+  else?") asked AFTER the caller already said an explicit goodbye — register
+  item 14, verified on real vendor/job-inquiry calls. Mirror case: a
+  completed action (booking, change, cancellation, or message) followed by
+  neither an "anything else" offer nor a caller goodbye before hangup — Erica
+  went silent.
 - **Frustration signals**: repeats, "hello?", sighs, hang-up right after an
   Erica turn, call-backs from the same number within minutes (check for
   same-`fromLast4` clusters).
