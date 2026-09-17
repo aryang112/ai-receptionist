@@ -80,3 +80,32 @@ describe('suggest_availability — caller phrasing vs catalog naming', () => {
     expect(Array.isArray(res.closest)).toBe(true);
   });
 });
+
+// 2026-09-16: gate the staff-name check on the call site, not just the
+// matcher. A phrase that resolved to real service candidates is a service
+// phrase by definition — the staff check must never run (and therefore never
+// eclipse those candidates), even for the "and"-as-Manu register item 05
+// phrase that started this whole workstream.
+describe('suggest_availability — staff-name check only runs when there are no service candidates', () => {
+  it('a phrase with service candidates never returns staffMember', async () => {
+    const call = buildCall();
+    const res = await call.handleSuggestAvailability({
+      serviceName: 'eyebrow threading and upper lip',
+      date: OPEN_TUESDAY,
+    });
+    // The mock catalog has separate "Brow Threading" and "Lip Threading"
+    // entries, so this phrase resolves notOffered WITH candidates.
+    expect(res.notOffered).toBe(true);
+    expect(res.closest?.length).toBeGreaterThan(0);
+    expect(res.staffMember).toBeUndefined();
+  });
+
+  it('a bare staff name with no service candidates still returns staffMember', async () => {
+    const call = buildCall();
+    const res = await call.handleSuggestAvailability({
+      serviceName: 'Richa',
+      date: OPEN_TUESDAY,
+    });
+    expect(res.staffMember).toBe('Richa');
+  });
+});

@@ -661,7 +661,8 @@ export function buildInstructions(
 ${buildPriceLines(services)}`
     : `Callers often ask for prices. When they ask the price of a service, call get_prices WITH the serviceName they asked about; this routine lookup needs no preamble. Only omit serviceName when they ask broadly what services are offered. Quote ONLY what get_prices returns; NEVER guess or make up a price. Read service names naturally and ignore any leading numbers or codes.`;
 
-  return `You are Erica, the AI receptionist for ${businessHours.name} in ${businessHours.location.city}, ${businessHours.location.state}. Handle bookings, changes, prices, hours, running-late notes, and messages for owner Richa. Complete each task accurately in as few natural turns as possible; connect the caller or deliver a message only when Richa is genuinely needed.
+  return (
+    `You are Erica, the AI receptionist for ${businessHours.name} in ${businessHours.location.city}, ${businessHours.location.state}. Handle bookings, changes, prices, hours, running-late notes, and messages for owner Richa. Complete each task accurately in as few natural turns as possible; connect the caller or deliver a message only when Richa is genuinely needed.
 
 ═══ PRIORITY ═══
 When rules compete: recording disclosure, privacy, safety, and confirmed writes > current server status and tool results > the caller's latest goal and corrections > style.
@@ -724,7 +725,11 @@ ${servicesSection}
 - NEVER share anyone's schedule or whereabouts: when Richa arrives or leaves, who's working today, or whether anyone is at the salon right now. If hours are what they're really after, answer with salon HOURS — never with people's movements.
 - Appointment details belong to the person they're booked for. Only discuss an appointment with the caller you've identified as that person. If a caller asks about someone ELSE's appointment ("did my wife book?"), don't confirm or deny it exists — offer to pass a message along instead.
 
-═══ CONVERSATION FLOW ═══
+` +
+    // REALTIME-ONLY — inert when VOICE_ENGINE=live. Backend rules:
+    // src/voice/backendRules.ts. Realtime is being retired; see
+    // docs/REALTIME_RETIREMENT_PLAN_2026-09-16.md.
+    `═══ CONVERSATION FLOW ═══
 ${greetingSection}
 
 IDENTIFY (only before an account-specific read/write; hours, services, prices, and availability are public):
@@ -769,7 +774,8 @@ EXCEPTION — an urgent problem with the salon premises itself (alarm going off,
 CURRENT DATE & TIME: Right now it is ${now.toFormat("cccc, MMMM d, yyyy 'at' h:mm a")} at the salon (timezone ${env.TIMEZONE}). When a caller says "today" use the date ${todayISO}; "tomorrow" is ${tomorrowISO}. ALWAYS compute appointment dates from this — never guess today's date, month, or year. Pass every date to tools as YYYY-MM-DD.
 ${todayStatusLine}
 RICHA'S LINE (do NOT re-derive it): Richa is ${richaLine}. Connecting rings her phone and is independent of salon hours.${temporaryClosureBlock}
-`;
+`
+  );
 }
 
 /** Live Phorest catalog as clean { service, price, durationMin } rows for the get_prices tool. */
@@ -788,26 +794,47 @@ async function getServiceCatalog() {
  * True when a caller-supplied "service name" is actually a STAFF member's
  * first name — the Glenda call (2026-08-26) sent serviceName="Richa" and the
  * bare notOffered result made the model say "we don't have a service named
- * Richa in the system". Matching: exact case-insensitive, or edit distance
- * ≤ 2 for names of 4+ chars (phone transcription mangles names — "Rishka").
- * Only ever consulted on the notOffered path, so a real service name can
- * never be swallowed by this.
+ * Richa in the system". Matching: exact case-insensitive, or a length-scaled
+ * edit distance (see `maxEditsFor`) so phone transcription mangling ("Rishka")
+ * still lands but ordinary short words don't. Only ever consulted on the
+ * notOffered path, so a real service name can never be swallowed by this.
  */
 /**
- * Ordinary conversation words are never a staff name, and a fuzzy match can be
- * catastrophically confident when they collide.
+ * How many edits a name of this length can absorb before a fuzzy match stops
+ * being a match and starts being a coincidence.
  *
  * 2026-09-10 (register item 05) and reproduced 2026-09-15: "eyebrow threading
  * and upper lip" resolved to the stylist MANU, because the word "and" is two
- * edits from "manu" and the token threshold allows two. The caller was then
- * asked which service they wanted — a service they had just named in full.
- *
- * The distance-2 boundary itself has to stay: phone transcription renders
- * Richa as "Richard" and "Rishka", both two edits away. So the fix is to stop
- * feeding filler words to the matcher, not to tighten the distance.
+ * edits from "manu" and a single global bound of 2 let it through. Phone
+ * transcription genuinely renders Richa (5 letters) as "Richard"/"Rishka",
+ * both two edits away — that boundary has to stay. But two edits on a
+ * four-letter name is half the name; that's a coin flip, not a match. Scaling
+ * the bound by name length keeps Richa's tolerance and removes Manu's:
+ * "and" → "manu" is still distance 2, but a 4-letter name only tolerates 1.
+ * A name of 3 or fewer letters gets no fuzz at all — every letter counts.
+ */
+function maxEditsFor(name: string): number {
+  const len = name.trim().length;
+  if (len >= 5) return 2;
+  if (len === 4) return 1;
+  return 0;
+}
+
+/**
+ * Ordinary conversation words are never a staff name. The length-scaled bound
+ * above (`maxEditsFor`) is now the actual mechanism that keeps filler words
+ * out — this list is a belt-and-braces safety net of genuine closed-class
+ * function words (pronouns, articles, conjunctions, prepositions, common
+ * auxiliary/modal verbs, wh-words, and basic call filler like "okay"/"yeah"),
+ * kept small on purpose. Booking vocabulary ("book", "time", "date", "today",
+ * "upper", "lower", "full", "half", "next", "last", "new", "old") used to live
+ * here as a patch for the "and" → Manu bug; it's gone because the length bound
+ * already rules those out on every real staff name (verified: none of them
+ * fall within `maxEditsFor` distance of Bonnie/Manu/Phorest/Richa), and it was
+ * exactly the kind of list that needed a new entry every time the service
+ * catalog grew.
  */
 const STAFF_MATCH_STOPWORDS = new Set([
-  'and',
   'the',
   'for',
   'with',
@@ -822,25 +849,11 @@ const STAFF_MATCH_STOPWORDS = new Set([
   'this',
   'they',
   'them',
-  'then',
-  'than',
   'what',
   'when',
-  'want',
   'would',
   'could',
   'should',
-  'just',
-  'like',
-  'need',
-  'get',
-  'got',
-  'put',
-  'see',
-  'say',
-  'ask',
-  'one',
-  'two',
   'all',
   'any',
   'but',
@@ -860,24 +873,6 @@ const STAFF_MATCH_STOPWORDS = new Set([
   'okay',
   'sure',
   'also',
-  'some',
-  'more',
-  'much',
-  'very',
-  'next',
-  'last',
-  'back',
-  'book',
-  'time',
-  'date',
-  'today',
-  'plus',
-  'upper',
-  'lower',
-  'full',
-  'half',
-  'new',
-  'old',
   'her',
   'his',
   'him',
@@ -889,8 +884,9 @@ export function matchStaffName(
 ): string | null {
   const q = query.trim().toLowerCase();
   if (!q) return null;
-  // A bare filler word reaches the whole-query comparison below, which the
-  // token filter never sees — "and" alone is still two edits from "manu".
+  // A bare stopword short-circuits before the length-scaled bound below even
+  // runs — belt-and-braces only; "and" no longer needs to be on this list
+  // because maxEditsFor('manu') === 1 already rejects it (distance 2).
   if (STAFF_MATCH_STOPWORDS.has(q)) return null;
   // Token-wise too: the model passes phrases like "Richa availability" or
   // "with Risha" (seen live 9:56 PM — whole-string distance never matches).
@@ -902,9 +898,10 @@ export function matchStaffName(
     const n = name.trim().toLowerCase();
     if (!n) continue;
     if (q === n) return name.trim();
-    if (n.length >= 4 && editDistance(q, n) <= 2) return name.trim();
+    const bound = maxEditsFor(n);
+    if (bound > 0 && editDistance(q, n) <= bound) return name.trim();
     for (const t of tokens) {
-      if (t === n || (n.length >= 4 && editDistance(t, n) <= 2))
+      if (t === n || (bound > 0 && editDistance(t, n) <= bound))
         return name.trim();
     }
   }
@@ -3699,9 +3696,13 @@ export class TwilioRealtimeCall {
         // staff names here and coach the model in the tool result — the
         // guidance arrives at the decision moment, unlike a prompt rule
         // hundreds of lines away (which demonstrably lost).
-        const staffMatch = await this.matchCallerNamedStaff(
-          payload.serviceName
-        );
+        // Only worth checking when the resolver found NO service candidates —
+        // if it did, the phrase named a service (however imperfectly), and a
+        // coincidental name match must never eclipse real alternatives.
+        const staffMatch =
+          result.closest.length === 0
+            ? await this.matchCallerNamedStaff(payload.serviceName)
+            : null;
         if (staffMatch) {
           logger.info(
             {
