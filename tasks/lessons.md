@@ -686,3 +686,19 @@ contains "and"). One stopword list on one matcher fixed one symptom.
 **Rule:** when a token causes a false match, ask which OTHER matchers see the
 same token, and fix normalisation where the tokens are made, not where the
 symptom appeared.
+
+## 2026-09-16 — gpt-5.6 (terra/luna) rejects tools + reasoning on chat completions
+Verified live with a paid probe: `gpt-5.6-terra` on `/v1/chat/completions` 400s when function tools are combined with `reasoning_effort` ("use /v1/responses or set reasoning_effort to 'none'"), and rejects `max_tokens` (wants `max_completion_tokens`). `'minimal'` effort is not supported on terra (allowed: none, low, medium, high, xhigh, max).
+**Rule:** any tool-using agent on the gpt-5.6 family must call `openai.responses.create`, not chat completions.
+
+## 2026-09-16 — never `set -a; source .env` to run a probe
+Sourcing `.env` in zsh mangled `PHOREST_API_SECRET` (it contains a shell-special character); Phorest answered 401 although the credentials were identical to production's. 15 minutes lost to a phantom credential problem.
+**Rule:** let the app load dotenv itself (`import 'dotenv/config'`) or read values with node's dotenv — never re-parse `.env` through a shell.
+
+## 2026-09-16 — vitest 3.2.4 hoist order: use vi.hoisted() for mock fns
+A plain `const xMock = vi.fn()` beside `vi.mock(...)` was hoist-order-flaky ("Cannot access before initialization" inside the factory).
+**Rule:** any mock fn referenced from a `vi.mock(...)` factory is declared via `vi.hoisted()`.
+
+## 2026-09-16 — a handoff doc must name the commit it describes
+The SMS handoff's "NOT deployed" prose went stale within a day of being written.
+**Rule:** a handoff names the commit (or a `git branch --contains` target) it describes, so a reader verifies state instead of trusting prose.
