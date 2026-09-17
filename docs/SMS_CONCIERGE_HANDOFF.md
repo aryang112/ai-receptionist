@@ -1,9 +1,40 @@
 # SMS concierge — deployment handoff
 
+## Status update 2026-09-16 (Jarvis/Fable, verified live)
+
+**Supersedes the "It is NOT deployed" line below — true on 09-14, stale since 09-15.**
+
+- The SMS concierge route **is deployed**. Railway deployment `8e018ae6` (2026-09-15)
+  shipped the code through commit `ebdc52d`; tonight's deployment `df5b822e` (commit
+  `8ff1416`) shipped it again. `POST /twilio/sms` answers **403** in production (route
+  present, signature check) — verified tonight.
+- Railway config (set 2026-09-15, still current): `SMS_ENABLED=true`, `SMS_SEND_MODE=real`,
+  `SMS_ALLOWED_NUMBERS=+14432535169` (Aryan only), `SMS_OWNER_PHONE=+14432535169`,
+  `SMS_STORE_PATH=/app/data/sms.jsonl`, `SMS_OPEN_TO_ALL` unset (fail-closed),
+  `OWNER_SMS_MODE=simulate` (escalation texts logged, not delivered).
+- **The number's `SmsUrl` webhook flip is still PENDING ARYAN.** Tonight's session
+  attempted it and was blocked by its own permission classifier (Feature Flag Writes
+  gate). Verified read-only: `sms_url` is still `""`, `voice_url` unchanged. Aryan needs
+  to run Step 3 below himself (Twilio console or the curl), then GET the number back to
+  confirm `voice_url` stayed untouched.
+- Separately, commit `12c26d5` moves the text agent from `gpt-4.1` to `gpt-5.6-terra`
+  over the Responses API (new `OPENAI_SMS_MODEL` default, new `OPENAI_SMS_EFFORT`; see
+  `src/tests/smsAgent.test.ts`). Committed and tested (837/837, clean `tsc`/build),
+  smoked locally against real read-only Phorest — but **not deployed**. Until it ships,
+  production text replies still come from the gpt-4.1 build, which is fine for the
+  taste test. HEAD on this branch is now `60593d8` (a docs commit on top of `12c26d5`);
+  both are pushed to origin.
+- Net effect: flipping the webhook today makes Aryan's handset able to text Erica
+  against the ALREADY-DEPLOYED gpt-4.1 build. Nothing else changes until 12c26d5 also
+  deploys, at which point the text agent starts reasoning on gpt-5.6-terra instead.
+
+---
+
 **Written 2026-09-14 for whoever deploys Erica.** The feature is built, merged and tested.
-It is NOT deployed. Production has no `/twilio/sms` route (verified: unsigned POST returns
+~~It is NOT deployed.~~ **Superseded — see the status update above: it was deployed on
+2026-09-15.** Production has no `/twilio/sms` route (verified: unsigned POST returns
 404, while `/twilio/voice` returns 403 — so the probe works and the route genuinely is
-absent).
+absent). *(This was true when written; no longer current — see above.)*
 
 Design and rationale: `docs/SMS_CONCIERGE_2026-09-14.md`.
 
