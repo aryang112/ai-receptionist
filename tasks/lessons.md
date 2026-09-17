@@ -1,5 +1,47 @@
 # Lessons — AI Receptionist (Erica)
 
+## DIGEST (≤ 400 words) — the rules that bite most
+
+- Phorest returns salon-LOCAL time from `GET /appointment`, UTC from
+  `/appointments/availability`, and expects local wall-clock on writes —
+  normalize everything to salon-local in `phorest.client.ts`. (undated
+  baseline)
+- Phorest query params are snake_case (`client_id`, `from_date`) —
+  camelCase is silently ignored and once leaked a stranger's appointments.
+  (undated baseline)
+- Validate any new OpenAI `session.update` field against the live API
+  before shipping — one invalid field fails the whole session and hangs
+  the call up instantly. (undated baseline)
+- GPT-Live runs TWO prompts: editing `SERVE` in `twilioStream.ts` changes
+  nothing on the Live path. Change Live behaviour in `livePrompts.ts` or a
+  tool-result note, and always render `render-live-prompts.ts` to check
+  what the model actually receives. (2026-09-15)
+- A tool in `TOOL_DEFINITIONS` isn't reachable on Live unless it also gets
+  a carve-out past the backend's write-tool ban AND a registered handler
+  on that engine — `toolRegistration.test.ts` now guards both halves.
+  (2026-09-15, addendum 2026-09-16)
+- Don't compensate for awkward Phorest data (odd-minute times) with
+  rounding code downstream — check the source setting (booking-slot
+  interval) first. (2026-09-15)
+- Fuzzy staff-name matching must strip filler words before token
+  matching — "and" is two edits from "Manu" and matched with confidence.
+  (2026-09-15)
+- A restrictive instruction ("confirm in one sentence, then stop") can
+  silently forbid something you still want (the follow-up question) —
+  name what it must NOT suppress. (2026-09-15)
+- A booted container is not a deploy check — `railway up` from the wrong
+  worktree can ship stale code with a perfect boot log; verify via a
+  build-specific route (`/admin/voice-test` engine field). (2026-09-15)
+- Verify capability claims by writing a test that runs them, not by
+  reading the code — this is how the demoted-plan, consecutive-slot, and
+  divide-by-zero bugs surfaced. (2026-09-15)
+- Before restructuring prompt-assembly plumbing, pin the rendered output
+  byte-for-byte as a golden test first, then refactor to reproduce it
+  exactly — wording changes go in a separate commit. (2026-09-16)
+- Indentation lies: a mis-indented block can sit inside an engine-gating
+  `if` branch while reading as outside it — run the formatter before
+  reviewing control flow. (2026-09-16)
+
 Hard-won gotchas. Read this BEFORE touching Phorest time handling, the OpenAI
 session config, or the availability/booking flow. Most of these bit us in
 production testing and cost real debugging.

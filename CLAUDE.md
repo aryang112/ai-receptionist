@@ -1,9 +1,12 @@
 # AI Receptionist — Claude Instructions
 
 ## Auto-Resume (do this every session, no matter what)
-1. Read `state.md` (current status + pending action items), `tasks/lessons.md`
-   (the gotchas — READ before touching Phorest times / OpenAI session config),
-   and `docs/CODEMAP.md` (file map). `PLAN.md` is the older feature plan (context only).
+1. Read the `## CURRENT` section of `state.md` (not the whole file),
+   `docs/CODEMAP.md` (file map), `docs/SYMBOLS.md` (generated: `npm run
+   symbols`), the `docs/areas/*.md` file for the area you are touching, and
+   the `## DIGEST` at the top of `tasks/lessons.md`. `PLAN.md` is the older
+   feature plan (context only). Read state.md's full RECENT LOG / history,
+   or the rest of `tasks/lessons.md`, only when a question needs it.
 2. Run `git status && npm test 2>&1 | tail -20`
 3. Pick up from the "PENDING — action items" in `state.md`
 4. Continue from there — do not ask the user, just go
@@ -22,6 +25,8 @@ If interrupted mid-task:
 - This makes mid-task recovery surgical — exact restore point is always known
 
 ## Core Rules
+- Append new `state.md` entries at the TOP of RECENT LOG (newest first); keep
+  CURRENT ≤ 1 page and rewrite it, never append to it.
 - Always use `.js` extension in local imports (ESM)
 - Never log secrets or full phone numbers
 - PhorestPort interface is the contract — mock and real must match exactly
