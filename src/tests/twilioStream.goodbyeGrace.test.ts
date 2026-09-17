@@ -281,18 +281,23 @@ describe('C7b — deterministic two-phase model close', () => {
     expect(call.modelEndCallPending).toBe(false);
   });
 
-  it('fails open without issuing a collision-prone retry when no post-tool audio arrives', async () => {
+  it('closes without issuing a collision-prone retry when no post-tool audio arrives', async () => {
     vi.useFakeTimers();
     const call = buildCall();
 
     await call.handleEndCall({ reason: 'done' });
     await vi.advanceTimersByTimeAsync(5100);
 
+    // Exactly one farewell request (this tool's own result note) — no second
+    // injectContext/response.create, which would collide with an in-flight
+    // response.
     expect(call.session.injectContext).not.toHaveBeenCalled();
     expect(call.session.requestResponse).not.toHaveBeenCalled();
-    expect(call.closed).toBe(false);
-    expect(call.transferring).toBe(false);
     expect(call.modelEndCallPending).toBe(false);
+    expect(call.transferring).toBe(false);
+    // W1 (2026-09-17): failing open stranded the caller on an open, silent
+    // line for ~39s until the silence watchdog fired. The call closes now.
+    expect(call.closed).toBe(true);
   });
 
   it('contains a rejected scheduled closer and rolls back spam instead of leaking an unhandled rejection', async () => {

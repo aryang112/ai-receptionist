@@ -1491,6 +1491,35 @@ export function isMoreHelpOfferText(text: string): boolean {
   );
 }
 
+/**
+ * W1 (2026-09-17): the farewell wording test behind
+ * TwilioRealtimeCall#liveHasCurrentFarewell. Exported module-level for the
+ * same reason as isMoreHelpOfferText above — the wording judgement gets its
+ * own unit test, independent of call state.
+ *
+ * Precision matters far more than recall here. A miss costs one extra
+ * "say one farewell" request (finishModelEndCall asks, then closes either
+ * way); a FALSE POSITIVE ships a farewell-less hangup — production call
+ * CA2e23da275cdde534bc4f3d6b93f65426 (2026-09-17 19:05 ET), where Erica's
+ * "Yeah. I'll take care of that. You're welcome" matched `take care`, so the
+ * server concluded the goodbye had already been spoken and hung up on a
+ * caller who never heard one.
+ */
+const FAREWELL_PATTERNS = [
+  /\b(?:goodbye|bye)\b/i,
+  /\bhave a (?:good|great|nice|lovely) (?:day|evening|night|weekend)\b/i,
+  // "take care" on its own is a sign-off. "take care OF <something>" is Erica
+  // agreeing to DO the thing — "I'll take care of that", "let me take care of
+  // this", "we'll take care of you" — and is not a goodbye. "take care of
+  // yourself" IS a genuine sign-off, hence the nested lookahead: exclude
+  // "of <x>" except when that x is "yourself".
+  /\btake care\b(?!\s+of\b(?!\s+yourself\b))/i,
+];
+
+export function isFarewellText(text: string): boolean {
+  return FAREWELL_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 export class TwilioRealtimeCall {
   private readonly socket: WebSocket;
   // Built on the Twilio "start" event (once streamSid is known) so the session's
@@ -2057,10 +2086,9 @@ export class TwilioRealtimeCall {
       .map((part) => part.text)
       .join('');
     // A backchannel such as "okay" is not a farewell. This conservative check
-    // supplements audio/mark evidence; a miss leaves the phone open safely.
-    return /\b(?:goodbye|bye|take care|have a (?:good|great|nice|lovely) (?:day|evening|night|weekend))\b/i.test(
-      text
-    );
+    // supplements audio/mark evidence; a miss now costs one extra farewell
+    // request (finishModelEndCall), never a silently open line.
+    return isFarewellText(text);
   }
 
   private async handleLiveMessage(args: unknown) {
@@ -6367,6 +6395,13 @@ export class TwilioRealtimeCall {
       ignoreBargeIn?: boolean;
       speechEpochAtRequest?: number;
       modelRequestedClose?: boolean;
+      // W1 (2026-09-17): the caller of this close has ALREADY asked for one
+      // farewell and confirmed fresh post-tool audio started and drained
+      // (finishModelEndCall). Audio evidence supersedes the text heuristic
+      // there, so the transcript-wording re-check below is skipped: otherwise
+      // an unrecognised-but-real goodbye ("see you soon") aborts the close and
+      // strands the caller on an open, silent line.
+      farewellAudioConfirmed?: boolean;
     }
   ): Promise<{ status: 'ended' | 'aborted' | 'error'; message?: string }> {
     // AUDIT FIX (2026-08-22, P2): one-shot entry guard. `transferring` is set
@@ -6428,6 +6463,7 @@ export class TwilioRealtimeCall {
     if (
       this.voiceEngine === 'live' &&
       opts?.modelRequestedClose &&
+      !opts?.farewellAudioConfirmed &&
       !this.liveHasCurrentFarewell()
     ) {
       this.transferring = false;
@@ -6671,14 +6707,25 @@ export class TwilioRealtimeCall {
       } else {
         logger.warn(
           { tool: 'end_call', callSid: this.callSid, reason: endReason },
-          'Hangup aborted — fresh post-tool farewell audio never started'
+          'No post-tool farewell audio — closing rather than leaving the line silently open'
         );
         CallStore.recordToolCall(this.callSid, {
           name: 'end_call',
           ok: false,
-          error: 'aborted — fresh post-tool farewell audio never started',
+          error:
+            'no post-tool farewell audio — closed without a spoken farewell',
           detail: { reason: endReason },
         });
+        // W1 (2026-09-17): the one farewell request has already been made —
+        // this tool's own result note. Asking again is collision-prone (a
+        // response may still be in flight), and doing nothing left the caller
+        // on an open, silent line until the silence watchdog fired ~39s later
+        // (CA625dda083def1ba27a7148b8485bd771). So close instead. endCallNow
+        // still drains late-arriving audio, so a slow farewell is never cut
+        // off mid-sentence, and still stands down if the caller speaks during
+        // that drain. The spam tag stays rolled back above: nothing was
+        // spoken, so nothing is tagged.
+        await this.endCallNow(endReason, { speechEpochAtRequest });
       }
       return;
     }
@@ -6691,6 +6738,11 @@ export class TwilioRealtimeCall {
     const result = await this.endCallNow(endReason, {
       modelRequestedClose: true,
       speechEpochAtRequest,
+      // One farewell was requested and fresh audio for it has now started —
+      // that audio evidence, plus endCallNow's own playback drain, is what
+      // gates this close. Re-testing the transcript WORDING here would strand
+      // the caller whenever a real goodbye is phrased outside FAREWELL_PATTERNS.
+      farewellAudioConfirmed: true,
     });
     if (result.status === 'aborted') {
       if (spam && this.outcome === 'spam') {

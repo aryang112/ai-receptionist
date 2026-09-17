@@ -143,7 +143,7 @@ describe('GPT-Live native end_call', () => {
     call.markQueue = active ? [] : ['live-1'];
   }
 
-  it('waits for a requested farewell and refuses a silent hangup when none arrives', async () => {
+  it('asks once for a farewell, then closes instead of leaving a silent line open when none arrives', async () => {
     vi.useFakeTimers();
     const { call } = buildCall();
     call.voiceEngine = 'live';
@@ -153,11 +153,19 @@ describe('GPT-Live native end_call', () => {
     const result = await call.handleEndCall({ reason: 'done' });
 
     expect(result).toMatchObject({ ending: true });
+    expect(result.note).toMatch(
+      /say exactly one short, warm, natural farewell/i
+    );
     expect(call.modelEndCallPending).toBe(true);
     await vi.advanceTimersByTimeAsync(15000);
     expect(call.modelEndCallPending).toBe(false);
+    // Still exactly ONE request for the farewell — the tool result note. A
+    // second response.create here is collision-prone.
     expect(call.session.requestResponse).not.toHaveBeenCalled();
-    expect(call.closed).toBe(false);
+    // W1 (2026-09-17): the old behaviour returned here and left the line open
+    // until the silence watchdog fired ~39s later
+    // (CA625dda083def1ba27a7148b8485bd771). Closing is the correct end state.
+    expect(call.closed).toBe(true);
   });
 
   it('does not mistake a current okay backchannel for the farewell', async () => {
@@ -166,10 +174,60 @@ describe('GPT-Live native end_call', () => {
     stageCurrentFarewell(call, false);
     call.liveClosingText = [{ ts: Date.now(), text: 'Okay.' }];
     const result = await call.handleEndCall({ reason: 'done' });
+    // Not the "already spoken" branch — a farewell is requested instead.
     expect(result).toMatchObject({ ending: true });
+    expect(result.note).toMatch(
+      /say exactly one short, warm, natural farewell/i
+    );
     await vi.advanceTimersByTimeAsync(15000);
-    expect(call.closed).toBe(false);
+    // No farewell audio ever arrived, so the call closes rather than hanging
+    // open silently (W1, 2026-09-17).
+    expect(call.closed).toBe(true);
     expect(call.modelEndCallPending).toBe(false);
+  });
+
+  it('treats "I’ll take care of that" as an action, asks for one real farewell, and closes once it is spoken', async () => {
+    vi.useFakeTimers();
+    const { call } = buildCall();
+    call.voiceEngine = 'live';
+    call.lastCallerSpeechStoppedAt = Date.now() - 4_000;
+    call.liveLastOutputStartedAt = Date.now();
+    call.liveOutputActive = false;
+    call.markQueue = [];
+    // The real CA2e23da275cdde534bc4f3d6b93f65426 line (2026-09-17 19:05 ET),
+    // typographic apostrophes (U+2019) exactly as the Live transcript stream
+    // delivered them. The old pattern matched `take care` here and hung up
+    // without any goodbye.
+    call.liveClosingText = [
+      { ts: Date.now(), text: 'Yeah. I’ll take care of that. You’re welcome' },
+    ];
+
+    const result = await call.handleEndCall({ reason: 'done' });
+
+    expect(result).toMatchObject({ ending: true });
+    expect(result.note).not.toMatch(/farewell has been spoken/i);
+    expect(result.note).toMatch(
+      /say exactly one short, warm, natural farewell/i
+    );
+    expect(call.closed).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1); // scheduled closer starts waiting
+    // Erica speaks the requested farewell. Its wording is deliberately OUTSIDE
+    // FAREWELL_PATTERNS: once the server has asked for one and fresh audio for
+    // it starts, that audio (and the playback drain) gates the close — not a
+    // second guess at the wording.
+    call.outboundAudioEpoch += 1;
+    call.liveOutputActive = true;
+    call.liveClosingText.push({ ts: Date.now(), text: ' See you soon!' });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(call.closed).toBe(false); // never cut off mid-sentence
+
+    call.liveOutputActive = false;
+    call.markQueue = [];
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(call.closed).toBe(true);
+    expect(call.session.requestResponse).not.toHaveBeenCalled();
   });
 
   it('drains the current farewell and closes without requesting a second response', async () => {

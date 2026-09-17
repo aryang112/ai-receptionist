@@ -30,23 +30,23 @@ src/realtime/twilioStream.ts:1424  tool  end_call
 
 ### registerTrackedTool registrations (src/realtime/twilioStream.ts)
 
-src/realtime/twilioStream.ts:1955  registered_tool  suggest_availability -> handleSuggestAvailability
-src/realtime/twilioStream.ts:1965  registered_tool  reschedule_visit -> handleRescheduleVisit
-src/realtime/twilioStream.ts:1968  registered_tool  cancel_visit -> handleCancelVisit
-src/realtime/twilioStream.ts:1971  registered_tool  book_visit -> handleBookVisit
-src/realtime/twilioStream.ts:1975  registered_tool  book_appointment -> handleBookAppointment
-src/realtime/twilioStream.ts:1978  registered_tool  reschedule_appointment -> handleReschedule
-src/realtime/twilioStream.ts:1981  registered_tool  cancel_appointment -> handleCancel
-src/realtime/twilioStream.ts:1985  registered_tool  prepare_appointment_action -> proposals.prepare
-src/realtime/twilioStream.ts:1988  registered_tool  confirm_appointment_action -> proposals.confirm
-src/realtime/twilioStream.ts:1992  registered_tool  get_business_hours -> handleGetBusinessHours
-src/realtime/twilioStream.ts:1995  registered_tool  get_prices -> handleGetPrices
-src/realtime/twilioStream.ts:1998  registered_tool  lookup_customer -> handleLookupCustomer
-src/realtime/twilioStream.ts:2001  registered_tool  list_appointments -> handleListAppointments
-src/realtime/twilioStream.ts:2004  registered_tool  log_running_late -> handleLogRunningLate
-src/realtime/twilioStream.ts:2007  registered_tool  transfer_to_owner -> handleTransferToOwner
-src/realtime/twilioStream.ts:2010  registered_tool  leave_message_for_owner -> handleLiveMessage / handleLeaveMessageForOwner
-src/realtime/twilioStream.ts:2015  registered_tool  end_call -> handleEndCall
+src/realtime/twilioStream.ts:1984  registered_tool  suggest_availability -> handleSuggestAvailability
+src/realtime/twilioStream.ts:1994  registered_tool  reschedule_visit -> handleRescheduleVisit
+src/realtime/twilioStream.ts:1997  registered_tool  cancel_visit -> handleCancelVisit
+src/realtime/twilioStream.ts:2000  registered_tool  book_visit -> handleBookVisit
+src/realtime/twilioStream.ts:2004  registered_tool  book_appointment -> handleBookAppointment
+src/realtime/twilioStream.ts:2007  registered_tool  reschedule_appointment -> handleReschedule
+src/realtime/twilioStream.ts:2010  registered_tool  cancel_appointment -> handleCancel
+src/realtime/twilioStream.ts:2014  registered_tool  prepare_appointment_action -> proposals.prepare
+src/realtime/twilioStream.ts:2017  registered_tool  confirm_appointment_action -> proposals.confirm
+src/realtime/twilioStream.ts:2021  registered_tool  get_business_hours -> handleGetBusinessHours
+src/realtime/twilioStream.ts:2024  registered_tool  get_prices -> handleGetPrices
+src/realtime/twilioStream.ts:2027  registered_tool  lookup_customer -> handleLookupCustomer
+src/realtime/twilioStream.ts:2030  registered_tool  list_appointments -> handleListAppointments
+src/realtime/twilioStream.ts:2033  registered_tool  log_running_late -> handleLogRunningLate
+src/realtime/twilioStream.ts:2036  registered_tool  transfer_to_owner -> handleTransferToOwner
+src/realtime/twilioStream.ts:2039  registered_tool  leave_message_for_owner -> handleLiveMessage / handleLeaveMessageForOwner
+src/realtime/twilioStream.ts:2044  registered_tool  end_call -> handleEndCall
 
 ## src/config/businessConfig.ts
 
@@ -197,97 +197,98 @@ src/realtime/twilioStream.ts:971  function  editDistance
 src/realtime/twilioStream.ts:1012  export function  liveToolDefinitions
 src/realtime/twilioStream.ts:1086  const  TOOL_DEFINITIONS
 src/realtime/twilioStream.ts:1488  export function  isMoreHelpOfferText
-src/realtime/twilioStream.ts:1494  export class  TwilioRealtimeCall
-src/realtime/twilioStream.ts:1525  private method  TwilioRealtimeCall.isLiveRealWrite
-src/realtime/twilioStream.ts:1528  private method  TwilioRealtimeCall.hasPhoneMatchedClient
-src/realtime/twilioStream.ts:1534  private method  TwilioRealtimeCall.appointmentError
-src/realtime/twilioStream.ts:1634  private method  TwilioRealtimeCall.outboundStats
-src/realtime/twilioStream.ts:1842  method  TwilioRealtimeCall.constructor
-src/realtime/twilioStream.ts:1896  private method  TwilioRealtimeCall.createSession
-src/realtime/twilioStream.ts:2021  private method  TwilioRealtimeCall.recordLiveFragment
-src/realtime/twilioStream.ts:2054  private method  TwilioRealtimeCall.liveHasCurrentFarewell
-src/realtime/twilioStream.ts:2066  private async method  TwilioRealtimeCall.handleLiveMessage
-src/realtime/twilioStream.ts:2115  private method  TwilioRealtimeCall.registerTrackedTool
-src/realtime/twilioStream.ts:2139  private method  TwilioRealtimeCall.applyMoreHelpOfferNote
-src/realtime/twilioStream.ts:2165  private async method  TwilioRealtimeCall.prepareCallerContext
-src/realtime/twilioStream.ts:2231  private method  TwilioRealtimeCall.adoptRecognizedCaller
-src/realtime/twilioStream.ts:2294  private method  TwilioRealtimeCall.applyCallerContext
-src/realtime/twilioStream.ts:2311  private async method  TwilioRealtimeCall.recordSpamOutcomeIfNotClient
-src/realtime/twilioStream.ts:2340  private async method  TwilioRealtimeCall.handleMessage
-src/realtime/twilioStream.ts:2653  private method  TwilioRealtimeCall.handleMedia
-src/realtime/twilioStream.ts:2676  private method  TwilioRealtimeCall.flushPendingMedia
-src/realtime/twilioStream.ts:2697  private method  TwilioRealtimeCall.sendAudioToTwilio
-src/realtime/twilioStream.ts:2747  private method  TwilioRealtimeCall.sendMark
-src/realtime/twilioStream.ts:2777  private method  TwilioRealtimeCall.markGreetingPlayedOut
-src/realtime/twilioStream.ts:2799  private method  TwilioRealtimeCall.handleCallerSpeechStarted
-src/realtime/twilioStream.ts:2848  private method  TwilioRealtimeCall.handleCallerSpeechStopped
-src/realtime/twilioStream.ts:2869  private method  TwilioRealtimeCall.handleBargeIn
-src/realtime/twilioStream.ts:2899  private method  TwilioRealtimeCall.handleResponseComplete
-src/realtime/twilioStream.ts:2915  private method  TwilioRealtimeCall.startSilenceWatchdog
-src/realtime/twilioStream.ts:2934  private method  TwilioRealtimeCall.startMediaWatchdog
-src/realtime/twilioStream.ts:2957  private method  TwilioRealtimeCall.tickSilenceWatchdog
-src/realtime/twilioStream.ts:3047  private method  TwilioRealtimeCall.startDurationCap
-src/realtime/twilioStream.ts:3062  private method  TwilioRealtimeCall.fireDurationWarning
-src/realtime/twilioStream.ts:3073  private method  TwilioRealtimeCall.fireDurationCap
-src/realtime/twilioStream.ts:3083  private method  TwilioRealtimeCall.waitForToolCallsThenSayGoodbye
-src/realtime/twilioStream.ts:3101  private method  TwilioRealtimeCall.sayDurationCapGoodbye
-src/realtime/twilioStream.ts:3133  private async method  TwilioRealtimeCall.hangupForDurationCap
-src/realtime/twilioStream.ts:3149  private method  TwilioRealtimeCall.handleAssistantText
-src/realtime/twilioStream.ts:3164  private method  TwilioRealtimeCall.pushTranscriptEntry
-src/realtime/twilioStream.ts:3176  private method  TwilioRealtimeCall.ensureCallerItemSequence
-src/realtime/twilioStream.ts:3189  private method  TwilioRealtimeCall.handleCallerTranscript
-src/realtime/twilioStream.ts:3228  private method  TwilioRealtimeCall.handleAssistantTranscript
-src/realtime/twilioStream.ts:3269  private method  TwilioRealtimeCall.waitForCallerTranscript
-src/realtime/twilioStream.ts:3296  private method  TwilioRealtimeCall.accumulateUsage
-src/realtime/twilioStream.ts:3350  private method  TwilioRealtimeCall.estimateCostUsd
-src/realtime/twilioStream.ts:3408  private method  TwilioRealtimeCall.setEndReasonOnce
-src/realtime/twilioStream.ts:3434  private async method  TwilioRealtimeCall.fetchOpenSlots
-src/realtime/twilioStream.ts:3514  private async method  TwilioRealtimeCall.matchCallerNamedStaff
-src/realtime/twilioStream.ts:3527  private method  TwilioRealtimeCall.spreadAcross
-src/realtime/twilioStream.ts:3549  private method  TwilioRealtimeCall.selectOfferedSlots
-src/realtime/twilioStream.ts:3625  private async method  TwilioRealtimeCall.findNearbyAvailability
-src/realtime/twilioStream.ts:3743  private async method  TwilioRealtimeCall.addNearbyDates
-src/realtime/twilioStream.ts:3776  private async method  TwilioRealtimeCall.handleSuggestAvailability
-src/realtime/twilioStream.ts:4040  private async method  TwilioRealtimeCall.handleBookAppointment
-src/realtime/twilioStream.ts:4341  private async method  TwilioRealtimeCall.handleBookVisit
-src/realtime/twilioStream.ts:4551  private async method  TwilioRealtimeCall.handleCancelVisit
-src/realtime/twilioStream.ts:4670  private async method  TwilioRealtimeCall.handleRescheduleVisit
-src/realtime/twilioStream.ts:4885  private async method  TwilioRealtimeCall.handleReschedule
-src/realtime/twilioStream.ts:5120  private async method  TwilioRealtimeCall.handleCancel
-src/realtime/twilioStream.ts:5198  private async method  TwilioRealtimeCall.handleGetBusinessHours
-src/realtime/twilioStream.ts:5261  private async method  TwilioRealtimeCall.handleGetPrices
-src/realtime/twilioStream.ts:5366  private async method  TwilioRealtimeCall.handleLookupCustomer
-src/realtime/twilioStream.ts:5596  private async method  TwilioRealtimeCall.handleListAppointments
-src/realtime/twilioStream.ts:5763  private async method  TwilioRealtimeCall.handleLogRunningLate
-src/realtime/twilioStream.ts:5904  private method  TwilioRealtimeCall.callerDisplayName
-src/realtime/twilioStream.ts:5915  private method  TwilioRealtimeCall.ownerSmsCallerName
-src/realtime/twilioStream.ts:5920  private method  TwilioRealtimeCall.ownerMessageContentRequired
-src/realtime/twilioStream.ts:5934  private async method  TwilioRealtimeCall.submitOwnerMessage
-src/realtime/twilioStream.ts:5968  private async method  TwilioRealtimeCall.deliverOwnerMessage
-src/realtime/twilioStream.ts:6091  private async method  TwilioRealtimeCall.handleLeaveMessageForOwner
-src/realtime/twilioStream.ts:6137  private async method  TwilioRealtimeCall.handleTransferToOwner
-src/realtime/twilioStream.ts:6364  private async method  TwilioRealtimeCall.endCallNow
-src/realtime/twilioStream.ts:6529  private async method  TwilioRealtimeCall.handleEndCall
-src/realtime/twilioStream.ts:6642  private async method  TwilioRealtimeCall.finishModelEndCall
-src/realtime/twilioStream.ts:6718  private method  TwilioRealtimeCall.formatError
-src/realtime/twilioStream.ts:6724  private method  TwilioRealtimeCall.slotKey
-src/realtime/twilioStream.ts:6729  private method  TwilioRealtimeCall.offeredTimesForDate
-src/realtime/twilioStream.ts:6753  private method  TwilioRealtimeCall.startCallRecording
-src/realtime/twilioStream.ts:6789  private method  TwilioRealtimeCall.scheduleChangeNeedsOwnerFyi
-src/realtime/twilioStream.ts:6807  private method  TwilioRealtimeCall.formatScheduleDate
-src/realtime/twilioStream.ts:6812  private method  TwilioRealtimeCall.formatScheduleTime
-src/realtime/twilioStream.ts:6825  private method  TwilioRealtimeCall.notifyOwnerSms
-src/realtime/twilioStream.ts:6847  private method  TwilioRealtimeCall.schedulePostCallSummary
-src/realtime/twilioStream.ts:6873  private method  TwilioRealtimeCall.waitForGoodbyeToStart
-src/realtime/twilioStream.ts:6910  private method  TwilioRealtimeCall.waitForPlaybackToDrain
-src/realtime/twilioStream.ts:6938  private method  TwilioRealtimeCall.normalizePhone
-src/realtime/twilioStream.ts:6952  private async method  TwilioRealtimeCall.nextAppointmentFor
-src/realtime/twilioStream.ts:6982  private method  TwilioRealtimeCall.priceRows
-src/realtime/twilioStream.ts:6998  private method  TwilioRealtimeCall.markInfoOutcome
-src/realtime/twilioStream.ts:7002  private async method  TwilioRealtimeCall.handleError
-src/realtime/twilioStream.ts:7023  private async method  TwilioRealtimeCall.failoverToOwner
-src/realtime/twilioStream.ts:7068  private method  TwilioRealtimeCall.cleanup
-src/realtime/twilioStream.ts:7235  export function  setupTwilioRealtimeStream
+src/realtime/twilioStream.ts:1519  export function  isFarewellText
+src/realtime/twilioStream.ts:1523  export class  TwilioRealtimeCall
+src/realtime/twilioStream.ts:1554  private method  TwilioRealtimeCall.isLiveRealWrite
+src/realtime/twilioStream.ts:1557  private method  TwilioRealtimeCall.hasPhoneMatchedClient
+src/realtime/twilioStream.ts:1563  private method  TwilioRealtimeCall.appointmentError
+src/realtime/twilioStream.ts:1663  private method  TwilioRealtimeCall.outboundStats
+src/realtime/twilioStream.ts:1871  method  TwilioRealtimeCall.constructor
+src/realtime/twilioStream.ts:1925  private method  TwilioRealtimeCall.createSession
+src/realtime/twilioStream.ts:2050  private method  TwilioRealtimeCall.recordLiveFragment
+src/realtime/twilioStream.ts:2083  private method  TwilioRealtimeCall.liveHasCurrentFarewell
+src/realtime/twilioStream.ts:2094  private async method  TwilioRealtimeCall.handleLiveMessage
+src/realtime/twilioStream.ts:2143  private method  TwilioRealtimeCall.registerTrackedTool
+src/realtime/twilioStream.ts:2167  private method  TwilioRealtimeCall.applyMoreHelpOfferNote
+src/realtime/twilioStream.ts:2193  private async method  TwilioRealtimeCall.prepareCallerContext
+src/realtime/twilioStream.ts:2259  private method  TwilioRealtimeCall.adoptRecognizedCaller
+src/realtime/twilioStream.ts:2322  private method  TwilioRealtimeCall.applyCallerContext
+src/realtime/twilioStream.ts:2339  private async method  TwilioRealtimeCall.recordSpamOutcomeIfNotClient
+src/realtime/twilioStream.ts:2368  private async method  TwilioRealtimeCall.handleMessage
+src/realtime/twilioStream.ts:2681  private method  TwilioRealtimeCall.handleMedia
+src/realtime/twilioStream.ts:2704  private method  TwilioRealtimeCall.flushPendingMedia
+src/realtime/twilioStream.ts:2725  private method  TwilioRealtimeCall.sendAudioToTwilio
+src/realtime/twilioStream.ts:2775  private method  TwilioRealtimeCall.sendMark
+src/realtime/twilioStream.ts:2805  private method  TwilioRealtimeCall.markGreetingPlayedOut
+src/realtime/twilioStream.ts:2827  private method  TwilioRealtimeCall.handleCallerSpeechStarted
+src/realtime/twilioStream.ts:2876  private method  TwilioRealtimeCall.handleCallerSpeechStopped
+src/realtime/twilioStream.ts:2897  private method  TwilioRealtimeCall.handleBargeIn
+src/realtime/twilioStream.ts:2927  private method  TwilioRealtimeCall.handleResponseComplete
+src/realtime/twilioStream.ts:2943  private method  TwilioRealtimeCall.startSilenceWatchdog
+src/realtime/twilioStream.ts:2962  private method  TwilioRealtimeCall.startMediaWatchdog
+src/realtime/twilioStream.ts:2985  private method  TwilioRealtimeCall.tickSilenceWatchdog
+src/realtime/twilioStream.ts:3075  private method  TwilioRealtimeCall.startDurationCap
+src/realtime/twilioStream.ts:3090  private method  TwilioRealtimeCall.fireDurationWarning
+src/realtime/twilioStream.ts:3101  private method  TwilioRealtimeCall.fireDurationCap
+src/realtime/twilioStream.ts:3111  private method  TwilioRealtimeCall.waitForToolCallsThenSayGoodbye
+src/realtime/twilioStream.ts:3129  private method  TwilioRealtimeCall.sayDurationCapGoodbye
+src/realtime/twilioStream.ts:3161  private async method  TwilioRealtimeCall.hangupForDurationCap
+src/realtime/twilioStream.ts:3177  private method  TwilioRealtimeCall.handleAssistantText
+src/realtime/twilioStream.ts:3192  private method  TwilioRealtimeCall.pushTranscriptEntry
+src/realtime/twilioStream.ts:3204  private method  TwilioRealtimeCall.ensureCallerItemSequence
+src/realtime/twilioStream.ts:3217  private method  TwilioRealtimeCall.handleCallerTranscript
+src/realtime/twilioStream.ts:3256  private method  TwilioRealtimeCall.handleAssistantTranscript
+src/realtime/twilioStream.ts:3297  private method  TwilioRealtimeCall.waitForCallerTranscript
+src/realtime/twilioStream.ts:3324  private method  TwilioRealtimeCall.accumulateUsage
+src/realtime/twilioStream.ts:3378  private method  TwilioRealtimeCall.estimateCostUsd
+src/realtime/twilioStream.ts:3436  private method  TwilioRealtimeCall.setEndReasonOnce
+src/realtime/twilioStream.ts:3462  private async method  TwilioRealtimeCall.fetchOpenSlots
+src/realtime/twilioStream.ts:3542  private async method  TwilioRealtimeCall.matchCallerNamedStaff
+src/realtime/twilioStream.ts:3555  private method  TwilioRealtimeCall.spreadAcross
+src/realtime/twilioStream.ts:3577  private method  TwilioRealtimeCall.selectOfferedSlots
+src/realtime/twilioStream.ts:3653  private async method  TwilioRealtimeCall.findNearbyAvailability
+src/realtime/twilioStream.ts:3771  private async method  TwilioRealtimeCall.addNearbyDates
+src/realtime/twilioStream.ts:3804  private async method  TwilioRealtimeCall.handleSuggestAvailability
+src/realtime/twilioStream.ts:4068  private async method  TwilioRealtimeCall.handleBookAppointment
+src/realtime/twilioStream.ts:4369  private async method  TwilioRealtimeCall.handleBookVisit
+src/realtime/twilioStream.ts:4579  private async method  TwilioRealtimeCall.handleCancelVisit
+src/realtime/twilioStream.ts:4698  private async method  TwilioRealtimeCall.handleRescheduleVisit
+src/realtime/twilioStream.ts:4913  private async method  TwilioRealtimeCall.handleReschedule
+src/realtime/twilioStream.ts:5148  private async method  TwilioRealtimeCall.handleCancel
+src/realtime/twilioStream.ts:5226  private async method  TwilioRealtimeCall.handleGetBusinessHours
+src/realtime/twilioStream.ts:5289  private async method  TwilioRealtimeCall.handleGetPrices
+src/realtime/twilioStream.ts:5394  private async method  TwilioRealtimeCall.handleLookupCustomer
+src/realtime/twilioStream.ts:5624  private async method  TwilioRealtimeCall.handleListAppointments
+src/realtime/twilioStream.ts:5791  private async method  TwilioRealtimeCall.handleLogRunningLate
+src/realtime/twilioStream.ts:5932  private method  TwilioRealtimeCall.callerDisplayName
+src/realtime/twilioStream.ts:5943  private method  TwilioRealtimeCall.ownerSmsCallerName
+src/realtime/twilioStream.ts:5948  private method  TwilioRealtimeCall.ownerMessageContentRequired
+src/realtime/twilioStream.ts:5962  private async method  TwilioRealtimeCall.submitOwnerMessage
+src/realtime/twilioStream.ts:5996  private async method  TwilioRealtimeCall.deliverOwnerMessage
+src/realtime/twilioStream.ts:6119  private async method  TwilioRealtimeCall.handleLeaveMessageForOwner
+src/realtime/twilioStream.ts:6165  private async method  TwilioRealtimeCall.handleTransferToOwner
+src/realtime/twilioStream.ts:6392  private async method  TwilioRealtimeCall.endCallNow
+src/realtime/twilioStream.ts:6565  private async method  TwilioRealtimeCall.handleEndCall
+src/realtime/twilioStream.ts:6678  private async method  TwilioRealtimeCall.finishModelEndCall
+src/realtime/twilioStream.ts:6770  private method  TwilioRealtimeCall.formatError
+src/realtime/twilioStream.ts:6776  private method  TwilioRealtimeCall.slotKey
+src/realtime/twilioStream.ts:6781  private method  TwilioRealtimeCall.offeredTimesForDate
+src/realtime/twilioStream.ts:6805  private method  TwilioRealtimeCall.startCallRecording
+src/realtime/twilioStream.ts:6841  private method  TwilioRealtimeCall.scheduleChangeNeedsOwnerFyi
+src/realtime/twilioStream.ts:6859  private method  TwilioRealtimeCall.formatScheduleDate
+src/realtime/twilioStream.ts:6864  private method  TwilioRealtimeCall.formatScheduleTime
+src/realtime/twilioStream.ts:6877  private method  TwilioRealtimeCall.notifyOwnerSms
+src/realtime/twilioStream.ts:6899  private method  TwilioRealtimeCall.schedulePostCallSummary
+src/realtime/twilioStream.ts:6925  private method  TwilioRealtimeCall.waitForGoodbyeToStart
+src/realtime/twilioStream.ts:6962  private method  TwilioRealtimeCall.waitForPlaybackToDrain
+src/realtime/twilioStream.ts:6990  private method  TwilioRealtimeCall.normalizePhone
+src/realtime/twilioStream.ts:7004  private async method  TwilioRealtimeCall.nextAppointmentFor
+src/realtime/twilioStream.ts:7034  private method  TwilioRealtimeCall.priceRows
+src/realtime/twilioStream.ts:7050  private method  TwilioRealtimeCall.markInfoOutcome
+src/realtime/twilioStream.ts:7054  private async method  TwilioRealtimeCall.handleError
+src/realtime/twilioStream.ts:7075  private async method  TwilioRealtimeCall.failoverToOwner
+src/realtime/twilioStream.ts:7120  private method  TwilioRealtimeCall.cleanup
+src/realtime/twilioStream.ts:7287  export function  setupTwilioRealtimeStream
 
 ## src/routes/admin.ts
 
@@ -296,14 +297,14 @@ src/routes/admin.ts:76  function  safeTokenEquals
 src/routes/admin.ts:82  function  getCookie
 src/routes/admin.ts:99  function  extractBearer
 src/routes/admin.ts:114  export function  adminAuth
-src/routes/admin.ts:260  function  last4
-src/routes/admin.ts:266  type  CallSummary
-src/routes/admin.ts:310  function  isTestGroup
-src/routes/admin.ts:320  function  computeFlags
-src/routes/admin.ts:348  function  sumUsage
-src/routes/admin.ts:363  function  buildCallSummaries
-src/routes/admin.ts:478  function  daysParam
-src/routes/admin.ts:484  function  testViewParam
+src/routes/admin.ts:272  function  last4
+src/routes/admin.ts:278  type  CallSummary
+src/routes/admin.ts:328  function  isTestGroup
+src/routes/admin.ts:338  function  computeFlags
+src/routes/admin.ts:380  function  sumUsage
+src/routes/admin.ts:395  function  buildCallSummaries
+src/routes/admin.ts:522  function  daysParam
+src/routes/admin.ts:528  function  testViewParam
 
 ## src/routes/health.ts
 
@@ -368,7 +369,7 @@ src/services/callStore.ts:58  type  TranscriptEntry
 src/services/callStore.ts:64  type  OwnerNotificationEntry
 src/services/callStore.ts:97  function  append
 src/services/callStore.ts:121  const  CallStore
-src/services/callStore.ts:268  export function  readCalls
+src/services/callStore.ts:287  export function  readCalls
 
 ## src/services/digest.ts
 
