@@ -61,10 +61,42 @@ function atTime(date: DateTime, hhmm: string): DateTime {
   const [h, m] = hhmm.split(':').map(Number);
   return date.set({ hour: h ?? 0, minute: m ?? 0, second: 0, millisecond: 0 });
 }
-const rangeStart = (date: DateTime, range: string) =>
-  atTime(date, range.split('-')[0]!);
-const rangeEnd = (date: DateTime, range: string) =>
-  atTime(date, range.split('-')[1]!);
+
+// business.json ranges are "HH:mm-HH:mm". A range missing either side is a
+// config error, not a runtime possibility to silently paper over.
+function rangeStart(date: DateTime, range: string): DateTime {
+  const [start] = range.split('-');
+  if (start === undefined) {
+    throw new Error(`Malformed hours range in business.json: "${range}"`);
+  }
+  return atTime(date, start);
+}
+function rangeEnd(date: DateTime, range: string): DateTime {
+  const end = range.split('-')[1];
+  if (end === undefined) {
+    throw new Error(`Malformed hours range in business.json: "${range}"`);
+  }
+  return atTime(date, end);
+}
+
+// `rangesForDate` returns [] for a closed day; every call site below has
+// already checked for that (via `.length`, `salonOpenThatDay`, or an early
+// `continue`/`return`) before indexing into it. These make that guarantee
+// explicit instead of asserting past it with `!`.
+function firstRange(ranges: string[]): string {
+  const [first] = ranges;
+  if (first === undefined) {
+    throw new Error('Expected at least one hours range for this date');
+  }
+  return first;
+}
+function lastRange(ranges: string[]): string {
+  const last = ranges[ranges.length - 1];
+  if (last === undefined) {
+    throw new Error('Expected at least one hours range for this date');
+  }
+  return last;
+}
 
 // H1: exported so twilioStream.ts's prompt HOURS-block formatter reuses the
 // exact same 12-hour rendering instead of a second copy that could drift.
@@ -93,8 +125,8 @@ export function getOpenClose(
   const ranges = rangesForDate(date);
   if (!ranges.length) return null;
   return {
-    open: rangeStart(date, ranges[0]!),
-    close: rangeEnd(date, ranges[ranges.length - 1]!),
+    open: rangeStart(date, firstRange(ranges)),
+    close: rangeEnd(date, lastRange(ranges)),
   };
 }
 
@@ -115,7 +147,7 @@ export function getHoursStatus(
   let closedRightNow = false;
   if (isToday) {
     closedRightNow =
-      !salonOpenThatDay || nowDt >= rangeEnd(date, ranges[ranges.length - 1]!);
+      !salonOpenThatDay || nowDt >= rangeEnd(date, lastRange(ranges));
   }
 
   const hoursThatDay = salonOpenThatDay
@@ -133,7 +165,7 @@ export function getHoursStatus(
     const d = nowDt.plus({ days: i }).startOf('day');
     const r = rangesForDate(d);
     if (!r.length) continue;
-    const open = rangeStart(d, r[0]!);
+    const open = rangeStart(d, firstRange(r));
     if (open > nowDt) {
       // A bare weekday is only unambiguous within the coming week. During a
       // 9-day away closure "next open Thursday" was rendered on a Tuesday

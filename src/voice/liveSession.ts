@@ -917,7 +917,8 @@ export class OpenAILiveSession {
       performance.now() >= this.nextOutputAt &&
       !this.closing
     ) {
-      const frame = this.outputQueue.shift()!;
+      const frame = this.outputQueue.shift();
+      if (frame === undefined) break; // the while-condition length check guarantees this cannot happen
       const transition = this.outputSpeechGate.process(frame);
       if (transition === 'started') {
         this.greetingSpoken = this.greetingRequested || this.greetingSpoken;
@@ -1109,8 +1110,9 @@ export class OpenAILiveSession {
   }
 
   private sendRaw(message: Record<string, unknown>): void {
-    if (!this.isWritable()) return;
-    this.ws!.send(JSON.stringify(message));
+    const ws = this.ws;
+    if (!ws || !this.isWritable()) return;
+    ws.send(JSON.stringify(message));
   }
 
   private releaseSocket(): void {

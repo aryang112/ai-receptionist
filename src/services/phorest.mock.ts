@@ -13,6 +13,17 @@ function normalizePhone(phone: string): string {
     : digits;
 }
 
+// DateTime.now() is always a valid instant, so toISODate() cannot return
+// null here — but the return type is still `string | null`, so we assert
+// the invariant explicitly rather than with `!`.
+function todayISO(): string {
+  const iso = DateTime.now().setZone('America/New_York').toISODate();
+  if (iso === null) {
+    throw new Error('DateTime.now() produced an invalid ISO date');
+  }
+  return iso;
+}
+
 // Pretend salon services. Kept representative on purpose so the service-matcher
 // tests use the live "Brow Threading" name (a fake "Eyebrow Threading" entry
 // masked the September 7 mismatch),
@@ -98,7 +109,7 @@ export const mockPhorest: PhorestPort = {
   },
 
   async listAppointments(_clientId: string): Promise<AppointmentSummary[]> {
-    const today = DateTime.now().setZone('America/New_York').toISODate()!;
+    const today = todayISO();
     return [
       {
         appointmentId: 'appt_mock_001',
@@ -119,7 +130,7 @@ export const mockPhorest: PhorestPort = {
   },
 
   async getTodayAppointments(): Promise<AppointmentSummary[]> {
-    const today = DateTime.now().setZone('America/New_York').toISODate()!;
+    const today = todayISO();
     return [
       {
         appointmentId: 'appt_mock_001',

@@ -101,6 +101,11 @@ function tokens(s: string): string[] {
   return normalize(s).split(' ').filter(Boolean);
 }
 
+/** The sole element of `arr` when it has exactly one, else undefined. */
+function only<T>(arr: T[]): T | undefined {
+  return arr.length === 1 ? arr[0] : undefined;
+}
+
 // The outcome of resolving a caller phrase against the live catalog.
 export type ServiceMatch =
   | { kind: 'match'; service: Service }
@@ -134,7 +139,8 @@ export async function resolveService(
   const exact = services.filter((s) => normalize(s.name) === q);
   if (exact.length > 1)
     return { kind: 'ambiguous', candidates: exact.slice(0, 3) };
-  if (exact.length === 1) return { kind: 'match', service: exact[0]! };
+  const soleExact = only(exact);
+  if (soleExact) return { kind: 'match', service: soleExact };
 
   // (2) alias -> re-resolve the aliased phrase (exact, then token scoring).
   const aliased = SERVICE_ALIASES[q];
@@ -142,8 +148,8 @@ export async function resolveService(
     const aliasExact = services.filter((s) => normalize(s.name) === aliased);
     if (aliasExact.length > 1)
       return { kind: 'ambiguous', candidates: aliasExact.slice(0, 3) };
-    if (aliasExact.length === 1)
-      return { kind: 'match', service: aliasExact[0]! };
+    const soleAliasExact = only(aliasExact);
+    if (soleAliasExact) return { kind: 'match', service: soleAliasExact };
     // Fall through using the aliased phrase as the query for token scoring.
   }
 
@@ -164,7 +170,8 @@ export async function resolveService(
       );
       if (full.length > 1)
         return { kind: 'ambiguous', candidates: full.slice(0, 3) };
-      if (full.length === 1) return { kind: 'match', service: full[0]! };
+      const soleFull = only(full);
+      if (soleFull) return { kind: 'match', service: soleFull };
     }
   }
 
@@ -219,7 +226,8 @@ export async function resolveService(
             .map((s) => [s.id, s])
         ).values(),
       ];
-      if (hits.length === 1) return { kind: 'match', service: hits[0]! };
+      const soleHit = only(hits);
+      if (soleHit) return { kind: 'match', service: soleHit };
       if (hits.length > 1)
         return { kind: 'ambiguous', candidates: hits.slice(0, 3) };
     }
@@ -238,7 +246,11 @@ export async function resolveService(
     return { kind: 'notOffered', closest };
   }
 
-  const top = scored[0]!;
+  const [top] = scored;
+  if (!top) {
+    // Unreachable: the `scored.length === 0` branch above already returned.
+    throw new Error('resolveService: scored list unexpectedly empty');
+  }
   const distinct = new Map(scored.map((x) => [x.service.id, x]));
 
   // A coverage of 1.0 means the query named the WHOLE service (every token of

@@ -58,20 +58,32 @@ function parseSections(prompt: string): {
 } {
   const re = /^═══ (.+?) ═══\s*$/gm;
   const matches = [...prompt.matchAll(re)];
-  if (!matches.length) return { lead: prompt.trim(), sections: [] };
+  const [first] = matches;
+  if (!first) return { lead: prompt.trim(), sections: [] };
 
-  const first = matches[0]!;
   const sections: PromptSection[] = [];
-  for (let i = 0; i < matches.length; i++) {
-    const match = matches[i]!;
-    const start = match.index! + match[0].length;
+  for (const [i, match] of matches.entries()) {
+    const name = match[1];
+    const matchIndex = match.index;
+    if (name === undefined || matchIndex === undefined) {
+      // matchAll always sets `.index`, and this regex's capture group is
+      // mandatory (not `?` or in an alternation) — unreachable in practice.
+      throw new Error(
+        'parseSections: matchAll result missing index or capture group'
+      );
+    }
+    const start = matchIndex + match[0].length;
     const end = matches[i + 1]?.index ?? prompt.length;
     sections.push({
-      name: match[1]!.trim(),
+      name: name.trim(),
       body: prompt.slice(start, end).trim(),
     });
   }
-  return { lead: prompt.slice(0, first.index).trim(), sections };
+  const firstIndex = first.index;
+  if (firstIndex === undefined) {
+    throw new Error('parseSections: matchAll result missing index');
+  }
+  return { lead: prompt.slice(0, firstIndex).trim(), sections };
 }
 
 function section(sections: PromptSection[], name: string): string {
@@ -84,15 +96,18 @@ function productionFacts(instructions: string): LivePublicFacts {
   const identity = lead.match(
     /^You are Erica, the AI receptionist for (.+?) in (.+?), (.+?)\./
   );
-  if (identity) facts.salonName = identity[1]!;
+  const salonName = identity?.[1];
+  if (salonName) facts.salonName = salonName;
 
   const context = section(sections, 'CONTEXT');
   const location = context.match(
     /^LOCATION:\s*(.+?)(?:\. For directions|\n|$)/m
   );
   const hours = context.match(/^HOURS:\s*(.+)$/m);
-  if (location) facts.address = location[1]!.trim();
-  if (hours) facts.weeklyHours = hours[1]!.trim();
+  const address = location?.[1];
+  if (address) facts.address = address.trim();
+  const weeklyHours = hours?.[1];
+  if (weeklyHours) facts.weeklyHours = weeklyHours.trim();
 
   const current =
     section(
@@ -107,10 +122,14 @@ function productionFacts(instructions: string): LivePublicFacts {
     const zone = dateLine.match(/timezone ([^)]+)\)/);
     const today = dateLine.match(/use the date ([^;]+);/);
     const tomorrow = dateLine.match(/tomorrow is ([^.]+)\./);
-    if (when) facts.dateTime = when[1]!.trim();
-    if (zone) facts.timezone = zone[1]!.trim();
-    if (today) facts.today = today[1]!.trim();
-    if (tomorrow) facts.tomorrow = tomorrow[1]!.trim();
+    const dateTimeValue = when?.[1];
+    if (dateTimeValue) facts.dateTime = dateTimeValue.trim();
+    const timezoneValue = zone?.[1];
+    if (timezoneValue) facts.timezone = timezoneValue.trim();
+    const todayValue = today?.[1];
+    if (todayValue) facts.today = todayValue.trim();
+    const tomorrowValue = tomorrow?.[1];
+    if (tomorrowValue) facts.tomorrow = tomorrowValue.trim();
   }
 
   const currentLines = current.split('\n');
@@ -124,15 +143,17 @@ function productionFacts(instructions: string): LivePublicFacts {
       .replace(/\s+/g, ' ')
       .trim();
     const tomorrowHours = clean.match(/Tomorrow \([^)]+\): (.+)\.$/);
-    if (tomorrowHours) facts.tomorrowHours = tomorrowHours[1]!.trim();
+    const tomorrowHoursValue = tomorrowHours?.[1];
+    if (tomorrowHoursValue) facts.tomorrowHours = tomorrowHoursValue.trim();
     facts.currentStatus = clean;
   }
 
   const richaLine = current.match(
     /RICHA'S LINE \(do NOT re-derive it\): Richa is (.*?)(?:\. Connecting rings|\n|$)/i
   );
-  if (richaLine) {
-    facts.richaStatus = richaLine[1]!
+  const richaStatusRaw = richaLine?.[1];
+  if (richaStatusRaw) {
+    facts.richaStatus = richaStatusRaw
       .replace(/; follow TEMPORARY CLOSURE POLICY$/i, '')
       .trim();
   }

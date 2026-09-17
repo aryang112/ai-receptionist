@@ -53,6 +53,41 @@ import { DateTime } from 'luxon';
 // decodeMuLaw no longer needed here — audio decoding happens in openaiSession
 import { businessHours } from '../config/businessConfig.js';
 
+/**
+ * A `plan` from `planConsecutive` always has one DateTime per requested
+ * service — that's the function's own contract (visits.ts), and every call
+ * site here builds `durations`/`items` from the same list, so `plan[index]`
+ * is always defined for `index` in range. This makes that invariant
+ * explicit instead of asserting past it with `!`.
+ */
+function planStartAt(
+  plan: DateTime[],
+  index: number,
+  context: string
+): DateTime {
+  const start = plan[index];
+  if (!start) {
+    throw new Error(`${context}: plan missing a start at index ${index}`);
+  }
+  return start;
+}
+
+/**
+ * `DateTime.toISODate()` types as `string | null`, but only for an INVALID
+ * DateTime. Every call site here builds `dt` from `DateTime.now()` (always
+ * valid) or a value already derived from it — so a null result can only mean
+ * that invariant broke. Throw rather than assert past it with `!`.
+ */
+function isoDateOrThrow(dt: DateTime, context: string): string {
+  const iso = dt.toISODate();
+  if (iso === null) {
+    throw new Error(
+      `${context}: expected a valid DateTime to produce an ISO date`
+    );
+  }
+  return iso;
+}
+
 // Lazy-initialised so tests don't fail without creds
 let _twilioClient: ReturnType<typeof twilio> | null = null;
 function getTwilioClient() {
@@ -402,7 +437,10 @@ function formatDayHours(ranges: string[]): string {
   return ranges
     .map((r) => {
       const [start, end] = r.split('-');
-      return `${fmtTime(hhmmToDt(start!))}–${fmtTime(hhmmToDt(end!))}`;
+      if (start === undefined || end === undefined) {
+        throw new Error(`Malformed hours range in business.json: "${r}"`);
+      }
+      return `${fmtTime(hhmmToDt(start))}–${fmtTime(hhmmToDt(end))}`;
     })
     .join(' and ');
 }
@@ -936,17 +974,39 @@ function editDistance(a: string, b: string): number {
     row[0] = i;
     return row;
   });
-  for (let j = 0; j <= b.length; j++) dp[0]![j] = j;
+  // Every row index 0..a.length and cell index 0..b.length used below is
+  // provably in range by construction (the loop bounds match the array's
+  // own dimensions) — the guards make that explicit instead of asserting
+  // past it with `!`.
+  const firstRow = dp[0];
+  if (!firstRow) throw new Error('editDistance: dp table missing row 0');
+  for (let j = 0; j <= b.length; j++) firstRow[j] = j;
   for (let i = 1; i <= a.length; i++) {
+    const prev = dp[i - 1];
+    const cur = dp[i];
+    if (!prev || !cur) {
+      throw new Error(`editDistance: dp table missing row ${i}`);
+    }
     for (let j = 1; j <= b.length; j++) {
-      dp[i]![j] = Math.min(
-        dp[i - 1]![j]! + 1,
-        dp[i]![j - 1]! + 1,
-        dp[i - 1]![j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1)
+      const diag = prev[j - 1];
+      const up = prev[j];
+      const left = cur[j - 1];
+      if (diag === undefined || up === undefined || left === undefined) {
+        throw new Error(`editDistance: dp table missing cell (${i}, ${j})`);
+      }
+      cur[j] = Math.min(
+        up + 1,
+        left + 1,
+        diag + (a[i - 1] === b[j - 1] ? 0 : 1)
       );
     }
   }
-  return dp[a.length]![b.length]!;
+  const lastRow = dp[a.length];
+  const result = lastRow?.[b.length];
+  if (result === undefined) {
+    throw new Error('editDistance: dp table missing result cell');
+  }
+  return result;
 }
 
 export function liveToolDefinitions(): ToolDefinition[] {
@@ -2401,11 +2461,17 @@ export class TwilioRealtimeCall {
                 ? ('transfer_failback' as const)
                 : ('new_call' as const),
               publicFacts: {
-                today: now.toISODate()!,
-                tomorrow: now.plus({ days: 1 }).toISODate()!,
+                today: isoDateOrThrow(now, 'createSession publicFacts'),
+                tomorrow: isoDateOrThrow(
+                  now.plus({ days: 1 }),
+                  'createSession publicFacts'
+                ),
                 weeklyHours: JSON.stringify(businessHours.hours),
                 currentStatus: JSON.stringify(
-                  getHoursStatus(now.toISODate()!, now)
+                  getHoursStatus(
+                    isoDateOrThrow(now, 'createSession publicFacts'),
+                    now
+                  )
                 ),
                 address: Object.values(businessHours.location).join(', '),
               },
@@ -3461,10 +3527,22 @@ export class TwilioRealtimeCall {
   private spreadAcross(list: DateTime[], max: number): DateTime[] {
     if (max <= 0 || list.length === 0) return [];
     if (list.length <= max) return [...list];
+    // Both formulas below only ever produce indices in [0, list.length - 1] —
+    // this makes that provably-in-range invariant explicit rather than
+    // asserting past it with `!`.
+    const at = (index: number): DateTime => {
+      const item = list[index];
+      if (!item) {
+        throw new Error(
+          `spreadAcross: index ${index} out of bounds for list of length ${list.length}`
+        );
+      }
+      return item;
+    };
     // Guard the single-pick case: the even-step formula divides by (max - 1).
-    if (max === 1) return [list[Math.floor((list.length - 1) / 2)]!];
+    if (max === 1) return [at(Math.floor((list.length - 1) / 2))];
     const step = (list.length - 1) / (max - 1);
-    return Array.from({ length: max }, (_, i) => list[Math.round(i * step)]!);
+    return Array.from({ length: max }, (_, i) => at(Math.round(i * step)));
   }
 
   /** Keep ordinary and nearby offers on the same preference/spread rules. */
@@ -3552,12 +3630,12 @@ export class TwilioRealtimeCall {
     const from = DateTime.fromISO(date, { zone: env.TIMEZONE });
     const today = DateTime.now().setZone(env.TIMEZONE).startOf('day');
     if (!from.isValid || from < today || this.closed) return null;
-    const through = from
-      .plus({ days: env.NEARBY_AVAILABILITY_DAYS })
-      .toISODate()!;
-    const dates = Array.from(
-      { length: env.NEARBY_AVAILABILITY_DAYS },
-      (_, i) => from.plus({ days: i + 1 }).toISODate()!
+    const through = isoDateOrThrow(
+      from.plus({ days: env.NEARBY_AVAILABILITY_DAYS }),
+      'findNearbyAvailability'
+    );
+    const dates = Array.from({ length: env.NEARBY_AVAILABILITY_DAYS }, (_, i) =>
+      isoDateOrThrow(from.plus({ days: i + 1 }), 'findNearbyAvailability')
     ).filter((candidate) => getOpenClose(candidate) !== null);
     const alternativeDates: Array<{
       date: string;
@@ -3628,8 +3706,20 @@ export class TwilioRealtimeCall {
     }
     if (this.closed) return null;
     for (const alternative of alternativeDates) {
+      const canonicalName = canonicalNames.get(alternative.date);
+      if (canonicalName === undefined) {
+        // Behaviour change (2026-09-16 audit): previously `!` silently let a
+        // missing canonical name through, writing an offered-slot key that
+        // could weaken the fresh-slot gate on that date. Skip the write and
+        // warn instead — the gate stays strict rather than failing open.
+        logger.warn(
+          { date: alternative.date },
+          'findNearbyAvailability: missing canonical service name — skipping offered-slot write for this date'
+        );
+        continue;
+      }
       this.offeredSlots.set(
-        this.slotKey(canonicalNames.get(alternative.date)!, alternative.date),
+        this.slotKey(canonicalName, alternative.date),
         new Set(alternative.slots.map((slot) => slot.value))
       );
     }
@@ -3710,7 +3800,15 @@ export class TwilioRealtimeCall {
           payload.serviceName,
           payload.serviceId
         );
-        payload.serviceName = canonical!.name;
+        if (!canonical) {
+          // Unreachable: resolveService throws on an unknown serviceId
+          // rather than returning undefined, so a resolved serviceId always
+          // yields a service here.
+          throw new Error(
+            'handleSuggestAvailability: resolved serviceId without a service'
+          );
+        }
+        payload.serviceName = canonical.name;
       }
 
       // FR-01: business.json is authoritative for closures. Reject a known
@@ -4045,7 +4143,7 @@ export class TwilioRealtimeCall {
           nameFirst === prefetchFirst
       );
       const clientId =
-        payload.clientId ?? (recognized ? this.prefetch!.clientId : undefined);
+        payload.clientId ?? (recognized ? this.prefetch?.clientId : undefined);
       if (
         this.isLiveRealWrite() &&
         clientId &&
@@ -4323,15 +4421,21 @@ export class TwilioRealtimeCall {
           const key = this.slotKey(item.service.name, payload.date);
           const existing = this.offeredSlots.get(key) ?? new Set<string>();
           for (const plan of plans)
-            existing.add(plan[index]!.toFormat('HH:mm'));
+            existing.add(
+              planStartAt(plan, index, 'book_visit plan').toFormat('HH:mm')
+            );
           this.offeredSlots.set(key, existing);
         }
         const options = plans.map((plan) => ({
-          startTime: plan[0]!.toFormat('HH:mm'),
+          startTime: planStartAt(plan, 0, 'book_visit option').toFormat(
+            'HH:mm'
+          ),
           items: items.map((item, index) => ({
             service: item.service.name,
             price: item.service.price,
-            time: plan[index]!.toFormat('h:mm a'),
+            time: planStartAt(plan, index, 'book_visit option').toFormat(
+              'h:mm a'
+            ),
           })),
         }));
         const requestedMissed =
@@ -4363,7 +4467,9 @@ export class TwilioRealtimeCall {
         zone: env.TIMEZONE,
       });
       const chosen = planConsecutive(available, durations, start, 3).find(
-        (plan) => plan[0]!.toFormat('HH:mm') === payload.startTime
+        (plan) =>
+          planStartAt(plan, 0, 'book_visit find').toFormat('HH:mm') ===
+          payload.startTime
       );
       if (!chosen) {
         return {
@@ -4387,7 +4493,9 @@ export class TwilioRealtimeCall {
           serviceName: item.service.name,
           serviceId: item.service.id,
           date: payload.date,
-          time: chosen[index]!.toFormat('HH:mm'),
+          time: planStartAt(chosen, index, 'book_visit chosen').toFormat(
+            'HH:mm'
+          ),
           ...(payload.clientId ? { clientId: payload.clientId } : {}),
           ...(payload.customer ? { customer: payload.customer } : {}),
         })) as { error?: string; price?: number };
@@ -4396,7 +4504,9 @@ export class TwilioRealtimeCall {
         } else {
           booked.push({
             service: item.service.name,
-            time: chosen[index]!.toFormat('h:mm a'),
+            time: planStartAt(chosen, index, 'book_visit chosen').toFormat(
+              'h:mm a'
+            ),
             ...(item.service.price != null
               ? { price: item.service.price }
               : {}),
@@ -4645,16 +4755,24 @@ export class TwilioRealtimeCall {
           const key = this.slotKey(item.service.name, payload.date);
           const existing = this.offeredSlots.get(key) ?? new Set<string>();
           for (const plan of plans) {
-            existing.add(plan[index]!.toFormat('HH:mm'));
+            existing.add(
+              planStartAt(plan, index, 'reschedule_visit plan').toFormat(
+                'HH:mm'
+              )
+            );
           }
           this.offeredSlots.set(key, existing);
         }
         const options = plans.map((plan) => ({
-          startTime: plan[0]!.toFormat('HH:mm'),
+          startTime: planStartAt(plan, 0, 'reschedule_visit option').toFormat(
+            'HH:mm'
+          ),
           items: items.map((item, index) => ({
             appointmentId: item.appointmentId,
             service: item.service.name,
-            time: plan[index]!.toFormat('h:mm a'),
+            time: planStartAt(plan, index, 'reschedule_visit option').toFormat(
+              'h:mm a'
+            ),
           })),
         }));
         logger.info(
@@ -4689,7 +4807,9 @@ export class TwilioRealtimeCall {
         zone: env.TIMEZONE,
       });
       const chosen = planConsecutive(available, durations, start, 3).find(
-        (plan) => plan[0]!.toFormat('HH:mm') === payload.startTime
+        (plan) =>
+          planStartAt(plan, 0, 'reschedule_visit find').toFormat('HH:mm') ===
+          payload.startTime
       );
       if (!chosen) {
         return {
@@ -4704,7 +4824,11 @@ export class TwilioRealtimeCall {
       const moved: { service: string; time: string }[] = [];
       const failed: { service: string; error: string }[] = [];
       for (const [index, item] of items.entries()) {
-        const time = chosen[index]!.toFormat('HH:mm');
+        const time = planStartAt(
+          chosen,
+          index,
+          'reschedule_visit chosen'
+        ).toFormat('HH:mm');
         const result = (await this.handleReschedule({
           appointmentId: item.appointmentId,
           date: payload.date,
@@ -4715,7 +4839,11 @@ export class TwilioRealtimeCall {
         } else {
           moved.push({
             service: item.service.name,
-            time: chosen[index]!.toFormat('h:mm a'),
+            time: planStartAt(
+              chosen,
+              index,
+              'reschedule_visit chosen'
+            ).toFormat('h:mm a'),
           });
         }
       }
@@ -5336,23 +5464,24 @@ export class TwilioRealtimeCall {
           payload.firstName,
           payload.lastName
         );
-        if (results.length === 1) {
+        const [soleResult] = results;
+        if (results.length === 1 && soleResult) {
           logger.info(
-            { tool: 'lookup_customer', clientId: results[0]!.clientId },
+            { tool: 'lookup_customer', clientId: soleResult.clientId },
             'Customer found by name'
           );
           this.markInfoOutcome();
           CallStore.recordToolCall(this.callSid, {
             name: 'lookup_customer',
             ok: true,
-            detail: { clientId: results[0]!.clientId, matchedBy: 'name' },
+            detail: { clientId: soleResult.clientId, matchedBy: 'name' },
           });
           const nameMatchName =
-            `${results[0]!.firstName} ${results[0]!.lastName}`.trim();
-          this.clientNames.set(results[0]!.clientId, nameMatchName);
+            `${soleResult.firstName} ${soleResult.lastName}`.trim();
+          this.clientNames.set(soleResult.clientId, nameMatchName);
           return {
             found: true,
-            clientId: results[0]!.clientId,
+            clientId: soleResult.clientId,
             name: nameMatchName,
             matchedBy: 'name',
           };

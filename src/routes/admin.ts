@@ -41,13 +41,14 @@ export const adminRouter = express.Router();
 // root, since no asset-copy step exists in `npm run build` today).
 // ─────────────────────────────────────────────────────────────────────────
 const here = path.dirname(fileURLToPath(import.meta.url));
+const primaryDashboardPath = path.join(here, '..', 'public', 'dashboard.html');
 const DASHBOARD_HTML_CANDIDATES = [
-  path.join(here, '..', 'public', 'dashboard.html'),
+  primaryDashboardPath,
   path.join(process.cwd(), 'src', 'public', 'dashboard.html'),
 ];
 const DASHBOARD_HTML_PATH =
   DASHBOARD_HTML_CANDIDATES.find((p) => fs.existsSync(p)) ??
-  DASHBOARD_HTML_CANDIDATES[0]!;
+  primaryDashboardPath;
 
 let dashboardHtml: string;
 try {

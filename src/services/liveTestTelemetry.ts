@@ -104,7 +104,15 @@ export function deriveLiveTestTelemetry(
   const voiceRows = rows
     .filter((row) => row.type === 'voice' && row.event === 'live_usage')
     .map((row, index) => ({ row, index, detail: asRecord(row.detail) }))
-    .filter((entry) => !!entry.detail);
+    .filter(
+      (
+        entry
+      ): entry is {
+        row: LiveTelemetryRow;
+        index: number;
+        detail: Record<string, unknown>;
+      } => !!entry.detail
+    );
   if (voiceRows.length === 0) return undefined;
 
   let newestVoice: { seconds: number; ts: number; index: number } | undefined;
@@ -120,7 +128,7 @@ export function deriveLiveTestTelemetry(
       typeof row.ts === 'number' && Number.isFinite(row.ts)
         ? row.ts
         : -Infinity;
-    const voiceSeconds = nonNegativeFinite(detail!.voiceSeconds);
+    const voiceSeconds = nonNegativeFinite(detail.voiceSeconds);
     if (
       voiceSeconds !== undefined &&
       (!newestVoice ||
@@ -130,20 +138,20 @@ export function deriveLiveTestTelemetry(
       newestVoice = { seconds: voiceSeconds, ts, index };
     }
 
-    if (detail!.final === true && typeof detail!.finalConfirmed === 'boolean') {
+    if (detail.final === true && typeof detail.finalConfirmed === 'boolean') {
       if (
         !newestFinal ||
         ts > newestFinal.ts ||
         (ts === newestFinal.ts && index > newestFinal.index)
       ) {
-        newestFinal = { finalConfirmed: detail!.finalConfirmed, ts, index };
+        newestFinal = { finalConfirmed: detail.finalConfirmed, ts, index };
       }
     }
 
-    const usage = parseBackendUsage(detail!.backendUsage);
+    const usage = parseBackendUsage(detail.backendUsage);
     if (!usage) continue;
     const responseId =
-      typeof detail!.responseId === 'string' ? detail!.responseId : undefined;
+      typeof detail.responseId === 'string' ? detail.responseId : undefined;
     if (responseId && seenResponseIds.has(responseId)) continue;
     if (responseId) seenResponseIds.add(responseId);
     backendResponseCount += 1;

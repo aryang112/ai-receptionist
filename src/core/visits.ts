@@ -60,6 +60,21 @@ export function clusterSameVisit<T>(
  *
  * Returns up to `max` plans, nearest `preferred` first when given.
  */
+// A `plan` is `placed` from the loop below, which pushes exactly
+// `durationsMin.length` starts when it fits — and `durationsMin.length >= 1`
+// is guaranteed by the early return just below. So every plan in `plans`
+// has at least one element; this makes that invariant explicit instead of
+// asserting past it with `!`.
+function firstStart(plan: DateTime[]): DateTime {
+  const [first] = plan;
+  if (!first) {
+    throw new Error(
+      'planConsecutive produced an empty plan — durationsMin must be non-empty'
+    );
+  }
+  return first;
+}
+
 export function planConsecutive(
   available: DateTime[],
   durationsMin: number[],
@@ -96,8 +111,8 @@ export function planConsecutive(
     // silently demoted the closest fit behind an earlier, worse one.
     plans.sort(
       (a, b) =>
-        Math.abs(a[0]!.toMillis() - preferred.toMillis()) -
-        Math.abs(b[0]!.toMillis() - preferred.toMillis())
+        Math.abs(firstStart(a).toMillis() - preferred.toMillis()) -
+        Math.abs(firstStart(b).toMillis() - preferred.toMillis())
     );
     // …but the runners-up must be REAL alternatives. Ranking purely by
     // distance returned 2:50 / 2:45 / 2:40 for a blocked 3 PM — three
@@ -115,7 +130,9 @@ export function planConsecutive(
       if (spread.length >= max) break;
       const clashes = spread.some(
         (chosen) =>
-          Math.abs(chosen[0]!.diff(plan[0]!, 'minutes').minutes) < spacingMin
+          Math.abs(
+            firstStart(chosen).diff(firstStart(plan), 'minutes').minutes
+          ) < spacingMin
       );
       if (!clashes) spread.push(plan);
     }

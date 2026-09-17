@@ -40,6 +40,23 @@ function isSimulatedId(id: string): boolean {
   return id.startsWith(SIMULATED_ID_PREFIX);
 }
 
+/**
+ * `DateTime.toISODate()` types as `string | null`, but only for an INVALID
+ * DateTime. Every call site here either already checked `.isValid` or built
+ * the DateTime from `DateTime.now()` (which is always valid), so a null
+ * result can only mean that invariant broke — throw rather than assert past
+ * it with `!`.
+ */
+function isoDateOf(dt: DateTime, context: string): string {
+  const iso = dt.toISODate();
+  if (iso === null) {
+    throw new Error(
+      `${context}: expected a valid DateTime to produce an ISO date`
+    );
+  }
+  return iso;
+}
+
 function normalizePhone(phone: string): string {
   const digits = phone.replace(/\D/g, '');
   return digits.length === 11 && digits.startsWith('1')
@@ -66,7 +83,7 @@ function appointmentSummary(
   return {
     appointmentId,
     serviceName: service.name,
-    date: start.toISODate()!,
+    date: isoDateOf(start, 'appointmentSummary'),
     timeDisplay: start.toFormat('h:mm a'),
     startTimeRaw: start.toFormat('HH:mm:ss'),
     endTimeRaw: end.toFormat('HH:mm:ss'),
@@ -96,7 +113,7 @@ function moveSummary(
   const end = start.plus({ minutes: duration });
   return {
     ...current,
-    date: start.toISODate()!,
+    date: isoDateOf(start, 'moveSummary'),
     timeDisplay: start.toFormat('h:mm a'),
     startTimeRaw: start.toFormat('HH:mm:ss'),
     endTimeRaw: end.toFormat('HH:mm:ss'),
@@ -284,7 +301,7 @@ export function simulatedWrites(real: PhorestPort): PhorestPort {
 
     async listAppointments(clientId, fromDate) {
       const minDate =
-        fromDate ?? DateTime.now().setZone(env.TIMEZONE).toISODate()!;
+        fromDate ?? isoDateOf(DateTime.now().setZone(env.TIMEZONE), 'listAppointments');
       if (isSimulatedId(clientId)) {
         return simulatedClients.has(clientId)
           ? simulatedAppointmentsForClient(clientId, minDate)
@@ -334,7 +351,7 @@ export function simulatedWrites(real: PhorestPort): PhorestPort {
     },
 
     async getTodayAppointments() {
-      const today = DateTime.now().setZone(env.TIMEZONE).toISODate()!;
+      const today = isoDateOf(DateTime.now().setZone(env.TIMEZONE), 'getTodayAppointments');
       const realAppointments = await real.getTodayAppointments();
       const mergedReal = new Map<string, AppointmentSummary>();
       for (const appointment of realAppointments) {

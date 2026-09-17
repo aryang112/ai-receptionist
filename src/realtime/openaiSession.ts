@@ -546,17 +546,19 @@ export class OpenAIRealtimeSession {
   }
 
   private flushQueue() {
-    if (!this.isOpen()) return;
+    const ws = this.ws;
+    if (!ws || !this.isOpen()) return;
     while (this.messagesQueue.length) {
       const message = this.messagesQueue.shift();
       if (!message) continue;
-      this.ws!.send(JSON.stringify(message));
+      ws.send(JSON.stringify(message));
     }
   }
 
   private queueMessage(message: Record<string, unknown>) {
-    if (this.isOpen()) {
-      this.ws!.send(JSON.stringify(message));
+    const ws = this.ws;
+    if (ws && this.isOpen()) {
+      ws.send(JSON.stringify(message));
     } else {
       this.messagesQueue.push(message);
     }
@@ -564,8 +566,9 @@ export class OpenAIRealtimeSession {
 
   /** Send immediately, or silently drop if the socket is closed (never throws). */
   private sendRaw(message: Record<string, unknown>) {
-    if (!this.isOpen()) return;
-    this.ws!.send(JSON.stringify(message));
+    const ws = this.ws;
+    if (!ws || !this.isOpen()) return;
+    ws.send(JSON.stringify(message));
   }
 
   private async handleEvent(event: any): Promise<void> {
@@ -1034,7 +1037,8 @@ export class OpenAIRealtimeSession {
 
   private startKeepalive() {
     this.keepaliveInterval = setInterval(() => {
-      if (this.isOpen()) this.ws!.ping();
+      const ws = this.ws;
+      if (ws && this.isOpen()) ws.ping();
     }, 30000);
   }
 

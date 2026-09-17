@@ -44,7 +44,13 @@ export function parseOwnerCommand(body: string): OwnerCommand {
   const match = REF_PREFIX.exec(raw);
 
   if (match) {
-    const candidate = match[1]!.toUpperCase();
+    // REF_PREFIX's capture group is mandatory (not inside `?` or an
+    // alternation), so a successful match always captures it.
+    const captured = match[1];
+    if (captured === undefined) {
+      throw new Error('REF_PREFIX matched without capturing its ref group');
+    }
+    const candidate = captured.toUpperCase();
     const byRef = SmsStore.byRef(candidate);
     if (byRef) {
       const instruction = raw.slice(match[0].length).trim();
@@ -63,7 +69,12 @@ export function parseOwnerCommand(body: string): OwnerCommand {
 
   // No ref given: answer the most recent escalation — the one whose text she
   // is almost certainly replying to.
-  const target = open[open.length - 1]!;
+  const target = open[open.length - 1];
+  if (target === undefined) {
+    // Unreachable: the `open.length === 0` check above guarantees an element
+    // exists here.
+    return { kind: 'no_open_threads' };
+  }
   return { kind: 'instruction', thread: target, instruction: raw };
 }
 

@@ -69,11 +69,11 @@ function cleanClause(value: string, maxChars: number): string {
 
 function sentence(value: string): string {
   const clean = cleanClause(value, 260);
-  return clean ? `${clean[0]!.toUpperCase()}${clean.slice(1)}.` : '';
+  return clean ? `${clean.charAt(0).toUpperCase()}${clean.slice(1)}.` : '';
 }
 
 function lowerInitial(value: string): string {
-  return value ? value[0]!.toLowerCase() + value.slice(1) : value;
+  return value ? value.charAt(0).toLowerCase() + value.slice(1) : value;
 }
 
 function comparableText(value: string): string {

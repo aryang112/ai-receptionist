@@ -191,6 +191,23 @@ function toPhorestIso(dt: DateTime): string {
     .toISO({ suppressMilliseconds: true }) as string;
 }
 
+/**
+ * `DateTime.toISODate()` types as `string | null`, but only for an INVALID
+ * DateTime. Every call site here builds `dt` either from `DateTime.now()`
+ * (always valid) or from a DateTime already validated upstream (e.g.
+ * `parseSalonDateTime`, which throws on an invalid input) — so a null result
+ * can only mean that invariant broke. Throw rather than assert past it.
+ */
+function isoDateOrThrow(dt: DateTime, context: string): string {
+  const iso = dt.toISODate();
+  if (iso === null) {
+    throw new Error(
+      `${context}: expected a valid DateTime to produce an ISO date`
+    );
+  }
+  return iso;
+}
+
 // Hard cap on any single Phorest round-trip. Without this, a hung request
 // becomes unbounded dead air for the caller (undici default headersTimeout ~300s).
 const PHOREST_TIMEOUT_MS = Number(process.env.PHOREST_TIMEOUT_MS || 4000);
@@ -602,8 +619,12 @@ function confirmedClientSubject(customer: {
     .filter(Boolean);
   if (nameParts.length < 2) return undefined;
 
-  const firstName = nameParts[0]!;
-  const lastName = nameParts.slice(1).join(' ');
+  const [firstName, ...rest] = nameParts;
+  if (firstName === undefined) {
+    // Unreachable: `nameParts.length >= 2` is checked just above.
+    return undefined;
+  }
+  const lastName = rest.join(' ');
   const email = normalizeEmail(customer.email);
   const sanitizedPhone = sanitisePhone(customer.phone);
   const phone = sanitizedPhone?.length === 10 ? sanitizedPhone : undefined;
@@ -663,7 +684,9 @@ function pickConfirmedClientRecord(
     .sort((a, b) => b.score - a.score);
   if (matches.length === 0) return undefined;
 
-  const bestScore = matches[0]!.score;
+  const [best] = matches;
+  if (!best) return undefined; // unreachable: matches.length >= 1 checked above
+  const bestScore = best.score;
   const bestMatches = matches.filter(
     (candidate) => candidate.score === bestScore
   );
@@ -678,7 +701,13 @@ function pickConfirmedClientRecord(
     );
     throw new AmbiguousClientMatchError();
   }
-  return bestMatches[0]!.client;
+  const [soleBest] = bestMatches;
+  if (!soleBest) {
+    // Unreachable: `bestScore` came from `matches[0]`, which itself always
+    // has score === bestScore, so bestMatches always has at least one entry.
+    throw new Error('pickConfirmedClientRecord: expected a best match');
+  }
+  return soleBest.client;
 }
 
 async function findClientRecordByEmail(
@@ -1312,7 +1341,7 @@ async function verifyCreatedAppointment(
       fetchAppointmentForClientOnDate(
         appointmentId,
         clientId,
-        start.toISODate()!
+        isoDateOrThrow(start, 'verifyCreatedAppointment')
       ),
     (appointment) => ({
       clientMatches: appointment?.clientId === clientId,
@@ -1467,13 +1496,12 @@ export const realPhorest: PhorestPort = {
     // every slot to salon-local ISO so the rest of the app (and the model) reads
     // the right wall-clock time — otherwise 3 PM (19:00Z) gets spoken as "7 PM".
     return Array.from(slotSet)
-      .map(
-        (s) =>
-          DateTime.fromISO(s, { zone: 'utc' })
-            .setZone(SALON_TIMEZONE)
-            .toISO({ suppressMilliseconds: true })!
+      .map((s) =>
+        DateTime.fromISO(s, { zone: 'utc' })
+          .setZone(SALON_TIMEZONE)
+          .toISO({ suppressMilliseconds: true })
       )
-      .filter(Boolean)
+      .filter((iso): iso is string => iso !== null)
       .sort();
   },
 
@@ -1702,7 +1730,11 @@ export const realPhorest: PhorestPort = {
     fromDate?: string
   ): Promise<AppointmentSummary[]> {
     const startDate = DateTime.fromISO(
-      fromDate ?? DateTime.now().setZone(SALON_TIMEZONE).toISODate()!,
+      fromDate ??
+        isoDateOrThrow(
+          DateTime.now().setZone(SALON_TIMEZONE),
+          'listAppointments minDate'
+        ),
       { zone: SALON_TIMEZONE }
     );
     // Phorest requires both from_date and to_date AND caps a single request at
@@ -1710,12 +1742,18 @@ export const realPhorest: PhorestPort = {
     // hides appointments 5+ weeks out — the caller then hears "no upcoming
     // appointments" and gets offered a DUPLICATE booking. Cover ~60 days with
     // two sequential <=30-day windows and concatenate the results.
+    const windowStart = isoDateOrThrow(startDate, 'listAppointments window');
+    const windowMid = isoDateOrThrow(
+      startDate.plus({ days: 30 }),
+      'listAppointments window'
+    );
+    const windowEnd = isoDateOrThrow(
+      startDate.plus({ days: 60 }),
+      'listAppointments window'
+    );
     const windows: Array<[string, string]> = [
-      [startDate.toISODate()!, startDate.plus({ days: 30 }).toISODate()!],
-      [
-        startDate.plus({ days: 30 }).toISODate()!,
-        startDate.plus({ days: 60 }).toISODate()!,
-      ],
+      [windowStart, windowMid],
+      [windowMid, windowEnd],
     ];
 
     // CRITICAL: the param is snake_case `client_id`. The camelCase `clientId`
@@ -1785,7 +1823,7 @@ export const realPhorest: PhorestPort = {
       .map(({ a, start, end }) => ({
         appointmentId: a.appointmentId,
         serviceName: a.serviceName ?? 'Appointment',
-        date: start.toISODate()!,
+        date: isoDateOrThrow(start, 'listAppointments result'),
         timeDisplay: start.toFormat('h:mm a'),
         startTimeRaw: a.startTime,
         endTimeRaw: a.endTime ?? end.toFormat('HH:mm:ss'),
@@ -1817,7 +1855,10 @@ export const realPhorest: PhorestPort = {
   },
 
   async getTodayAppointments(): Promise<AppointmentSummary[]> {
-    const today = DateTime.now().setZone(SALON_TIMEZONE).toISODate()!;
+    const today = isoDateOrThrow(
+      DateTime.now().setZone(SALON_TIMEZONE),
+      'getTodayAppointments'
+    );
     const response = await phorestFetch<AppointmentListResponse>(
       businessBranchPath(
         `/appointment?from_date=${today}&to_date=${today}&size=200`
@@ -1839,7 +1880,7 @@ export const realPhorest: PhorestPort = {
         return {
           appointmentId: a.appointmentId,
           serviceName: a.serviceName ?? 'Appointment',
-          date: startLocal.toISODate()!,
+          date: isoDateOrThrow(startLocal, 'getTodayAppointments result'),
           timeDisplay: startLocal.toFormat('h:mm a'),
           startTimeRaw: a.startTime,
           endTimeRaw: a.endTime ?? a.startTime,

@@ -57,7 +57,14 @@ Caller dials Twilio number
   ladder in tasks/lessons.md. State-specific coaching still lives in tool-result
   `note` fields. `matchStaffName()` +
   `matchCallerNamedStaff` catch a staff name passed as serviceName (the
-  Glenda flub) and coach via the tool result; suggest_availability /
+  Glenda flub) and coach via the tool result — edit bound scales with name
+  length (`maxEditsFor`: 2 edits for 5+ letters so Richard/Rishka→Richa, 1 for
+  4 letters so "and"↛Manu), only consulted when the resolver returned NO
+  service candidates; `STAFF_MATCH_STOPWORDS` is a small function-word safety
+  net. `moreHelpOffered` (set from Erica's own output text via
+  `isMoreHelpOfferText`) makes every later tool result carry
+  `moreHelpAlreadyOffered` + a note, so "ask once" is server state, not prose;
+  suggest_availability /
   list_appointments results carry state-specific notes; wire formats live in
   TOOL_DEFINITIONS descriptions),
   `TOOL_DEFINITIONS`, all tool handlers (`handleSuggestAvailability`,
@@ -172,8 +179,16 @@ Caller dials Twilio number
 - **phorest.ts** — selector (mock vs real by env / NODE_ENV).
 - **phorest.types.ts** — `PhorestPort` interface (CONTRACT — mock & real must match),
   `Service`, `CustomerResult`, `AppointmentSummary`.
-- **booking.ts** — `suggestSlots`, `bookAppointment`, `findServiceByName` (fuzzy match
-  + `SERVICE_ALIASES`, e.g. "lash lamination"→"Lash Lift"), Zod schemas.
+- **booking.ts** — `resolveService` is THE one service matcher (get_prices and
+  suggest_availability both use it; there are not "two selectors"). `normalize()`
+  drops joiner words (and/plus/with…) and the modifiers upper/lower from BOTH
+  catalog names and caller phrases, maps synonyms (thread→threading,
+  waxing→wax…), and token scoring compares token SETS so a repeated word in a
+  bundle name ("Brow Thread + Lip Thread") does not undercount. 2026-09-16:
+  "brow and lip" used to MATCH "Brow Wax and Lip Wax" because the wax name's own
+  "and" won; now ambiguous (threading vs wax), never a silent wax pick. Locked by
+  booking.serviceJoiner.test.ts. `suggestSlots`, `bookAppointment`,
+  `findServiceByName` (thin wrapper), `SERVICE_ALIASES`, Zod schemas.
 ## src/core/
 - **hours.ts** — `getHoursStatus(date)` (open/closed/closedRightNow/nextOpen),
   `getOpenClose(date)`. Reads `config/business.json` (the hours source of truth).
@@ -256,7 +271,12 @@ Caller dials Twilio number
   prompt/hours tool). One provider's absence in a multi-stylist salon is not a
   salon closure. **Do not change casually.**
 
-## src/tests/  (vitest, 46 files / 528 tests as of 2026-09-03)
+## src/tests/  (vitest, 71 files / 832 tests as of 2026-09-16)
+2026-09-16 additions: booking.serviceJoiner.test.ts (joiner words / set coverage),
+toolRegistration.test.ts (every advertised tool has a handler, both engines),
+__golden__/ (rendered prompt snapshots; see Prompt layers), staffMatch.test.ts
+(length-scaled bound), twilioStream.liveIntegration.test.ts (more-help offer
+note), twilioStream.visit.test.ts (two-phase cancel_visit).
 phorest.client.test.ts (URL/range/client_id/timezone/retry regressions),
 hours.test.ts, booking.alias/match.test.ts, slots.test.ts (clean-grid snapping),
 wsAuth, middleware, twilioStream.bargein/contracts, phorest.mock/selector,
@@ -348,31 +368,45 @@ re-check" (A1).
 - `twilioStream.ts`: real Live fresh checks fail closed; caller-ID/phone-match binding gates explicit client IDs; uncertain writes invalidate warm appointment lists. Live tool notes retain prepare/confirm for subsequent changes.
 - `env.ts`: PHOREST_WRITE_MODE=real allows direct callers; independent OWNER_TRANSFER_MODE and OWNER_SMS_MODE keep communications simulated during this pilot. Digest/summary are disabled in runtime.
 - `controller-probe.mjs`: hosted real mode requires explicit PROBE_ALLOW_REAL_BACKEND=true; default remote refusal protects against mistaken reliance on local simulate settings.
-- Grouped visits are now RUNTIME functionality (2026-09-15), superseding
+- Grouped visits are RUNTIME functionality (2026-09-15/16), superseding
   `docs/GPT_LIVE_GROUPED_VISIT_PLAN_2026-09-12.md`: `book_visit`,
-  `reschedule_visit` (both two-phase — plan, then one yes, then confirmed) and
-  `cancel_visit` (single phase, `confirmed` required). All execute sequentially
-  through the existing single-appointment handlers, so every write guard applies
-  unchanged, and partial success is reported honestly. `log_running_late` takes
-  optional `alsoAppointmentIds` so a late caller's whole sitting is noted.
-  ⚠️ Each needed an explicit carve-out in `livePrompts.ts` → BACKEND TOOL USE:
-  the backend bans raw write tools, so a tool it may not call does not exist.
+  `reschedule_visit` and `cancel_visit` are ALL two-phase — a plan call returns a
+  server-authored read-back (options, or for cancel_visit the exact
+  service/day/time list from the served-appointment maps), then one yes, then
+  the call again with `confirmed:true`; cancel_visit's confirmed call must repeat
+  the exact id set it read back (`pendingCancelVisitIds`). All execute
+  sequentially through the existing single-appointment handlers, so every write
+  guard applies unchanged, and partial success is reported honestly.
+  `log_running_late` takes optional `alsoAppointmentIds`.
+  ⚠️ Two ways a tool can be dead: (1) the backend rules ban it — needs a
+  carve-out in `backendRules.ts` BACKEND TOOL USE; (2) it is advertised but has
+  no handler registered on that engine — the visit tools were Realtime-only until
+  2026-09-16. `src/tests/toolRegistration.test.ts` now asserts every advertised
+  tool has a handler on both engines and dispatches the visit tools through the
+  session's real tool path.
 
 ## Prompt layers (GPT-Live) — read before editing any prompt
-- `twilioStream.ts` `buildInstructions()` builds the PRODUCTION prompt. Budget
-  ~4200 est. tokens, enforced by `twilioStream.prompt.test.ts`.
+**Realtime is retired (Aryan, 2026-09-16).** `VOICE_ENGINE=live` is the only
+production path; see `docs/REALTIME_RETIREMENT_PLAN_2026-09-16.md` for the
+staged removal. Until Stage 1 lands, `buildInstructions()` in `twilioStream.ts`
+still exists because the COMPUTED facts (CONTEXT, CURRENT STATUS, closure) are
+parsed out of it.
 - `livePrompts.ts` `buildLivePrompt()` — the VOICE model's prompt. Budget 900
   est. tokens. Conversation only; it delegates everything factual.
-- `livePrompts.ts` `buildBackendPrompt()` — the THINKING model's prompt: a
-  filtered copy of the production prompt **plus its own CONVERSATION FLOW and
-  BACKEND TOOL USE sections**, which are NOT budget-capped.
-- ⚠️ **`livePrompts.ts` REPLACES the production prompt's `SERVE` section.**
-  Editing `SERVE` in `twilioStream.ts` is inert on the Live path. Change Live
-  behaviour in `livePrompts.ts`, or (preferred) in a tool-result note, which
-  rides with the data and only appears when relevant.
-- `livePrompts.test.ts` pins a SHA of the production prompt as a
-  deliberate-change tripwire; update it only with an intentional edit and say
-  what changed.
+- `src/voice/backendRules.ts` — the THINKING model's RULES, authored as plain
+  string constants (PRIORITY … BACKEND TOOL USE). **Edit Live behaviour here**,
+  or (preferred) in a tool-result note, which rides with the data.
+- `livePrompts.ts` `buildBackendPrompt()` assembles backendRules + computed
+  facts + catalog + caller context. No regex rewriting of rule text remains.
+- `src/tests/__golden__/*.txt` pin the rendered Live and backend prompts
+  byte-for-byte at fixed clocks/closure states. A wording change is deliberate:
+  regenerate with `UPDATE_GOLDEN=1 npx vitest run src/tests/livePrompts.test.ts`,
+  then review `git diff src/tests/__golden__` — only the intended sentences may
+  differ.
+- ⚠️ The `═══ CONVERSATION FLOW ═══` (IDENTIFY/SERVE/CLOSE) block in
+  `buildInstructions()` is REALTIME-ONLY and inert in production (banner comment
+  in the template). `livePrompts.test.ts` pins a SHA of that production prompt;
+  its failure message now says so.
 - Render what the model actually receives:
   `node --env-file=.env --import tsx scripts/render-live-prompts.ts`
 
@@ -385,7 +419,8 @@ re-check" (A1).
 
 ## Deploying
 `railway up --service erica --detach` from
-`~/Documents/Dev/ai-receptionist-live-2026-09-12` **only**. The main checkout is
-linked to the same Railway service and silently ships old `main`. Verify with
-`GET /admin/voice-test` (live-branch-only route) → `engine: "live"`; a booted
-container proves nothing.
+`~/Documents/Dev/ai-receptionist-live-2026-09-12` **only**. 2026-09-16: the main
+checkout was `railway unlink`ed so it can no longer ship old `main` by accident.
+Verify with `railway deployment list` (new SUCCESS row) and
+`GET /admin/voice-test` → `engine: "live"`; a booted container proves nothing.
+Backlog: expose a build identity (commit sha) on that route.

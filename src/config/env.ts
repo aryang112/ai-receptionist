@@ -27,7 +27,11 @@ function optionalMode<T extends string>(
   allowed: readonly T[]
 ): T | undefined {
   if (value === undefined || value === '') return undefined;
-  return requiredMode(name, value, allowed[0]!, allowed);
+  const [fallback] = allowed;
+  if (fallback === undefined) {
+    throw new Error(`${name}: allowed list must not be empty`);
+  }
+  return requiredMode(name, value, fallback, allowed);
 }
 
 export const env = {
