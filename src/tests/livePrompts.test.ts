@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { DateTime } from 'luxon';
 import { describe, expect, it } from 'vitest';
 import { buildInstructions } from '../realtime/twilioStream.js';
@@ -7,6 +10,45 @@ import { buildBackendPrompt, buildLivePrompt } from '../voice/livePrompts.js';
 
 const salonTime = (iso: string) =>
   DateTime.fromISO(iso, { zone: 'America/New_York' });
+
+const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), '__golden__');
+
+function readGolden(name: string): string {
+  return readFileSync(join(GOLDEN_DIR, name), 'utf8');
+}
+
+/**
+ * Assert byte-identical output against a committed golden file. On mismatch,
+ * print the first differing line (unified-diff style: expected `-`, actual
+ * `+`) instead of dumping the whole multi-KB prompt into the test output.
+ */
+function expectMatchesGolden(actual: string, goldenFile: string): void {
+  const expected = readGolden(goldenFile);
+  if (actual === expected) {
+    expect(actual).toBe(expected);
+    return;
+  }
+  const expectedLines = expected.split('\n');
+  const actualLines = actual.split('\n');
+  const max = Math.max(expectedLines.length, actualLines.length);
+  let i = 0;
+  for (; i < max; i++) {
+    if (expectedLines[i] !== actualLines[i]) break;
+  }
+  const context = 2;
+  const from = Math.max(0, i - context);
+  const diff = [
+    `First difference at line ${i + 1} of golden/${goldenFile}:`,
+    ...expectedLines
+      .slice(from, i + context + 1)
+      .map((line, idx) => `- ${idx + from === i ? line : line}`),
+    '  ---',
+    ...actualLines
+      .slice(from, i + context + 1)
+      .map((line, idx) => `+ ${idx + from === i ? line : line}`),
+  ].join('\n');
+  expect(actual, diff).toBe(expected);
+}
 
 const CATALOG: Service[] = [
   { id: 'svc_brow', name: 'Brow Threading', price: 15, durationMin: 15 },
@@ -188,9 +230,10 @@ describe('backend prompt extraction', () => {
     //   the soonest sitting; reschedule_visit for two or more kept together).
     //   Net SHORTER than the line it replaced; the flow detail moved into the
     //   tool description and tool-result notes.
-    expect(digestBefore).toBe(
-      '73cecffe22a2b3ebb033eceef94c62f7e781d73d3255ab410afb426a07505eaf'
-    );
+    expect(
+      digestBefore,
+      'The production (Realtime) prompt changed. On the Live path the backend model does NOT receive SERVE/IDENTIFY or any static rule section from this prompt — backend rules are authored in src/voice/backendRules.ts and Live rules in buildLivePrompt. If you meant to change Live behaviour, edit those. If this Realtime-prompt change is deliberate, update the hash here and note what changed.'
+    ).toBe('73cecffe22a2b3ebb033eceef94c62f7e781d73d3255ab410afb426a07505eaf');
     expect(after).toBe(before);
     expect(createHash('sha256').update(after).digest('hex')).toBe(digestBefore);
     expect(backend).toContain('Appointment details belong to the person');
@@ -332,6 +375,72 @@ describe('backend prompt extraction', () => {
     expect(prompt).toContain('genuine vendor');
     expect(prompt).not.toMatch(
       /(?:SILENT\/PROACTIVE|audio\.input|server_vad|session\.update|playback)/i
+    );
+  });
+});
+
+describe('golden prompts (byte-identical safety net for the authored-rules refactor)', () => {
+  // These pin the EXACT rendered output for a handful of representative
+  // inputs, captured from the pipeline before backendRules.ts existed. The
+  // Workstream B refactor (2026-09-16) moves static rule text out of
+  // buildBackendPrompt's regex rewrites and into authored constants in
+  // src/voice/backendRules.ts; these tests are the acceptance criterion that
+  // the move changed WHERE the text lives, never WHAT it says. On mismatch,
+  // fix the assembly in livePrompts.ts/backendRules.ts — never edit the
+  // golden file to make a test pass.
+  it('renders the baseline backend + live prompts byte-identically', () => {
+    const instructions = buildInstructions(
+      salonTime('2026-10-01T12:00'),
+      CATALOG
+    );
+    expectMatchesGolden(
+      buildBackendPrompt(instructions, CATALOG),
+      'backend-prompt.2026-10-01.txt'
+    );
+    expectMatchesGolden(
+      buildLivePrompt(instructions, CATALOG),
+      'live-prompt.2026-10-01.txt'
+    );
+  });
+
+  it('renders the transfer-failback backend prompt byte-identically (CALL CONTEXT suffix)', () => {
+    const instructions = buildInstructions(
+      salonTime('2026-10-01T12:00'),
+      CATALOG,
+      { transferFailback: true }
+    );
+    expectMatchesGolden(
+      buildBackendPrompt(instructions, CATALOG),
+      'backend-prompt.transfer-failback.txt'
+    );
+  });
+
+  it('renders the backend prompt with a server-built caller context byte-identically', () => {
+    const instructions = buildInstructions(
+      salonTime('2026-10-01T12:00'),
+      CATALOG
+    );
+    expectMatchesGolden(
+      buildBackendPrompt(instructions, CATALOG, {
+        callerContext:
+          'Recognized caller: Jane Doe, client since 2024. Upcoming appointment tomorrow 2 PM.',
+      }),
+      'backend-prompt.caller-context.txt'
+    );
+  });
+
+  it('renders the backend prompt during an active temporary closure byte-identically', () => {
+    // business.json vacation: 2026-09-01..2026-09-09, reopens 2026-09-10 —
+    // same fixture other suites use (twilioStream.vacation.test.ts) and the
+    // same date as the "preserves retry, privacy, current closure facts"
+    // test above.
+    const instructions = buildInstructions(
+      salonTime('2026-09-05T12:00'),
+      CATALOG
+    );
+    expectMatchesGolden(
+      buildBackendPrompt(instructions, CATALOG),
+      'backend-prompt.closure-active.txt'
     );
   });
 });
