@@ -185,7 +185,19 @@ export const env = {
   SMS_STORE_PATH: process.env.SMS_STORE_PATH || './data/sms.jsonl',
   // Text model for the SMS agent. Separate from OPENAI_CALL_SUMMARY_MODEL so
   // the conversational lane can be tuned without touching the call recap.
-  OPENAI_SMS_MODEL: process.env.OPENAI_SMS_MODEL || 'gpt-4.1',
+  // Same backend family as the voice line (2026-09-16). The agent talks to it
+  // over the Responses API — on gpt-5.6 that is the only chat surface that
+  // accepts function tools together with reasoning (chat completions 400s).
+  OPENAI_SMS_MODEL: process.env.OPENAI_SMS_MODEL || 'gpt-5.6-terra',
+  // Reasoning effort for a text turn. 'low' keeps a round ~1s and a handful of
+  // reasoning tokens. Same allowed set as OPENAI_LIVE_BACKEND_EFFORT. Not
+  // sent for gpt-4.x models, which reject the field.
+  OPENAI_SMS_EFFORT: requiredMode(
+    'OPENAI_SMS_EFFORT',
+    process.env.OPENAI_SMS_EFFORT || undefined,
+    'low',
+    ['low', 'medium', 'high'] as const
+  ),
   // Independent of PHOREST_WRITE_MODE on purpose — the two guard different
   // things. PHOREST_WRITE_MODE=simulate protects the CALENDAR; this protects
   // the CLIENT'S HANDSET. A taste test wants real calendar reads and writes

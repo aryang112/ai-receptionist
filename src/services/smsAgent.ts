@@ -34,6 +34,28 @@ export const MAX_SMS_CHARS = 320;
  *  should reach Richa, not keep spending tokens. */
 const MAX_TOOL_ROUNDS = 3;
 
+/**
+ * Output budget per model round. Reasoning tokens are billed against this
+ * too, so it is several times the 320-char reply cap; a 'low' effort round
+ * measured ~50 output tokens live (2026-09-16), so this is headroom, not a
+ * target.
+ */
+const MAX_OUTPUT_TOKENS = 1200;
+
+/**
+ * gpt-5.x accepts function tools together with reasoning ONLY on the
+ * Responses API (chat completions answers 400 — verified live 2026-09-16).
+ * gpt-4.x rejects the `reasoning` field outright, so it is only sent for the
+ * reasoning family; a gpt-4.1 fallback via OPENAI_SMS_MODEL still works.
+ */
+function reasoningParam(): Pick<
+  OpenAI.Responses.ResponseCreateParamsNonStreaming,
+  'reasoning'
+> {
+  if (!/^gpt-5/.test(env.OPENAI_SMS_MODEL)) return {};
+  return { reasoning: { effort: env.OPENAI_SMS_EFFORT } };
+}
+
 let client: OpenAI | null = null;
 function getClient(): OpenAI | null {
   const apiKey = env.OPENAI_API_KEY || env.OPENAI_REALTIME_API_KEY;
@@ -96,97 +118,96 @@ function systemPrompt(thread: SmsThread, resuming: boolean): string {
     .join('\n');
 }
 
-const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+/**
+ * Responses-API function tools. Same six capabilities as before; only the
+ * wire shape changed (name/description/parameters sit at the top level, and
+ * `strict: false` keeps the loose schemas the handlers already tolerate).
+ */
+const TOOLS: OpenAI.Responses.FunctionTool[] = [
   {
     type: 'function',
-    function: {
-      name: 'check_availability',
-      description:
-        'Get the real open appointment times for one service on one date. Must be called before offering any time.',
-      parameters: {
-        type: 'object',
-        properties: {
-          serviceName: { type: 'string', description: 'e.g. "brow threading"' },
-          date: { type: 'string', description: 'YYYY-MM-DD' },
+    name: 'check_availability',
+    description:
+      'Get the real open appointment times for one service on one date. Must be called before offering any time.',
+    parameters: {
+      type: 'object',
+      properties: {
+        serviceName: { type: 'string', description: 'e.g. "brow threading"' },
+        date: { type: 'string', description: 'YYYY-MM-DD' },
+      },
+      required: ['serviceName', 'date'],
+    },
+    strict: false,
+  },
+  {
+    type: 'function',
+    name: 'book_appointment',
+    description:
+      'Book an appointment at a time check_availability just returned, after the client confirmed it.',
+    parameters: {
+      type: 'object',
+      properties: {
+        serviceName: { type: 'string' },
+        date: { type: 'string', description: 'YYYY-MM-DD' },
+        time: { type: 'string', description: 'HH:MM 24-hour' },
+        customerName: { type: 'string' },
+      },
+      required: ['serviceName', 'date', 'time', 'customerName'],
+    },
+    strict: false,
+  },
+  {
+    type: 'function',
+    name: 'list_my_appointments',
+    description:
+      "Get this client's upcoming appointments. Use before rescheduling or cancelling.",
+    parameters: { type: 'object', properties: {} },
+    strict: false,
+  },
+  {
+    type: 'function',
+    name: 'reschedule_appointment',
+    description:
+      'Move an existing appointment to a new time that check_availability just returned.',
+    parameters: {
+      type: 'object',
+      properties: {
+        appointmentId: { type: 'string' },
+        date: { type: 'string', description: 'YYYY-MM-DD' },
+        time: { type: 'string', description: 'HH:MM 24-hour' },
+      },
+      required: ['appointmentId', 'date', 'time'],
+    },
+    strict: false,
+  },
+  {
+    type: 'function',
+    name: 'cancel_appointment',
+    description:
+      'Cancel an existing appointment the client confirmed cancelling.',
+    parameters: {
+      type: 'object',
+      properties: { appointmentId: { type: 'string' } },
+      required: ['appointmentId'],
+    },
+    strict: false,
+  },
+  {
+    type: 'function',
+    name: 'escalate_to_owner',
+    description:
+      'Hand this conversation to Richa. Use for anything outside booking, rescheduling or cancelling, or whenever you are unsure.',
+    parameters: {
+      type: 'object',
+      properties: {
+        reason: {
+          type: 'string',
+          description: 'One short sentence Richa will read on her phone.',
         },
-        required: ['serviceName', 'date'],
       },
+      required: ['reason'],
     },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'book_appointment',
-      description:
-        'Book an appointment at a time check_availability just returned, after the client confirmed it.',
-      parameters: {
-        type: 'object',
-        properties: {
-          serviceName: { type: 'string' },
-          date: { type: 'string', description: 'YYYY-MM-DD' },
-          time: { type: 'string', description: 'HH:MM 24-hour' },
-          customerName: { type: 'string' },
-        },
-        required: ['serviceName', 'date', 'time', 'customerName'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'list_my_appointments',
-      description:
-        "Get this client's upcoming appointments. Use before rescheduling or cancelling.",
-      parameters: { type: 'object', properties: {} },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'reschedule_appointment',
-      description:
-        'Move an existing appointment to a new time that check_availability just returned.',
-      parameters: {
-        type: 'object',
-        properties: {
-          appointmentId: { type: 'string' },
-          date: { type: 'string', description: 'YYYY-MM-DD' },
-          time: { type: 'string', description: 'HH:MM 24-hour' },
-        },
-        required: ['appointmentId', 'date', 'time'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'cancel_appointment',
-      description:
-        'Cancel an existing appointment the client confirmed cancelling.',
-      parameters: {
-        type: 'object',
-        properties: { appointmentId: { type: 'string' } },
-        required: ['appointmentId'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'escalate_to_owner',
-      description:
-        'Hand this conversation to Richa. Use for anything outside booking, rescheduling or cancelling, or whenever you are unsure.',
-      parameters: {
-        type: 'object',
-        properties: {
-          reason: {
-            type: 'string',
-            description: 'One short sentence Richa will read on her phone.',
-          },
-        },
-        required: ['reason'],
-      },
-    },
+    strict: false,
   },
 ];
 
@@ -337,20 +358,22 @@ export async function runSmsAgent(
     return { reply: null, escalated: false, toolsUsed, booked: false };
   }
 
-  const history: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
-    thread.messages.slice(-12).map((m) => ({
+  const history: OpenAI.Responses.ResponseInputItem[] = thread.messages
+    .slice(-12)
+    .map((m) => ({
       role:
         m.direction === 'inbound' ? ('user' as const) : ('assistant' as const),
       content: m.body,
     }));
 
-  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: 'system', content: systemPrompt(thread, resuming) },
-    ...history,
-  ];
+  // The running context for this turn. Every item the model emits (reasoning
+  // items included) is appended verbatim before the next round, so a tool
+  // result lands in exactly the context that asked for it. `store: false`
+  // below means nothing is retained server-side, so we must resend it all.
+  const input: OpenAI.Responses.ResponseInputItem[] = [...history];
 
   if (opts.ownerInstruction) {
-    messages.push({
+    input.push({
       role: 'system',
       content: [
         'Richa has just answered the question you escalated. Her instruction:',
@@ -362,31 +385,36 @@ export async function runSmsAgent(
       ].join('\n'),
     });
   } else {
-    messages.push({ role: 'user', content: incoming });
+    input.push({ role: 'user', content: incoming });
   }
 
   let escalated = false;
   let booked = false;
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-    const completion = await openai.chat.completions.create({
+    const response = await openai.responses.create({
       model: env.OPENAI_SMS_MODEL,
-      messages,
+      instructions: systemPrompt(thread, resuming),
+      input,
       tools: TOOLS,
       // Force a final text answer once the tool budget is spent, so we never
       // end a turn owing the client a reply.
       tool_choice: round === MAX_TOOL_ROUNDS ? 'none' : 'auto',
-      max_tokens: 300,
-      temperature: 0.4,
+      // Reasoning tokens count against this cap, so it is wider than the
+      // reply itself; MAX_SMS_CHARS still bounds what we actually send.
+      max_output_tokens: MAX_OUTPUT_TOKENS,
+      ...reasoningParam(),
+      store: false,
     });
 
-    const choice = completion.choices[0]?.message;
-    if (!choice) break;
-    messages.push(choice);
+    input.push(...response.output);
 
-    const calls = choice.tool_calls ?? [];
+    const calls = response.output.filter(
+      (item): item is OpenAI.Responses.ResponseFunctionToolCall =>
+        item.type === 'function_call'
+    );
     if (calls.length === 0) {
-      const text = (choice.content || '').trim();
+      const text = response.output_text.trim();
       return {
         reply: text ? text.slice(0, MAX_SMS_CHARS) : null,
         escalated,
@@ -396,16 +424,11 @@ export async function runSmsAgent(
     }
 
     for (const call of calls) {
-      if (call.type !== 'function') continue;
-      const name = call.function.name;
+      const name = call.name;
       toolsUsed.push(name);
       let result: { output: unknown; escalated?: boolean; booked?: boolean };
       try {
-        result = await runTool(
-          name,
-          JSON.parse(call.function.arguments || '{}'),
-          thread
-        );
+        result = await runTool(name, JSON.parse(call.arguments || '{}'), thread);
       } catch (err) {
         // A tool failure is information for the model, not a crash. Rule 5
         // tells it to admit the failure rather than invent an outcome.
@@ -417,10 +440,10 @@ export async function runSmsAgent(
       }
       if (result.escalated) escalated = true;
       if (result.booked) booked = true;
-      messages.push({
-        role: 'tool',
-        tool_call_id: call.id,
-        content: JSON.stringify(result.output),
+      input.push({
+        type: 'function_call_output',
+        call_id: call.call_id,
+        output: JSON.stringify(result.output),
       });
     }
   }

@@ -1,5 +1,28 @@
 # STATE — AI Receptionist (Erica)
 
+## 2026-09-16 — smsAgent.test.ts added (Sonnet worker)
+
+- New `src/tests/smsAgent.test.ts` (5 tests) locks in `runSmsAgent`'s request
+  shape after its migration from chat completions (gpt-4.1) to the Responses
+  API (`openai.responses.create`) on `gpt-5.6-terra` with
+  `reasoning: { effort: env.OPENAI_SMS_EFFORT }`.
+- Mocks `openai` (default-export class, `responses.create`), `booking.js`
+  (`suggestSlots`/`bookAppointment`), and `ownerSms.js` (`sendOwnerSms`) —
+  via `vi.hoisted()` (a plain `const xMock = vi.fn()` next to `vi.mock(...)`
+  proved hoist-order-flaky here: booking.js's factory saw `suggestSlotsMock`
+  before initialization while an identically-shaped `openai` mock var didn't;
+  `vi.hoisted()` sidesteps that).
+- Asserts: `model`/`reasoning`/`store`/`tool_choice`/`instructions` fields,
+  that all 6 tools are flat (`type`+top-level `name`, no nested `function`
+  key), a full `function_call` → tool handler → `function_call_output`
+  round trip, that the loop forces `tool_choice: 'none'` on round
+  `MAX_TOOL_ROUNDS + 1` (4th call) and returns `reply: null` when the model
+  still won't produce text, that a `gpt-4.1` fallback omits `reasoning`
+  entirely, and that a long reply is truncated to `MAX_SMS_CHARS`.
+- Verified: `npx vitest run src/tests/smsAgent.test.ts` (5/5), `npx tsc
+  --noEmit` (clean), full `npx vitest run` — 837/837 passed (832 baseline +
+  5 new), 72 test files. No other file modified.
+
 ## 2026-09-13 — SMS BOOKING LANE BUILT (branch `feat/erica-sms-booking`, NOT deployed)
 
 - Worktree `/Users/aryangupta/Documents/Dev/ai-receptionist-sms-2026-09-13`, branch
