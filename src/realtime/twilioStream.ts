@@ -1416,6 +1416,21 @@ type TwilioEvent =
   | TwilioMarkEvent
   | TwilioEventBase;
 
+/**
+ * Workstream E (2026-09-16): does this fragment of Erica's own output text
+ * contain the "anything else" offer? Mirrors the style of
+ * TwilioRealtimeCall#liveHasCurrentFarewell's farewell regex — a small,
+ * conservative, word-boundary check over Erica's own transcript text, not
+ * caller speech (the server never sees caller text on the Live path).
+ * Exported standalone (module-level, not a class method) so it has a
+ * focused unit test independent of call state.
+ */
+export function isMoreHelpOfferText(text: string): boolean {
+  return /\b(?:anything|something) else\b|\belse (?:i|we) can\b|\bhelp (?:you )?with anything\b|\banything (?:more|further)\b/i.test(
+    text
+  );
+}
+
 export class TwilioRealtimeCall {
   private readonly socket: WebSocket;
   // Built on the Twilio "start" event (once streamSid is known) so the session's
@@ -1429,6 +1444,11 @@ export class TwilioRealtimeCall {
   private liveOutputActive = false;
   private liveLastOutputStartedAt = 0;
   private liveClosingText: Array<{ ts: number; text: string }> = [];
+  // Workstream E (2026-09-16): true once Erica's own output text has matched
+  // isMoreHelpOfferText below on this call. Sticky for the rest of the call —
+  // a fresh TwilioRealtimeCall instance is created per call segment (see
+  // transferFailback), so this never needs an explicit mid-call reset.
+  private moreHelpOffered = false;
   private liveOutputCommittedClosed = false;
   private markSequence = 0;
   private readonly proposals = new AppointmentProposals(
@@ -1941,6 +1961,17 @@ export class TwilioRealtimeCall {
       this.liveClosingText = this.liveClosingText.filter(
         (part) => Date.now() - part.ts < 15000
       );
+      // Workstream E: detect Erica's own "anything else" offer as it streams
+      // in, the same way liveHasCurrentFarewell detects her goodbye — joined
+      // across fragments so a split like "anything" + " else" still matches.
+      if (
+        !this.moreHelpOffered &&
+        isMoreHelpOfferText(
+          this.liveClosingText.map((part) => part.text).join('')
+        )
+      ) {
+        this.moreHelpOffered = true;
+      }
     }
     const previous = this.transcript[this.transcript.length - 1];
     if (previous?.role === role && Date.now() - previous.ts < 2000)
@@ -2009,6 +2040,10 @@ export class TwilioRealtimeCall {
    * how many are currently awaiting a result. The silence watchdog reads this
    * — a slow Phorest call can outlast the spoken filler line (markQueue back
    * to empty) while the model is still genuinely waiting on us.
+   *
+   * Workstream E (2026-09-16): this is also the ONE central place every tool
+   * result passes through on its way back to the model, so
+   * applyMoreHelpOfferNote lives here rather than in each handler.
    */
   private registerTrackedTool(
     name: string,
@@ -2019,11 +2054,33 @@ export class TwilioRealtimeCall {
         return { error: 'The call has ended; no action was taken.' };
       this.toolCallsInFlight++;
       try {
-        return await handler(args);
+        return this.applyMoreHelpOfferNote(await handler(args));
       } finally {
         this.toolCallsInFlight--;
       }
     });
+  }
+
+  /**
+   * Once Erica has made the "anything else" offer on this call
+   * (moreHelpOffered, set from her own output text — see
+   * isMoreHelpOfferText/recordLiveFragment), every later tool result carries
+   * `moreHelpAlreadyOffered: true` and a short note so the backend model
+   * stops re-asking. Skips results already `ending: true` (the call is
+   * already closing, so re-asking is moot) and non-object results.
+   */
+  private applyMoreHelpOfferNote<T>(result: T): T {
+    if (!this.moreHelpOffered || typeof result !== 'object' || result === null)
+      return result;
+    const record = result as Record<string, unknown>;
+    if (record.ending === true) return result;
+    const addition =
+      'You have already asked whether the caller needs anything else on this call. Do not ask again; when they are done, close.';
+    const note =
+      typeof record.note === 'string' && record.note
+        ? `${record.note} ${addition}`
+        : addition;
+    return { ...record, moreHelpAlreadyOffered: true, note } as T;
   }
 
   /**
@@ -4363,7 +4420,7 @@ export class TwilioRealtimeCall {
         booked: true,
         bookedServices: booked,
         date: payload.date,
-        note: 'The whole visit is booked. Confirm it in ONE short sentence naming each service and its time exactly as given, then ask once if they need anything else. Do not recount the steps or mention availability.',
+        note: 'The whole visit is booked. Confirm it in ONE short sentence naming each service and its time exactly as given, then ask once if they need anything else — unless they have already said they are done, in which case close instead. Do not recount the steps or mention availability.',
       };
     } catch (error) {
       logger.error(
@@ -4482,7 +4539,7 @@ export class TwilioRealtimeCall {
       return {
         cancelled: true,
         cancelledServices: cancelled,
-        note: 'The whole visit is cancelled. Confirm it in ONE short sentence naming each service, then ask once if they need anything else. Do not recount the steps.',
+        note: 'The whole visit is cancelled. Confirm it in ONE short sentence naming each service, then ask once if they need anything else — unless they have already said they are done, in which case close instead. Do not recount the steps.',
       };
     } catch (error) {
       logger.error(
@@ -4679,7 +4736,7 @@ export class TwilioRealtimeCall {
         rescheduled: true,
         moved,
         date: payload.date,
-        note: 'The whole visit moved. Confirm it in ONE short sentence naming each service and its new time exactly as given, then ask once if they need anything else. Do not recount the steps or mention availability.',
+        note: 'The whole visit moved. Confirm it in ONE short sentence naming each service and its new time exactly as given, then ask once if they need anything else — unless they have already said they are done, in which case close instead. Do not recount the steps or mention availability.',
       };
     } catch (error) {
       logger.error(

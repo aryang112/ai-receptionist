@@ -5,9 +5,12 @@ import { phorest } from '../services/phorest.js';
 process.env.OPENAI_REALTIME_API_KEY ||= 'test-key';
 
 let TwilioRealtimeCall: typeof import('../realtime/twilioStream.js').TwilioRealtimeCall;
+let isMoreHelpOfferText: typeof import('../realtime/twilioStream.js').isMoreHelpOfferText;
 
 beforeAll(async () => {
-  ({ TwilioRealtimeCall } = await import('../realtime/twilioStream.js'));
+  ({ TwilioRealtimeCall, isMoreHelpOfferText } = await import(
+    '../realtime/twilioStream.js'
+  ));
 });
 
 afterEach(() => {
@@ -287,5 +290,136 @@ describe('Live account lookup uses available contact information', () => {
     const result = await call.handleLookupCustomer({});
     expect(lookup).not.toHaveBeenCalled();
     expect(result.found).toBe(false);
+  });
+});
+
+// Workstream E (2026-09-16): the mechanics behind "ask once whether they
+// need anything else, never twice, and never after a goodbye" move into
+// server state. The server never sees caller text on the Live path, but it
+// does see Erica's own output text (the same stream liveClosingText uses),
+// so it can at least know whether SHE has already made the offer.
+describe('isMoreHelpOfferText — "anything else" offer detection', () => {
+  it('matches common phrasings of the offer', () => {
+    expect(
+      isMoreHelpOfferText('Is there anything else I can help you with?')
+    ).toBe(true);
+    expect(isMoreHelpOfferText('Anything else for you today?')).toBe(true);
+    expect(isMoreHelpOfferText('Is there something else you need?')).toBe(true);
+  });
+
+  it('does not match ordinary confirmations, results, or farewells', () => {
+    expect(isMoreHelpOfferText('Okay.')).toBe(false);
+    expect(isMoreHelpOfferText('Your brow threading is booked for 4 PM.')).toBe(
+      false
+    );
+    expect(isMoreHelpOfferText('Goodbye, take care.')).toBe(false);
+  });
+});
+
+describe('GPT-Live more-help offer — central tool-result annotation', () => {
+  function buildTrackedCall() {
+    const registered = new Map<string, (args: unknown) => Promise<any>>();
+    const socket: any = {
+      readyState: WebSocket.OPEN,
+      send: () => {},
+      close: vi.fn(),
+      on: vi.fn(),
+    };
+    const call: any = new TwilioRealtimeCall(socket);
+    call.session = {
+      appendTwilioAudio: vi.fn(),
+      truncateActiveResponse: vi.fn(),
+      registerTool: (name: string, fn: (args: unknown) => Promise<any>) => {
+        registered.set(name, fn);
+      },
+      close: vi.fn(),
+    };
+    call.streamSid = 'STREAMSID';
+    call.callSid = 'CA_offer_test';
+    if (call.preAuthTimer) {
+      clearTimeout(call.preAuthTimer);
+      call.preAuthTimer = undefined;
+    }
+    return { call, registered };
+  }
+
+  function getTool(
+    registered: Map<string, (args: unknown) => Promise<any>>,
+    name: string
+  ) {
+    const fn = registered.get(name);
+    if (!fn) throw new Error(`tool not registered: ${name}`);
+    return fn;
+  }
+
+  it('leaves a tool result untouched before the offer, then annotates once Erica has made it', async () => {
+    const { call, registered } = buildTrackedCall();
+    call.registerTrackedTool('probe_tool', async () => ({
+      ok: true,
+      note: 'existing note',
+    }));
+    const probe = getTool(registered, 'probe_tool');
+
+    const before = await probe({});
+    expect(before).toEqual({ ok: true, note: 'existing note' });
+    expect(before.moreHelpAlreadyOffered).toBeUndefined();
+
+    call.recordLiveFragment('erica', {
+      delta: 'Anything else I can help with?',
+    });
+
+    const after = await probe({});
+    expect(after.moreHelpAlreadyOffered).toBe(true);
+    expect(after.note).toBe(
+      'existing note You have already asked whether the caller needs anything else on this call. Do not ask again; when they are done, close.'
+    );
+  });
+
+  it('adds a bare note when the underlying result had none', async () => {
+    const { call, registered } = buildTrackedCall();
+    call.registerTrackedTool('bare_tool', async () => ({ ok: true }));
+    const bare = getTool(registered, 'bare_tool');
+
+    call.recordLiveFragment('erica', {
+      delta: 'Is there something else you need?',
+    });
+
+    const result = await bare({});
+    expect(result.moreHelpAlreadyOffered).toBe(true);
+    expect(result.note).toBe(
+      'You have already asked whether the caller needs anything else on this call. Do not ask again; when they are done, close.'
+    );
+  });
+
+  it('leaves an ending:true result alone even after the offer', async () => {
+    const { call, registered } = buildTrackedCall();
+    call.registerTrackedTool('closing_tool', async () => ({
+      ending: true,
+      note: 'The farewell has been spoken.',
+    }));
+    const closingTool = getTool(registered, 'closing_tool');
+
+    call.recordLiveFragment('erica', {
+      delta: 'Anything else I can help with?',
+    });
+
+    const result = await closingTool({});
+    expect(result).toEqual({
+      ending: true,
+      note: 'The farewell has been spoken.',
+    });
+    expect(result.moreHelpAlreadyOffered).toBeUndefined();
+  });
+
+  it('detects the offer even split across two streamed fragments', async () => {
+    const { call, registered } = buildTrackedCall();
+    call.registerTrackedTool('probe_tool', async () => ({ ok: true }));
+    const probe = getTool(registered, 'probe_tool');
+
+    call.recordLiveFragment('erica', { delta: 'Anything' });
+    call.recordLiveFragment('erica', { delta: ' else for you today?' });
+
+    const result = await probe({});
+    expect(result.moreHelpAlreadyOffered).toBe(true);
   });
 });

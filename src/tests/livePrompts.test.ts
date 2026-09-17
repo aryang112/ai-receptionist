@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DateTime } from 'luxon';
@@ -21,8 +21,21 @@ function readGolden(name: string): string {
  * Assert byte-identical output against a committed golden file. On mismatch,
  * print the first differing line (unified-diff style: expected `-`, actual
  * `+`) instead of dumping the whole multi-KB prompt into the test output.
+ *
+ * UPDATE_GOLDEN=1 mode (Workstream E, 2026-09-16): run
+ * `UPDATE_GOLDEN=1 npx vitest run src/tests/livePrompts.test.ts` to WRITE the
+ * actual output over the committed golden file instead of asserting against
+ * it — use this only after a deliberate, reviewed wording change, then run
+ * again WITHOUT the env var (a normal `npx vitest run`) to confirm the
+ * regenerated goldens actually pass, and diff `src/tests/__golden__` to
+ * confirm the only differences are the ones you intended.
  */
 function expectMatchesGolden(actual: string, goldenFile: string): void {
+  if (process.env.UPDATE_GOLDEN === '1') {
+    writeFileSync(join(GOLDEN_DIR, goldenFile), actual, 'utf8');
+    expect(actual).toBe(actual);
+    return;
+  }
   const expected = readGolden(goldenFile);
   if (actual === expected) {
     expect(actual).toBe(expected);
@@ -355,7 +368,7 @@ describe('backend prompt extraction', () => {
     expect(prompt).toContain(
       'Never call a raw booking, reschedule, or cancellation write tool'
     );
-    expect(prompt).toContain('at most one appointment action at a time');
+    expect(prompt).toContain('run one prepare_appointment_action at a time');
   });
 
   it('preserves retry, privacy, current closure facts, and scope while removing Realtime goodbye/audio procedure', () => {
