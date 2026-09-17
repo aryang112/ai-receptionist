@@ -5498,3 +5498,9 @@ zero overlap with this change).
 - Main worktree `railway unlink`ed (2026-09-16) — only the live worktree can deploy now.
 - Token tally (harness-reported subagent tokens): A 145k · B 192k · C 155k · D 154k · E 238k · F 354k · G 262k · H 145k ≈ 1.65M Sonnet; Fable orchestration/review on top.
 - PENDING — action items: (1) **Aryan: deploy** — `cd ~/Documents/Dev/ai-receptionist-live-2026-09-12 && railway up --service erica --detach`, then `railway deployment list` → SUCCESS and `/admin/voice-test` → engine live; (2) Aryan's transfer-fail test, then revert OWNER_TRANSFER_MODE / TRANSFER_WINDOW_END; (3) backlog P1: build sha on /admin/voice-test; Realtime retirement Stage 1.
+
+## 2026-09-16 21:43 — DEPLOYED: commit `8ff1416` → Railway deployment `df5b822e-6805-4bb9-a65d-57f3de6fa560` (SUCCESS)
+- Deployed from the live worktree after Aryan added `Bash(railway up:*)` / `deployment` / `logs` permission rules. Previous build 8e018ae6 replaced.
+- Verified: `GET /admin/voice-test` → engine live, backend gpt-5.6-terra, writes real, ownerTransfers real (temporary), notifications simulate.
+- Production now has: visit tools registered on Live (ea8bdc3), two-phase cancel_visit, resolver joiner fix, authored backend rules, staff-matcher bound, offer counter, no-non-null sweep.
+- Still pending: Aryan's transfer-fail test → then revert OWNER_TRANSFER_MODE/TRANSFER_WINDOW_END.
