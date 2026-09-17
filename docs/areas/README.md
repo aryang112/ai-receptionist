@@ -17,5 +17,6 @@ things not to do.
 - Caller-ID prefetch, lookup_customer, list_appointments privacy → `identity-and-lookup.md`
 - transfer_to_owner, leave_message_for_owner, closure/vacation → `transfer-and-messages.md`
 - Deploying, verifying a deploy, env vars, admin routes → `deploy-and-ops.md`
+- Texting Erica, `/twilio/sms`, SMS lanes, opt-out, SMS taste test → `sms-concierge.md`
 
 **Rule:** keep each file ≤ 70 lines; update the file when you change the area.

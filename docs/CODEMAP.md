@@ -165,6 +165,17 @@ Caller dials Twilio number
   never throws; the SDK and outer promise are capped at five seconds, a SID
   plus an accepted status is required for `queued:true`, terminal failures are
   rejected, and missing/unknown/timed-out outcomes are explicitly uncertain.
+- **smsStore.ts** — append-only JSONL SMS thread store (`SMS_STORE_PATH`),
+  short human refs ("A7") for owner replies, durable opt-out ledger replayed
+  on boot. See `docs/areas/sms-concierge.md`.
+- **smsCompliance.ts** — STOP/START/HELP keyword detection, exact
+  whole-message match only.
+- **smsRouter.ts** — `routeInbound`, the four SMS lanes (owner/compliance/
+  review_reply/booking) and the fail-closed `isAllowedForAgent` gate.
+- **smsSender.ts** — `sendClientSms`, the single exit point to a client,
+  opt-out-gated.
+- **smsOwner.ts** — `handleOwnerMessage`/`parseOwnerCommand`, Richa/Aryan's
+  `"A7 <instruction>"` control channel.
 - **smsAgent.ts** (the separate SMS-concierge text agent, not the voice
   owner-SMS above) — as of 2026-09-16 (`12c26d5`) calls
   `openai.responses.create` on `OPENAI_SMS_MODEL` (default `gpt-5.6-terra`)
@@ -255,6 +266,9 @@ Caller dials Twilio number
   booked, est cost, after-hours capture, spam), `/admin/api/transcript/:sid`,
   `/admin/api/recording/:sid` (auth-proxied Twilio audio — creds never reach
   the browser).
+- **sms.ts** — `POST /sms`, the inbound Twilio SMS webhook (`twilioSignature()`
+  -gated), persists before routing, one in-flight turn per phone. See
+  `docs/areas/sms-concierge.md`.
 - **metadata.ts**, **health.ts** — REST/health endpoints.
 
 ## src/config/
@@ -289,7 +303,10 @@ Caller dials Twilio number
 toolRegistration.test.ts (every advertised tool has a handler, both engines),
 __golden__/ (rendered prompt snapshots; see Prompt layers), staffMatch.test.ts
 (length-scaled bound), twilioStream.liveIntegration.test.ts (more-help offer
-note), twilioStream.visit.test.ts (two-phase cancel_visit).
+note), twilioStream.visit.test.ts (two-phase cancel_visit),
+smsRouter.test.ts/smsOwner.test.ts/smsAgent.test.ts (SMS lane selection,
+owner ref parsing, gpt-5.6 Responses-API tool round-trip — see
+`docs/areas/sms-concierge.md`).
 phorest.client.test.ts (URL/range/client_id/timezone/retry regressions),
 hours.test.ts, booking.alias/match.test.ts, slots.test.ts (clean-grid snapping),
 wsAuth, middleware, twilioStream.bargein/contracts, phorest.mock/selector,

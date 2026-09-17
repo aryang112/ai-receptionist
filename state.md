@@ -38,6 +38,7 @@ texts logged, not delivered). Rollback: `SMS_ENABLED=false` or blank `SmsUrl`.
 - `docs/CODEMAP.md` — file map
 - `docs/SYMBOLS.md` (generate via `npm run symbols`) — symbol-level map
 - the relevant `docs/areas/*.md` for the area you're touching
+- `docs/areas/sms-concierge.md`
 - the DIGEST at the top of `tasks/lessons.md` — read full history below it
   only if a question needs it
 - `tasks/backlog.md` — P0/P1 tables

@@ -41,6 +41,11 @@
 - Indentation lies: a mis-indented block can sit inside an engine-gating
   `if` branch while reading as outside it — run the formatter before
   reviewing control flow. (2026-09-16)
+- gpt-5.6 (terra) rejects function tools combined with reasoning on chat
+  completions — tool-using agents on that model family must call
+  `openai.responses.create`, never chat completions. (2026-09-16)
+- `railway up` must be the first token of a command to match its allow rule;
+  read secrets via node's dotenv, never `source .env`. (2026-09-16)
 
 Hard-won gotchas. Read this BEFORE touching Phorest time handling, the OpenAI
 session config, or the availability/booking flow. Most of these bit us in
