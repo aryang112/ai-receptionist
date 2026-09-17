@@ -4778,3 +4778,715 @@ both carry correct coaching · "Richa" correctly read as a person.
 - Item 05 "two selectors" is a misdiagnosis: `get_prices` and `suggest_availability` share `resolveService`; they differ only in notOffered handling. Fix the resolver once.
 - Positions: keep two authored rule sets + shared computed facts (not one regex-transformed source); staff stopwords = safety net, real fix is length-scaled bound + gate on `closest`; closing judgement stays prose, mechanics (offer counter, farewell detect) server-side; `cancel_visit` SHOULD get a planning phase; three visit tools right, next step is visit tools accepting one service; enable `no-non-null-assertion`.
 - PENDING — action items: (1) Aryan decides which review recommendations to implement; (2) revert temporary transfer config when testing ends; (3) deploy-capability setup — see chat: unlink main worktree from Railway, standing deploy policy.
+
+### Workstream A — resolver (2026-09-16)
+Fixed the O06 silent-substitution bug from the 09-15 audit review §2.3:
+`resolveService("brow and lip")` matched **"Brow Wax and Lip Wax"** because
+that catalog entry's own name contains the filler word "and" while the
+threading bundle's "+" separator normalizes away to nothing.
+
+**Changed:** `src/services/booking.ts` `normalize()` — drop a small joiner
+list (`and, plus, with, also, then, n`) and modifier list (`upper, lower`)
+from BOTH catalog names and queries, verified against the real 63-service
+catalog (`list-services.ts`) that nothing relies on those words to stay
+distinct, and no active service name contains "upper"/"lower". Also replaced
+count-based token coverage (`queryTokens.length/nameTokens.length`) with
+SET-based coverage (`|querySet∩nameSet|/|nameSet|`) so a name with a repeated
+token ("Brow Thread + Lip Thread" → brow/threading/lip/threading) no longer
+under-scores a query that names the whole bundle.
+
+**Probe (before → after, real catalog):**
+- "brow and lip": match "Brow Wax and Lip Wax" → ambiguous [Brow Wax and Lip
+  Wax, Brow Thread + Lip Thread, Brow Thread + Lip Thread + Chin Thread]
+  (never wax alone).
+- "brow threading and upper lip": notOffered → match "Brow Thread + Lip
+  Thread".
+- "eyebrows and upper lip": notOffered → ambiguous [wax bundle, 2-svc
+  threading bundle, 3-svc threading bundle].
+- "upper lip threading": notOffered → match "Lip Threading".
+- "brow threading lip": ambiguous (2 vs 3-service bundle) → match "Brow
+  Thread + Lip Thread" (decisive).
+- All previously-correct baseline rows (eyebrow threading, eyebrow tattoo,
+  microblading touch-up, henna brows→notOffered, wax→ambiguous, lash lift,
+  brow, lip→ambiguous, chin threading, full face threading, brow/lash tint,
+  brow lamination) unchanged.
+
+**Tests:** new `src/tests/booking.serviceJoiner.test.ts` (8 tests, isolated
+fixture with the 6 real bundle/wax/threading names, `vi.mock` pattern copied
+from `booking.tattoo.test.ts`) including "brow and lip never silently becomes
+wax". `scripts/sim-scenarios.ts` gained 3 rows for this fix (O06b + two
+2026-09-16 rows), confirmed via
+`npx tsx scripts/sim-scenarios.ts 2026-09-17` — all three resolve as expected.
+Full suite: 813 vitest passing (was 807 baseline in this worktree +
+resolver's own 8 — a `twilioStream.visit.test.ts` failure seen mid-run was
+another worker's concurrent `cancel_visit` planning-phase landing, not this
+change; re-run 60s later was green). `tsc --noEmit` clean.
+
+No changes outside scope (`src/services/booking.ts`,
+`src/tests/booking.serviceJoiner.test.ts`, `scripts/sim-scenarios.ts`). Not
+committed (orchestrator commits).
+
+### Workstream C — cancel_visit read-back (2026-09-16)
+- `cancel_visit` now has the same plan-then-execute shape as `book_visit`/`reschedule_visit`, closing the gap AUDIT_REVIEW_2026-09-15.md §4 flagged: the read-back was model memory, `confirmed` was a free required literal, and an extra id was cancelled with no server echo.
+- **Schema** (`toolSchemas.ts`): `confirmed` is now `z.boolean().optional()` (was `z.literal(true)`), `appointmentIds` unchanged (≥2). **TOOL_DEFINITIONS** description mirrors reschedule_visit's two-call wording; `confirmed` no longer `required`.
+- **`handleCancelVisit`** (`twilioStream.ts`):
+  - Phase 1 (no `confirmed`, or `false`): keeps the "never served on this call" guard; if any id is already in `cancelledAppointmentIds` returns `{cancelled:true, alreadyCancelled:true, note}` (mirrors `handleCancel`'s alreadyCancelled path); otherwise builds `appointments:[{appointmentId, service, date, time}]` from `servedAppointmentServices/Dates/Times` (same fields/format `list_appointments` hands the model), stores the id set in a new private field `pendingCancelVisitIds: Set<string> | undefined`, and returns `{planned:true, appointments, note:"Nothing is cancelled yet. Read every service, day and time back exactly as given, ask for ONE yes covering all of them, and wait. On yes, call cancel_visit again with the same appointmentIds and confirmed true."}`. No write happens.
+  - Phase 2 (`confirmed:true`): requires `pendingCancelVisitIds` to exist and match the passed ids exactly (order-insensitive, dedup'd) — else `{error:"These are not the appointments that were read back. Call cancel_visit without confirmed first, read the list back, and get one yes."}` and nothing is touched. On a match, clears the pending set and runs the unchanged sequential cancel loop (partial/complete notes untouched).
+  - Any new phase-1 call replaces the pending set (plain reassignment).
+- **`handleListAppointments`**: one-line addition — a fresh listing clears `pendingCancelVisitIds` (comment: "A fresh listing means the caller may be choosing a different set to cancel — any earlier cancel_visit read-back no longer applies."). Nothing else in that handler touched.
+- **Tests** (`twilioStream.visit.test.ts`, `describe('cancel_visit')` rewritten to the two-call flow, 8 tests): phase 1 returns the read-back with service/date/time and does NOT call the cancel mock; phase 2 after a matching phase 1 cancels all and reports them; phase 2 with no prior phase 1 is refused, nothing cancelled; phase 2 with a different id set is refused, nothing cancelled; an id never served is refused (phase 1); a re-listing clears the pending set so phase 2 right after is refused. Full suite green at the time of this change (813 tests, 70 files); `tsc --noEmit` clean.
+- **NOT edited**: `livePrompts.ts` — its line "cancel_visit needs no planning phase" is now false and needs updating by whoever owns that file next (told not to touch it per the task brief; a later worker owns it).
+- **Uncertain / worth a second look**: (1) the already-cancelled branch in phase 1 has no dedicated test — logic mirrors `handleCancel`'s proven path but wasn't independently exercised here; (2) an editor-format hook fired on every `Edit` call and reformatted whitespace in unrelated regions of `twilioStream.ts` (STAFF_MATCH_STOPWORDS array, `registerTrackedTool` indentation, a couple of long lines) — no logic changed and the full suite was green, but it widens the diff outside the stated edit scope and could add noise to a merge with concurrent workers on that file.
+- Not committed (orchestrator commits), not deployed, .env/Railway untouched, no Phorest writes run outside mocks.
+
+### Workstream B — authored backend rules (2026-09-16)
+Made the Live BACKEND (thinking) model's RULES an authored file instead of a
+regex-transformed copy of the Realtime prompt, per AUDIT_REVIEW_2026-09-15.md
+§1 recommendation #2 ("move the backend rule prose out of `rewriteConversation`
+into its own plain text file... rules for two different models doing two
+different jobs should be authored, not transformed").
+
+**New file:** `src/voice/backendRules.ts` — exports every STATIC backend rule
+section as a plain string constant (no regex, no dependency on the Realtime
+prompt's wording): `PRIORITY`, `PERSONALITY_AND_TONE`, `LANGUAGE`,
+`RESPONSE_SHAPE_AND_TURN_TAKING`, `REFERENCE_PRONUNCIATIONS`,
+`REASONING_AND_UNCLEAR_AUDIO`, `OPERATING_RULES`, `PRIVACY`,
+`SERVE_AND_IDENTITY` (the CONVERSATION FLOW body — previously generated by
+`rewriteConversation`, which fully REPLACED, never derived, the production
+SERVE/IDENTIFY text), `SAFETY_AND_ESCALATION`, `SPAM_AND_TELEMARKETING`,
+`NON_CLIENT_CALLS`, `BACKEND_TOOL_USE`, `CANONICAL_SERVICE_CATALOG_HEADER`,
+`TEMPORARY_CLOSURE_POLICY_RULES`, `TRANSFER_FAILBACK_CALL_CONTEXT`. A block
+comment at the top of the file lists the full computed-vs-authored split
+(reproduced below).
+
+**Computed vs authored** (determined by reading `buildInstructions` in
+twilioStream.ts for `${...}` interpolation, not assumption):
+- **COMPUTED** (still parsed from `productionInstructions` via
+  `parseSections`/`productionFacts`/`rewriteClosure` in livePrompts.ts): the
+  lead identity line, CONTEXT (address, weekly hours), CURRENT STATUS
+  (today/tomorrow status, RICHA'S LINE, current date/time), TEMPORARY
+  CLOSURE POLICY's summary line (dates + public reason), and the
+  transfer-failback CALL CONTEXT suffix (text is authored/static; whether it
+  appears is computed from the greeting context).
+- **AUTHORED** (backendRules.ts): everything else that reaches the backend
+  prompt — see the constant list above.
+- **DROPPED** (unchanged from before): SERVICES & PRICES, PREAMBLES, TOOLS —
+  never reached the backend prompt; the catalog/tool sections replace them.
+
+**Changed:** `src/voice/livePrompts.ts` — `backendSections()` now assembles
+sections in production order by pushing the authored constants directly
+(via a small `push(name, body)` helper) interleaved with the computed
+CONTEXT/CURRENT STATUS/TEMPORARY CLOSURE POLICY/CONVERSATION-FLOW-suffix
+values; `buildBackendPrompt()` interpolates `BACKEND_TOOL_USE` and
+`CANONICAL_SERVICE_CATALOG_HEADER` instead of inlining that text. Deleted
+`rewriteResponseShape`, `rewriteReasoning`, `rewriteConversation`,
+`rewriteSafety`, `rewriteSpam`, `rewriteNonClient` — no longer needed since
+those sections are now authored text, not derived. Kept `rewriteClosure`
+(now imports `TEMPORARY_CLOSURE_POLICY_RULES` instead of inlining it) and
+`parseSections`/`productionFacts`/`section` (still used for the computed
+facts and by `buildLivePrompt`, which is unchanged).
+
+**Golden tests added FIRST** (`src/tests/livePrompts.test.ts`, new
+`describe('golden prompts...')` block, 4 tests) — captured from the pipeline
+*before* any implementation change, asserting byte-identical output against
+committed fixtures in `src/tests/__golden__/`:
+`backend-prompt.2026-10-01.txt`, `live-prompt.2026-10-01.txt`,
+`backend-prompt.transfer-failback.txt` (transfer-failback greeting → CALL
+CONTEXT suffix), `backend-prompt.caller-context.txt` (`callerContext` set),
+`backend-prompt.closure-active.txt` (business.json's real 2026-09-01..09-09
+vacation, same fixture `twilioStream.vacation.test.ts` uses, active on
+2026-09-05 — matches the closure scenario the pre-existing "preserves retry,
+privacy, current closure facts" test already covered). On mismatch the
+helper `expectMatchesGolden` prints the first differing line with 2 lines of
+context (unified-diff style, `-`/`---`/`+`) instead of the full ~19–20KB
+prompt. All 4 passed BEFORE the refactor (confirming the harness) and passed
+AGAIN AFTER (confirming the refactor changed WHERE the text lives, not WHAT
+it says) — full suite 815/815, `tsc --noEmit` clean, both before and after.
+
+**Tripwire message fixed** (the actual root cause named in the task: the SHA
+test fired on 2026-09-14 and was dismissed because it didn't explain itself).
+`expect(digestBefore, message).toBe(hash)` now reads: "The production
+(Realtime) prompt changed. On the Live path the backend model does NOT
+receive SERVE/IDENTIFY or any static rule section from this prompt — backend
+rules are authored in src/voice/backendRules.ts and Live rules in
+buildLivePrompt. If you meant to change Live behaviour, edit those. If this
+Realtime-prompt change is deliberate, update the hash here and note what
+changed." Hash itself untouched (`73cecffe22a2...07505eaf`).
+
+**Realtime retirement banner** added in `twilioStream.ts` immediately above
+the `═══ CONVERSATION FLOW ═══` template line: "REALTIME-ONLY — inert when
+VOICE_ENGINE=live. Backend rules: src/voice/backendRules.ts. Realtime is
+being retired; see docs/REALTIME_RETIREMENT_PLAN_2026-09-16.md." Since that
+line sits inside one continuous template literal (a literal `//` there would
+become part of the rendered prompt and break the hash tripwire), the
+template was split into two backtick literals joined by `+` at the exact
+character boundary, with the comment placed between them as real JS — the
+concatenated string is unchanged (verified by the hash test staying green).
+Nothing else in that file touched.
+
+**Not changed, on purpose:** wording of any rule (would break the goldens —
+that's the point); the stale "cancel_visit needs no planning phase" sentence
+in BACKEND_TOOL_USE (Workstream C above found it's now false, but the task
+brief said a later worker owns that edit — it's a one-line change in
+backendRules.ts now, no regex to fight); `scripts/render-live-prompts.ts`
+(ran clean, unchanged, ~909 live / prompt tokens as before).
+
+**Verification:** `npx vitest run` → 815/815 passed, 70 files (2 more than
+this task's own 813 baseline — Workstream A's concurrent
+`booking.serviceJoiner.test.ts` growth, unrelated to this change and not a
+conflict). `npx tsc --noEmit` → clean. No `!` non-null assertions in any new
+code (backendRules.ts, the rewritten backendSections/rewriteClosure/
+buildBackendPrompt in livePrompts.ts, the new golden tests) — pre-existing
+ones in unmodified `parseSections`/`productionFacts` left as-is.
+
+**Uncertain / worth a second look:** (1) `rewriteClosure` on the CURRENT
+STATUS section body is now a guaranteed no-op (the ACTIVE NOW/UPCOMING line
+always lands in a separate trailing TEMPORARY CLOSURE POLICY section per how
+`buildInstructions` nests the `═══` header) — simplified to a direct push of
+the computed body without calling the function there; flagged in a code
+comment in case a future `buildInstructions` change breaks that assumption.
+(2) Did not independently re-verify Workstream C's cancel_visit note beyond
+preserving it verbatim as instructed.
+
+Not committed (per task rules), not deployed, `.env`/Railway untouched, no
+Phorest writes run.
+
+### Workstream D — staff matcher (2026-09-16)
+Made staff-name matching in `src/realtime/twilioStream.ts` principled instead
+of stopword-driven, per AUDIT_REVIEW_2026-09-15.md §2.1/§2.2 and the
+2026-09-15 lessons.md "fuzzy name matching must never see filler words" entry.
+
+**Real staff first names** (read-only `listStaffNames()` probe against the
+real Phorest catalog, `node --env-file=.env --import tsx`): **Bonnie, Manu,
+Phorest, Richa** ("Phorest" is presumably a placeholder/house account, not a
+person — left as-is, not in scope).
+
+**1. Length-scaled edit bound.** New helper `maxEditsFor(name)` (~line 816):
+5+ letters → 2 edits, 4 letters → 1 edit, ≤3 letters → 0 (exact only).
+Applied to both the whole-query and per-token comparisons in `matchStaffName`
+(replacing the old flat `n.length >= 4 && editDistance(...) <= 2`). Verified
+by direct computation that Richard/Rishka/Risha (5-letter Richa, distance 2)
+still match, and "and"/"can"/"want"/"any"/"then"/"than" (all distance 2 from
+4-letter "manu") no longer do (distance 2 > bound 1).
+
+**2. Call-site gate in `handleSuggestAvailability`** (~line 3702): the staff
+check now only runs when `result.closest.length === 0` — a phrase that
+produced service candidates is a service phrase and must never have a
+coincidental name match eclipse those candidates. One-line comment added at
+the call site. `matchCallerNamedStaff` has exactly one call site (checked via
+grep); no other call site needed the same treatment.
+
+**3. Shrunk `STAFF_MATCH_STOPWORDS`.** Verified by brute-force edit-distance
+computation that EVERY word in the old 76-word list is now provably safe
+against all 4 real staff names under the new bound alone (zero collisions).
+Removed: all booking/scheduling vocabulary (book, time, date, today, plus,
+upper, lower, full, half, next, last, new, old) and generic content verbs/
+quantifiers (want, need, get, got, put, see, say, ask, just, like, one, two,
+some, more, much, very, back) — and, since the bound alone provably blocks
+them, also "and", "then", "than" (the headline register-item-05 words) so the
+new test below exercises the bound, not the stopword shortcut. Left ~41
+genuine closed-class function words (pronouns, articles, conjunctions,
+prepositions, common auxiliary/modal verbs, wh-words, basic call filler like
+"okay"/"yeah") as a belt-and-braces safety net, re-commented as exactly that.
+Bare single-word stopword guard unchanged (returns null before any fuzzy
+check runs).
+
+**Tests:**
+- `src/tests/staffMatch.test.ts` — kept the existing 4, added 4: the bound
+  alone (not the stopword list) rejects "and"/"want"/"then"/"than" against a
+  bare `['Manu']` roster (none of those 4 words are in the trimmed stopword
+  set, so this genuinely isolates the bound); Richa's phone-mishearing
+  variants (Richard/Rishka/Risha/"with Risha") still match; a 4-letter name
+  tolerates exactly one edit ("Mano" → "Manu"); a 3-letter name requires exact
+  ("Rob" does NOT match "Bob", "Bob" matches "Bob"). 8/8 green.
+- `src/tests/twilioStream.serviceMatch.test.ts` — added a new describe block:
+  "eyebrow threading and upper lip" (the mock catalog's separate Brow
+  Threading / Lip Threading entries make this resolve notOffered WITH
+  candidates) never returns `staffMember`; a bare "Richa" (no candidates)
+  still does. 6/6 green in that file.
+
+**Verification:** `npx vitest run` — 70 files, 821 tests, all green.
+`npx tsc --noEmit` — clean. One `blocklist.test.ts`/`callStore.test.ts` ENOTDIR
+warning is expected noise from a pre-existing tmp-dir test pattern, not a
+failure (tests still pass).
+
+**Uncertain / worth a second look:**
+- Whether "Phorest" (7 letters, from the real staff list) is a real person or
+  a house/system account — didn't investigate further since it's outside this
+  workstream's scope and the matcher treats it like any other name.
+- The stopword trim is a judgment call on where "genuine function word" ends;
+  kept a conservative ~41-word set rather than reducing further, since the
+  task asked for "small... as a safety net" rather than empty.
+- Did not touch `isAmbiguousRichaAvailabilityRequest` or its own reuse of
+  `matchStaffName(text, ['Richa'])` — it inherits the new bound automatically
+  and wasn't in scope for a separate change.
+
+**Not touched:** `livePrompts.ts`, `livePrompts.test.ts`, `booking.ts`,
+`toolSchemas.ts`, and nothing beyond the matcher block/stopword list/one
+call-site gate in `twilioStream.ts`. Saw an unrelated concurrent
+`REALTIME-ONLY` comment land near line ~727 of `twilioStream.ts` mid-session
+(another worker's change per the task brief) — left untouched. Not committed,
+not deployed, `.env`/Railway untouched, no Phorest writes (only the one
+read-only `listStaffNames()` probe).
+
+### Workstream G — docs (2026-09-16)
+
+Docs/planning only, no code. Wrote three files and edited a fourth, all
+verified against the live code with `grep`/`Read`, not assumed:
+
+- `docs/REALTIME_RETIREMENT_PLAN_2026-09-16.md` — decision (Aryan,
+  2026-09-16: Realtime retired for good, `VOICE_ENGINE=live` only path).
+  Full inventory: `buildInstructions()`'s 18 sections split
+  computed-vs-static (5 computed: TEMPORARY CLOSURE POLICY, CONTEXT, SERVICES
+  & PRICES, the GREETING sub-block, CURRENT STATUS; 13 static authored
+  rules); `REALTIME_CONTEXT_NOTES` confirmed engine-agnostic despite its name
+  (both `OpenAIRealtimeSession.injectContext` and
+  `OpenAILiveSession.injectContext` consume it, 6 call sites, no
+  `voiceEngine` guard on any of them); **28** `voiceEngine` occurrences in
+  `twilioStream.ts` (1 field decl, 1 telemetry read, **20** `=== 'live'`
+  branches, **6** `=== 'realtime'` branches, **0** `!== 'live'`); exactly one
+  Realtime-only *class* (`OpenAIRealtimeSession`) but **no** Realtime-only
+  *module* deletable outright — `openaiSession.ts` also exports shared types
+  (`ToolDefinition`, `RealtimeHandlers`, `RealtimeUsage`) that `twilioStream.ts`,
+  `liveSession.ts`, and `liveProtocol.ts` import, so type-extraction has to
+  come before deletion; **4** Realtime-only scripts confirmed by import
+  (`test-openai-realtime.ts`, `validate-session-fields.ts`,
+  `validate-transcription-fields.ts`) plus `render-prompt.ts` (Realtime-view,
+  shares the underlying `buildInstructions()` function which must survive);
+  **1** Realtime-only test file (`openaiSession.test.ts`, 30 cases) out of 70;
+  3 more test files mock `openaiSession.js` only because of a module-level
+  import, not because they test Realtime behavior. New finding not in the
+  task brief: `POST /admin/voice-test/variant` (`src/voice/testControl.ts`,
+  `src/routes/voiceTest.ts`) can still flip `env.VOICE_ENGINE` to `'realtime'`
+  at runtime for the owner taste-test A/B — currently inert in production
+  (gated on `PHOREST_WRITE_MODE=simulate`, which prod isn't in right now) but
+  live code that Stage 1 must update or it won't compile/will silently
+  misbehave once the type narrows. Also found: `CLAUDE.md`'s voice rule
+  ("marin... env-tunable via OPENAI_REALTIME_VOICE") is **already wrong
+  today**, not just post-retirement — `liveSession.ts` hardcodes `marin` and
+  never reads that env var; only `OpenAIRealtimeSession` does. Confirmed
+  `failoverToOwner()` (`twilioStream.ts:6829` area) never falls back to
+  Realtime on a fatal error — it dials the owner via Twilio REST directly, so
+  Realtime's removal changes nothing about the emergency path. Four-part
+  plan (narrow the type + delete branches + extract remaining facts; delete
+  the dead modules/scripts/tests/env vars; rewrite CLAUDE.md/CODEMAP/GPT-SOL
+  docs) with verification and rollback per stage. **Stage 0 landed mid-session**
+  (workstream B, commit `2556524`) — corrected the plan in place rather than
+  leaving it stale: `src/voice/backendRules.ts` now exists, the SHA-256
+  tripwire's failure message was fixed (hash unchanged), and Stage 1's
+  facts-extraction step is now smaller (only the regex-based facts parsing in
+  `productionFacts()`/`backendSections()` remains, not the rule sections).
+- `tasks/backlog.md` — new living backlog (links, doesn't duplicate, the
+  2026-09-02 dated snapshot). Seeded per the task brief (revert temp transfer
+  config; the three retirement-plan stages; visit tools taking one service +
+  retiring the proposal pair; same-client duplicate-booking guard) plus a
+  curated pass over `tasks/todo.md`'s older unchecked sections and the
+  2026-09-02 `FUNCTIONAL_RELIABILITY_BACKLOG`'s FR-01…FR-20 items, most
+  tagged `status: verify` since neither doc nor `state.md` confirms their
+  current disposition. Updated two rows to `done` after noticing, mid-task,
+  that workstreams A (`96e1624`, `9dbc13d`) and C (`2812dd5`) had committed
+  during this session — the resolver conjunction fix and `cancel_visit`'s
+  read-back phase, both listed as "being fixed today" in the original task
+  brief, were in fact finished by the time this doc was written.
+- `.claude/commands/call-review.md` — added a "Closing (register item 14 +
+  mirror)" bullet to the rubric, right after "Endings". Note for whoever
+  reads this later: the task brief described register item 14 as "the
+  existing check" in this file, but it was not literally present as rubric
+  text before this edit (only referenced in `docs/PROMPT_AUDIT_2026-09-15.md`
+  and `docs/AUDIT_REVIEW_2026-09-15.md`) — added both the original item-14
+  check and its mirror (completed action, no offer, no goodbye, silence)
+  together in one bullet rather than editing something that didn't exist.
+
+**Not verified / left open:** whether workstreams D (staff matcher — landed
+per its own section just above) and E/F (closing mechanics, non-null lint)
+had landed by session end at the time each part of this doc was drafted; did
+not re-run `npx vitest run` myself (other streams were mutating source
+concurrently — cited workstream B's own 815/815 and workstream D's 821/70
+counts from their own `state.md` entries rather than re-running against an
+unstable working tree). No code changed, no commit, no deploy, `.env`/Railway
+untouched, per this workstream's rules.
+
+### Workstream E — closing mechanics (2026-09-16)
+
+Moved the MECHANICS of "ask once whether they need anything else, never
+twice, never after a goodbye" (AUDIT_REVIEW_2026-09-15.md §3) into server
+state, and reworded the backend rule text for the two-phase `cancel_visit`
+another worker (Workstream C) had already landed.
+
+**1. Offer detection** (`src/realtime/twilioStream.ts`). New standalone,
+exported `isMoreHelpOfferText(text)` (placed just above `export class
+TwilioRealtimeCall`, mirroring the style of the private
+`liveHasCurrentFarewell` farewell regex a few hundred lines into the class):
+`/\b(?:anything|something) else\b|\belse (?:i|we) can\b|\bhelp (?:you
+)?with anything\b|\banything (?:more|further)\b/i`. New private field
+`moreHelpOffered = false`. `recordLiveFragment('erica', …)` — the same
+stream `liveClosingText` is fed from — now also tests the joined rolling
+buffer against this regex after every push (joined, not just the new delta,
+so a split like "anything" + " else" across two fragments still matches)
+and sets the flag true the first time it matches. No mid-call reset method
+was added: confirmed via `new TwilioRealtimeCall(...)` call sites and the
+transfer-failback code (`/twilio/dial-status` reconnects the caller to a
+**fresh** `TwilioRealtimeCall` instance with `transferFailed=1`, it does not
+reuse the old one) that every call segment already gets a brand-new
+instance, so the field's `false` initializer is the only reset needed.
+
+**2. Delivery — ONE central place.** `registerTrackedTool` (the wrapper
+every one of the 17 tool registrations already goes through) now pipes the
+handler's result through a new private `applyMoreHelpOfferNote<T>(result)`
+before returning it to the model. That method: no-ops if `moreHelpOffered`
+is false, if the result isn't a non-null object, or if `result.ending ===
+true`; otherwise it sets `moreHelpAlreadyOffered: true` and either appends
+`"You have already asked whether the caller needs anything else on this
+call. Do not ask again; when they are done, close."` to an existing string
+`note`, or sets `note` to that sentence alone. No per-handler changes.
+
+**3. Reworded success notes.** The three visit-tool success notes
+(`book_visit`, `cancel_visit`, `reschedule_visit` in twilioStream.ts) each
+said an unconditional "...then ask once if they need anything else." —
+exactly the contradiction the audit named ("great, thanks, bye" in the same
+breath). Each now ends "...then ask once if they need anything else —
+unless they have already said they are done, in which case close instead."
+before the trailing "Do not recount the steps..." clause. Grepped the whole
+`src/` tree for the phrase outside `src/tests/`: only these three plus one
+other `twilioStream.ts` occurrence — the `leave_message_for_owner` success
+note, which already branches on "clearly done" before offering, so it was
+left alone (not the same bug); and the Realtime-only SERVE line (inert on
+Live per the 2026-09-15 "two prompts" lesson), also left alone.
+
+**4. Backend rule text** (`src/voice/backendRules.ts`, `BACKEND_TOOL_USE`
+only): (a) the two-phase description now says all three visit tools run in
+two phases — book_visit/reschedule_visit called WITHOUT startTime,
+cancel_visit called WITHOUT confirmed — replacing the stale "cancel_visit
+needs no planning phase" sentence (already false since Workstream C's
+read-back landed). Kept "Their returned options ARE the evidence of
+combined feasibility, so never tell the caller you cannot check a combined
+opening." verbatim. (b) "prepare at most one appointment action at a time"
+→ "run one prepare_appointment_action at a time" (the 2026-09-15 lesson:
+the old phrase was once read as a ban on the visit tools). (c) added "Tool
+results tell you when the offer has already been made on this call." after
+"A farewell outranks the offer." No other wording changed.
+
+**5. Goldens.** Added an `UPDATE_GOLDEN=1` mode to `expectMatchesGolden` in
+`src/tests/livePrompts.test.ts` (writes the actual output over the golden
+file instead of asserting, documented in a comment on the function).
+Regenerated with `UPDATE_GOLDEN=1 npx vitest run src/tests/livePrompts.test.ts`,
+then ran again without the env var — 15/15 pass. `git diff
+src/tests/__golden__` touches all 4 `backend-prompt.*.txt` goldens (not
+`live-prompt.2026-10-01.txt`, as expected — the wording changes are all in
+`BACKEND_TOOL_USE`) and the diff contains ONLY the three sentences from step
+4, verified line-by-line. Also fixed one now-stale assertion in
+`livePrompts.test.ts` ("at most one appointment action at a time" → "run one
+prepare_appointment_action at a time"); no other test in the repo asserted
+the old wording (grepped).
+
+**6. Tests.** `src/tests/twilioStream.liveIntegration.test.ts` (already had
+the `liveClosingText`/`voiceEngine='live'` injection pattern this task
+pointed at): (a) `isMoreHelpOfferText` unit tests — 3 positive ("Is there
+anything else I can help you with?", "Anything else for you today?", "Is
+there something else you need?"), 3 negative ("Okay.", "Your brow threading
+is booked for 4 PM.", "Goodbye, take care."). (b) a new
+`buildTrackedCall()` helper whose mock `session.registerTool` captures
+handlers in a `Map` (avoided `!` by throwing from a `getTool` helper instead
+of asserting), then: a tool result before the offer has no
+`moreHelpAlreadyOffered`; after `call.recordLiveFragment('erica', {delta:
+'Anything else I can help with?'})`, the next result from the SAME
+registered tool carries the field and the appended note; a bare result with
+no prior `note` gets the sentence as its whole note; an `ending: true`
+result is left byte-identical even after the offer; the offer is still
+detected when split across two separate `recordLiveFragment` calls
+("Anything" + " else for you today?"). 6 new tests, all passing.
+`src/tests/twilioStream.visit.test.ts`'s existing
+`/ask once if they need anything else/i` assertions on book_visit/
+cancel_visit/reschedule_visit results still pass unchanged (the phrase is a
+prefix of the new note, not replaced).
+
+**7. Verification.** `npx vitest run` → 70 files, 827 tests, all green (827
+= the 813 baseline this task inherited + Workstream D's +8 staff-matcher
+tests + this workstream's +6). `npx tsc --noEmit` → clean. Grepped the diff
+for `!` non-null assertions in every changed line — none introduced.
+
+**Uncertain / worth a second look — NOT fixed, out of scope for this
+workstream:** while reading the tool-registration block to find "the ONE
+central place" (spec's hint), noticed `book_visit`/`reschedule_visit`/
+`cancel_visit` are only registered via `registerTrackedTool` inside `if
+(this.voiceEngine === 'realtime')` (twilioStream.ts ~1878-1897); the `else`
+(live) branch registers only `prepare_appointment_action`/
+`confirm_appointment_action`. But `liveToolDefinitions()` does NOT strip the
+three visit tools from the schema handed to the Live backend model (it only
+strips the raw single-appointment writes), and `backendRules.ts`
+`BACKEND_TOOL_USE` instructs the backend to call them directly. If that
+registration gap is real (not something registered elsewhere I missed),
+calling `book_visit` on the Live path would find no handler. This predates
+this workstream's changes, is not in `src/realtime/twilioStream.ts`'s
+closing-mechanics area or `backendRules.ts`'s tool-use text I was asked to
+touch, and touching the registration `if/else` felt too large a functional
+change to make unreviewed inside a closing-mechanics task — flagging for
+Aryan/the next worker rather than fixing silently.
+
+Not committed (per task rules), not deployed, `.env`/Railway untouched, no
+Phorest writes run (mocks only).
+
+### Workstream H — visit tools registered on Live (2026-09-16)
+
+Fixed the exact gap Workstream E flagged as "uncertain / not fixed" above:
+`reschedule_visit`, `cancel_visit`, `book_visit` were registered only inside
+`twilioStream.ts`'s `if (this.voiceEngine === 'realtime')` branch (mis-
+indented, so it read as flat top-level registration on a skim) while
+`liveToolDefinitions()` kept advertising all three to the Live backend model
+and `backendRules.ts` told it to call them directly. On `VOICE_ENGINE=live`
+in production, calling one landed in `liveSession.ts`'s `runTool` with no
+handler, which returned a raw `{error: 'No handler registered for tool ...'}`
+that the backend model swallowed — Erica told a caller on 2026-09-15 she
+could not check a combined opening, previously mis-attributed entirely to a
+prompt-side ban (already fixed under a different workstream).
+
+**1. Fix** (`src/realtime/twilioStream.ts`, `createSession()` ~line 1895):
+moved the three `registerTrackedTool('reschedule_visit'/'cancel_visit'/
+'book_visit', …)` calls out of the `voiceEngine === 'realtime'` branch to
+right after `suggest_availability`, with a comment explaining they're
+two-phase tools with their own read-back and are the Live path's only
+appointment writes besides the `prepare_appointment_action`/
+`confirm_appointment_action` proposal pair. `book_appointment`/
+`reschedule_appointment`/`cancel_appointment` stayed Realtime-only; the
+proposal pair stayed Live-only. No handler logic, tool descriptions, or
+prompt text touched.
+
+**2. Accessors added** (both session classes, so a test doesn't have to
+reach into the private `toolHandlers` map): `registeredToolNames(): string[]`
+on `OpenAILiveSession` (`src/voice/liveSession.ts`, right after
+`registerTool`) and on `OpenAIRealtimeSession` (`src/realtime/openaiSession.ts`,
+same spot). Both just `Array.from(this.toolHandlers.keys())`.
+
+**3. New test file** `src/tests/toolRegistration.test.ts` (5 tests, all
+passing):
+- `"every tool the Live backend is offered has a handler (2026-09-16: visit
+  tools were Realtime-only and Erica said she could not check a combined
+  opening)"` — two tests: constructs a call, sets `voiceEngine`, calls the
+  real (private, but reachable via `call: any`) `createSession()`, then
+  asserts every name in `liveToolDefinitions()` / `TOOL_DEFINITIONS` is in
+  `call.session.registeredToolNames()`. This is the test that would have
+  caught the defect — it fails red on the pre-fix code (verified before
+  fixing) because `reschedule_visit`/`cancel_visit`/`book_visit` are
+  advertised but not registered on the Live engine.
+- `"reschedule_visit/cancel_visit/book_visit are dispatchable through a
+  Live-engine session (not just callable directly)"` — three tests, one per
+  visit tool. Each builds a Live-engine call, calls the real
+  `createSession()`, then invokes `(call.session as any).runTool({name,
+  arguments, callId})` — `OpenAILiveSession`'s own private dispatch method,
+  the same path a real Live tool call takes (JSON-parse args → toolHandlers
+  lookup → invoke → JSON-stringify result) — rather than calling
+  `handleRescheduleVisit`/`handleCancelVisit`/`handleBookVisit` directly.
+  Each asserts the result is the handler's own deterministic early-return
+  (`reschedule_visit`/`cancel_visit` with unserved appointmentIds → "please
+  call list_appointments"; `book_visit` on a closed Sunday, 2025-10-05, same
+  fixture date `twilioStream.toolNotes.test.ts` uses → "closed on that
+  date") and explicitly asserts the result does NOT match `/no handler
+  registered/i`.
+
+**4. Verification.** `npx vitest run` → 71 files, 832 tests, all green (832
+= the 827 baseline this task inherited + this workstream's +5).
+`npx tsc --noEmit` → clean. Grepped the diff for `!` non-null assertions —
+none introduced. Diff touches only `src/realtime/twilioStream.ts` (moved 3
+registration lines + comment), `src/voice/liveSession.ts` +
+`src/realtime/openaiSession.ts` (one accessor method each), and the new test
+file — no handler logic, tool descriptions, or prompt/backend-rule text
+changed.
+
+**5. Lessons.** Appended a 2026-09-16 addendum to the existing "a tool the
+backend may not call does not exist" entry in `tasks/lessons.md`: the same
+tool was also never registered on the Live engine; a contract test now
+guards every advertised tool has a handler; a tool test that calls the
+handler method directly does not prove the tool is reachable.
+
+Not committed (per task rules), not deployed, `.env`/Railway untouched, no
+Phorest writes run (mocks only, PHOREST_WRITE_MODE respected).
+
+### Workstream F — no-non-null-assertion (2026-09-16)
+
+Turned on `@typescript-eslint/no-non-null-assertion: 'error'` in
+`.eslintrc.cjs` (with an `overrides` entry setting it back to `'off'` for
+`src/tests/**` and `scripts/**`) and removed every `!` non-null assertion
+from `src/**/*.ts` outside `src/tests/`.
+
+**Baseline note:** `npm run lint` as written (`eslint . --ext .ts`) does not
+run at all on this box — ESLint 9.36 requires `eslint.config.js` (flat
+config) by default and refuses the legacy `.eslintrc.cjs` outright. Every
+lint invocation in this workstream (including the baseline) used
+`ESLINT_USE_FLAT_CONFIG=false npx eslint . --ext .ts`. That's a pre-existing
+environment gap, not something this task touched — flagging it rather than
+migrating the config, which was out of scope. Baseline (before adding the
+rule): 279 problems, all `no-explicit-any` / `no-unused-vars` in test files
+and two `liveSession.ts`/`liveSession.ts` spots — zero non-null-assertion
+errors reported yet since the rule wasn't on. Live `!` count once the rule
+was turned on: **106** sites across `src/**/*.ts` outside tests (audit's
+~98 estimate was against an earlier revision; `smsRouter.ts`, which the
+audit listed at 2, actually had zero real sites — just exclamation marks in
+comments/strings).
+
+| File | Sites | a (restructure) | b (optional chaining) | c (explicit guard/throw) |
+| --- | --- | --- | --- | --- |
+| `src/config/env.ts` | 1 | 0 | 0 | 1 |
+| `src/routes/admin.ts` | 1 | 1 | 0 | 0 |
+| `src/voice/liveSession.ts` | 2 | 2 | 0 | 0 |
+| `src/services/smsOwner.ts` | 2 | 1 | 0 | 1 |
+| `src/services/postCallSummary.ts` | 2 | 2 | 0 | 0 |
+| `src/services/phorest.mock.ts` | 2 | 0 | 0 | 2 |
+| `src/core/visits.ts` | 4 | 0 | 0 | 4 |
+| `src/realtime/openaiSession.ts` | 4 | 4 | 0 | 0 |
+| `src/services/phorest.simulated.ts` | 4 | 0 | 0 | 4 |
+| `src/services/booking.ts` | 5 | 4 | 0 | 1 |
+| `src/core/hours.ts` | 6 | 0 | 0 | 6 |
+| `src/services/liveTestTelemetry.ts` | 7 | 7 | 0 | 0 |
+| `src/services/phorest.client.ts` | 13 | 3 | 0 | 10 |
+| `src/voice/livePrompts.ts` | 13 | 2 | 9 | 2 |
+| `src/realtime/twilioStream.ts` | 40 | 6 | 1 | 33 |
+| **Total** | **106** | **32** | **10** | **64** |
+
+**The one intended behaviour change** (per the audit, §6): in
+`twilioStream.ts`'s `findNearbyAvailability`, `canonicalNames.get(alternative.date)!`
+used to silently coerce a missing canonical service name to `undefined` and
+write an offered-slot key built from it — weakening the fresh-slot gate on
+that date instead of crashing. Now: if the name is missing, we log a warning
+(`'findNearbyAvailability: missing canonical service name — skipping
+offered-slot write for this date'`) and skip writing that date's slot key
+entirely, so the gate stays strict. In the current code this branch is
+unreachable in practice (`canonicalNames.set` and the `alternativeDates.push`
+that creates the corresponding entry happen together in the same `if`
+block), but the fix removes the silent-weakening failure mode the audit
+flagged, matching the task's explicit instruction.
+
+**Representative patterns used (not one-off per file):**
+- Edit-distance DP table in `twilioStream.ts`'s `editDistance` rewritten
+  with named `prev`/`cur` row locals and cell guards — same O(n·m), all unit
+  tests green.
+- `spreadAcross` (twilioStream.ts) and `firstStart`/`planStartAt`
+  (visits.ts / twilioStream.ts book_visit & reschedule_visit, 12 sites) get
+  small local helpers that destructure-and-throw on the "impossible" branch
+  instead of asserting past it — these are the audit's "safe while
+  `items.length === durations.length`" class.
+- `isoDateOrThrow` / `todayISO` helpers (added independently in
+  `phorest.client.ts`, `phorest.simulated.ts`, `phorest.mock.ts`,
+  `hours.ts`, `twilioStream.ts`) replace `DateTime.now()...toISODate()!` and
+  validated-DateTime `toISODate()!` sites — these DateTimes cannot be
+  invalid, so the throw path is unreachable; per the task's own instruction
+  a comment says so at each helper.
+- Regex match-group sites in `livePrompts.ts`'s `productionFacts` (9 of its
+  13 sites) switched to `match?.[1]` + a truthy check instead of
+  `if (match) …[1]!` — behaviourally identical since every affected group is
+  `(.+?)` (at least one char).
+- `only<T>(arr): T | undefined` helper in `booking.ts` replaces the
+  `if (arr.length === 1) return arr[0]!` pattern (4 of its 5 sites).
+
+**One incidental hardening beyond canonicalNames, flagged for visibility:**
+`phorest.client.ts`'s `getTodayAppointments` and the tail of `listAppointments`
+build `startLocal`/`start` from `DateTime.fromISO` on Phorest's own
+`appointmentDate`/`startTime` fields with no prior `.isValid` check (unlike
+`parseSalonDateTime`, which throws on bad input elsewhere in the same file).
+Previously `.toISODate()!` would silently pass a literal `null` into a
+`date: string` field if Phorest ever returned an unparseable date; now
+`isoDateOrThrow` throws instead. This is consistent with the file's existing
+throw-on-invalid convention and is not reachable by anything Phorest has
+ever actually returned in this codebase's tests or manual probes, but it IS
+a stricter failure mode than before for a hypothetical malformed Phorest
+response, so it's called out rather than folded silently into the "no
+behaviour change" claim.
+
+**Not resolved without further restructuring:** none. Every site was fixed
+without a cast (no `as T`, no `as unknown as`, no type-only cast) and
+without an inline `eslint-disable`.
+
+**Verification.** File-by-file: `npx tsc --noEmit` clean and the covering
+test file(s) green after every file (see per-file `npx vitest run <pattern>`
+runs during this workstream — `env`/`admin`, `smsOwner`/`postCallSummary`/
+`phorest.mock`/`liveSession`, `visits`/`openaiSession`/`phorest.simulated`/
+`phorest.client`, `hours`/`booking`, `liveTestTelemetry`,
+`phorest.selector`/`appointment`, `livePrompts`, then per-cluster
+`twilioStream.*` suites). Final: `ESLINT_USE_FLAT_CONFIG=false npx eslint .
+--ext .ts` → 279 problems, all pre-existing `no-explicit-any`/
+`no-unused-vars` (identical to baseline), **zero** `no-non-null-assertion`
+errors. `npx tsc --noEmit` → clean. `npx vitest run` → 71 files, 832 tests,
+all green (same 832 as before this workstream — no test files touched,
+confirmed via `git diff --stat -- src/tests/ scripts/` showing no output).
+Grepped the diff for new `as `-casts and `eslint-disable` comments — none.
+
+Not committed (per task rules), not deployed, `.env`/Railway untouched, no
+Phorest writes run (`PHOREST_WRITE_MODE` untouched, no write path exercised).
+
+### Workstream F follow-up — ESLint 9 flat config migration (2026-09-16)
+
+Replaced `.eslintrc.cjs` with `eslint.config.js` (flat config; package is
+`"type": "module"` so it's a plain ESM default export) and changed
+`package.json`'s `lint` script from `eslint . --ext .ts` to `eslint .` —
+`npm run lint` now runs natively on ESLint 9.36 with no
+`ESLINT_USE_FLAT_CONFIG=false` escape hatch and no deprecation warning.
+`.eslintrc.cjs` deleted.
+
+**Discovery that changed the plan slightly:** reproducing the old config
+"exactly" isn't just copying rules — `eslint . --ext .ts` also implicitly
+scoped every rule to `.ts` files only. Plain `eslint .` in flat config does
+NOT get that scoping for free from `files: ['**/*.ts']` rule blocks alone:
+ESLint 9's default target resolution still parses `.js`/`.mjs`/`.cjs` files
+even when no config object's `files` pattern matches them, and surfaces
+their parse errors. Proved this empirically — with only
+`dist/**`/`node_modules/**`/`outputs/**` ignored, `eslint .` newly reported
+two `Parsing error: 'return' outside of function` hits in
+`tasks/swarm-defects.mjs` and `tasks/swarm-hardening.mjs` (bare top-level
+`return`, valid as CommonJS-ish script-speak but not as strict ES module
+top-level code) — files `--ext .ts` never touched. Fix: added
+`**/*.js`, `**/*.mjs`, `**/*.cjs` to the top-level `ignores` array alongside
+the three requested directories. This is necessary, not cosmetic — it's
+what actually restores the old `--ext .ts` scope.
+
+**Second discovery, reported rather than silently absorbed:** the "279
+pre-existing problems" baseline from the main workstream already included 5
+errors (`no-empty-object-type` x3, `no-explicit-any` x1, `no-unused-vars`
+x1) from three `dist/*.d.ts` files. `dist/` is git-ignored and untracked
+(confirmed via `git ls-files dist` → empty) and its build output on disk
+predates this session (files timestamped Sep 14, two days before this
+task) — it's stale local build output, not source, and `--ext .ts` only
+ever caught it because `--ext` matches by suffix (`.d.ts` ends in `.ts`).
+Ignoring `dist/**` (as instructed) correctly excludes it going forward, but
+means the new baseline is genuinely **274**, not 279 — a real, expected
+delta, fully accounted for (verified via a sorted `diff` of the old and new
+full lint output: after excluding the two `.mjs` files and the three `dist`
+files, every remaining line is byte-identical between old and new). Zero of
+the 5 removed errors were `no-non-null-assertion`.
+
+**`eslint.config.js` contents** (see the file for the full version with
+comments): one `ignores`-only object (`dist/**`, `node_modules/**`,
+`outputs/**`, `**/*.js`, `**/*.mjs`, `**/*.cjs`); one object scoped to
+`files: ['**/*.ts']` combining `js.configs.recommended.rules`, the
+`@typescript-eslint/eslint-plugin` legacy `eslintrc/eslint-recommended`
+override rules (disables base JS checks TS already covers, e.g.
+`no-undef`/`no-redeclare`/`constructor-super`; turns on `no-var`/
+`prefer-const`/etc. — confirmed this was already active in the OLD config,
+since `plugin:@typescript-eslint/recommended`'s eslintrc export chains
+`extends: ['./configs/eslintrc/base', './configs/eslintrc/eslint-recommended']`
+internally), `tsPlugin.configs.recommended.rules`, and
+`'@typescript-eslint/no-non-null-assertion': 'error'`; one object for
+`files: ['src/tests/**', 'scripts/**']` turning that rule back off.
+
+**Before/after summary lines** (both via `npm run lint` — old required the
+env-var workaround, new does not):
+- Old: `ESLINT_USE_FLAT_CONFIG=false npx eslint . --ext .ts` →
+  `✖ 279 problems (279 errors, 0 warnings)`
+- New: `npm run lint` → `✖ 274 problems (274 errors, 0 warnings)` — same
+  content minus the 5 stale-`dist/`-artifact errors, zero
+  `no-non-null-assertion`, zero config warnings.
+
+**Proof the rule fires:** appended `const x = ([] as string[])[0]!;` to
+`src/config/env.ts`, ran `npm run lint` → 276 problems, including
+`325:11  error  Forbidden non-null assertion  @typescript-eslint/no-non-null-assertion`
+(plus an expected unrelated `325:7 'x' is assigned a value but never used`).
+Removed the line; `npm run lint` back to 274/274, `git diff src/config/env.ts`
+empty (confirmed no residual whitespace).
+
+**Final verification:** `npm run lint` → 274/274, zero
+`no-non-null-assertion`, zero warnings. `npx tsc --noEmit` → clean.
+`npx vitest run` → 71 files, 832 tests, all green (unchanged).
+
+Not committed (per task rules), not deployed, `.env`/Railway untouched. No
+other files touched — `git status` also shows `tasks/lessons.md` modified,
+but that's a concurrent workstream's edit, not this one's (verified via
+`git diff --stat tasks/lessons.md` before touching anything, confirming
+zero overlap with this change).

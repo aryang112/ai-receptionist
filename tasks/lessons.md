@@ -618,3 +618,29 @@ Asked "can she move three appointments, or only some?", writing a test found the
 answer AND a real bug: the closest plan was being demoted behind an earlier one,
 so Erica would have offered the wrong option. Two more defects surfaced the same
 way (consecutive-slot alternatives, a divide-by-zero in `spreadAcross`).
+
+## 2026-09-16 — refactor prompt plumbing behind a golden-equality test
+Moving the backend rules out of regex rewrites into `backendRules.ts` touched
+~290 lines of prompt assembly with zero behaviour risk because the rendered
+prompt was pinned byte-for-byte FIRST (`src/tests/__golden__/`), at fixed
+clocks and closure states, and the refactor had to reproduce it exactly.
+Wording changes then show up as a reviewable golden diff of only the intended
+sentences (`UPDATE_GOLDEN=1`).
+**Rule:** before restructuring anything that produces text a model reads,
+snapshot the output and make equality the acceptance test. Change wording in a
+separate commit from changing plumbing.
+
+## 2026-09-16 — a mis-indented block hides an engine gate
+The visit-tool registrations sat inside `if (voiceEngine === 'realtime')` but
+were indented as if outside it, so three reviewers read them as engine-neutral.
+Prettier fixed the indentation only when an unrelated edit touched the file.
+**Rule:** run the formatter over a file before reviewing control flow in it,
+and never trust indentation to tell you what a block contains.
+
+## 2026-09-16 — the same filler word broke two different matchers
+"and" made a stylist out of a service phrase (staff matcher) AND turned
+"brow and lip" into waxing (service resolver, because the wax menu name
+contains "and"). One stopword list on one matcher fixed one symptom.
+**Rule:** when a token causes a false match, ask which OTHER matchers see the
+same token, and fix normalisation where the tokens are made, not where the
+symptom appeared.
