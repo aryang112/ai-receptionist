@@ -560,6 +560,21 @@ bans raw write tools; a new write-ish tool needs an explicit carve-out in
 *"I'm unable to check a combined opening for both services right now."*
 There were **two** copies of that ban in different sections — grep for every one.
 
+**2026-09-16 addendum:** the same tool was ALSO never registered on the Live
+engine. `reschedule_visit`/`cancel_visit`/`book_visit` were registered only
+inside twilioStream.ts's `if (this.voiceEngine === 'realtime')` branch —
+mis-indented, so the gap didn't jump out on a read — while
+`liveToolDefinitions()` kept advertising all three to the Live backend model.
+A Live call landed in `runTool` with no handler, and the caller heard the
+same "unable to check a combined opening" symptom, this time with the
+prompt-side ban already fixed. A contract test now asserts every tool name a
+session's tool-definition list advertises (`liveToolDefinitions()` /
+`TOOL_DEFINITIONS`) has an actual registered handler on that same session,
+for both engines (`src/tests/toolRegistration.test.ts`). **Rule:** a tool
+test that calls the handler method directly (e.g. `handleRescheduleVisit(...)`)
+proves the handler logic works, not that the tool is reachable — dispatch
+through the session's real tool path (or assert the registration itself).
+
 ## 2026-09-15 — fuzzy name matching must never see filler words
 "eyebrow threading and upper lip" resolved to the stylist **Manu**: the word
 **"and" is two edits from "manu"**, and token matching allowed two. Any sentence

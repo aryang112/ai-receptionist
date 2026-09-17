@@ -214,6 +214,16 @@ export class OpenAILiveSession {
     this.toolHandlers.set(name, handler);
   }
 
+  /**
+   * Read-only: names of every tool with a registered handler on this session.
+   * Exists so a contract test can assert every tool liveToolDefinitions()
+   * advertises actually has a handler, without reaching into the private
+   * toolHandlers map (2026-09-16 — see toolRegistration.test.ts).
+   */
+  registeredToolNames(): string[] {
+    return Array.from(this.toolHandlers.keys());
+  }
+
   async connect(): Promise<void> {
     if (this.isWritable()) return;
     if (this.ws) this.releaseSocket();

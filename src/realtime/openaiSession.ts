@@ -295,6 +295,17 @@ export class OpenAIRealtimeSession {
     this.toolHandlers.set(name, handler);
   }
 
+  /**
+   * Read-only: names of every tool with a registered handler on this session.
+   * Mirrors OpenAILiveSession.registeredToolNames() so a contract test can
+   * assert every tool TOOL_DEFINITIONS advertises has a handler here too,
+   * without reaching into the private toolHandlers map (2026-09-16 — see
+   * toolRegistration.test.ts).
+   */
+  registeredToolNames(): string[] {
+    return Array.from(this.toolHandlers.keys());
+  }
+
   async configureSession({
     instructions,
     tools,

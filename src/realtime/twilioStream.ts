@@ -1895,21 +1895,28 @@ export class TwilioRealtimeCall {
     this.registerTrackedTool('suggest_availability', (args) =>
       this.handleSuggestAvailability(args)
     );
+    // reschedule_visit/cancel_visit/book_visit are two-phase tools with their
+    // own server-authored read-back (a plan call, then a confirmed:true call
+    // that executes) — they are the Live path's only appointment writes
+    // besides the prepare/confirm proposal pair below. liveToolDefinitions()
+    // advertises all three to the Live backend model regardless of engine, so
+    // they must be registered on BOTH engines here, not just realtime: a Live
+    // call finds no handler for them otherwise (2026-09-16).
+    this.registerTrackedTool('reschedule_visit', (args) =>
+      this.handleRescheduleVisit(args)
+    );
+    this.registerTrackedTool('cancel_visit', (args) =>
+      this.handleCancelVisit(args)
+    );
+    this.registerTrackedTool('book_visit', (args) =>
+      this.handleBookVisit(args)
+    );
     if (this.voiceEngine === 'realtime') {
       this.registerTrackedTool('book_appointment', (args) =>
         this.handleBookAppointment(args)
       );
       this.registerTrackedTool('reschedule_appointment', (args) =>
         this.handleReschedule(args)
-      );
-      this.registerTrackedTool('reschedule_visit', (args) =>
-        this.handleRescheduleVisit(args)
-      );
-      this.registerTrackedTool('cancel_visit', (args) =>
-        this.handleCancelVisit(args)
-      );
-      this.registerTrackedTool('book_visit', (args) =>
-        this.handleBookVisit(args)
       );
       this.registerTrackedTool('cancel_appointment', (args) =>
         this.handleCancel(args)
