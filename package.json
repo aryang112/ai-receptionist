@@ -12,7 +12,8 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "logs": "node scripts/tail-log.mjs"
+    "logs": "node scripts/tail-log.mjs",
+    "symbols": "node --import tsx scripts/gen-symbol-map.ts"
   },
   "keywords": [],
   "author": "",

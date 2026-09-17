@@ -8,6 +8,9 @@ references below are historical; main application code remains unreleased.
 Orientation map so agents don't have to scan every file. See `state.md` for status
 and `tasks/lessons.md` for the gotchas.
 
+`docs/SYMBOLS.md` — generated symbol -> file:line index (`npm run symbols`);
+grep it before grepping the source.
+
 For a current architecture, Realtime 2.1, quirks, and operations handoff, start
 with [`GPT-SOL/README.md`](GPT-SOL/README.md).
 
@@ -162,6 +165,13 @@ Caller dials Twilio number
   never throws; the SDK and outer promise are capped at five seconds, a SID
   plus an accepted status is required for `queued:true`, terminal failures are
   rejected, and missing/unknown/timed-out outcomes are explicitly uncertain.
+- **smsAgent.ts** (the separate SMS-concierge text agent, not the voice
+  owner-SMS above) — as of 2026-09-16 (`12c26d5`) calls
+  `openai.responses.create` on `OPENAI_SMS_MODEL` (default `gpt-5.6-terra`)
+  with `reasoning: { effort: OPENAI_SMS_EFFORT }`: gpt-5.6 rejects function
+  tools together with reasoning on chat completions, so the Responses API is
+  required. `gpt-4.1` remains selectable via `OPENAI_SMS_MODEL` and gets no
+  `reasoning` field. Locked by `src/tests/smsAgent.test.ts` (5 tests).
 - **postCallSummary.ts** — opt-in, asynchronous owner recap after call teardown.
   It gives `gpt-4.1-mini` the immutable final transcript and outcome under a
   strict JSON schema, prefers a Phorest-confirmed client name, rejects invented
@@ -263,7 +273,10 @@ Caller dials Twilio number
   calling window on working days, distinct from public opening times),
   `TRANSFER_DIAL_TIMEOUT_S` (15 — how long her phone rings before the dial
   hands back to /twilio/dial-status; deliberately under the ~20–25s carrier
-  voicemail pickup)). Defaults are sensible.
+  voicemail pickup), `OPENAI_SMS_MODEL` (SMS-concierge text model, default
+  `gpt-4.1` → `gpt-5.6-terra` as of 2026-09-16), `OPENAI_SMS_EFFORT`
+  (low|medium|high, default low; not sent for gpt-4.x models)). Defaults are
+  sensible.
 - **business.json** — salon hours per weekday + closedDates + `vacations`
   (`[{from,to,note}]` — ONE entry creates a SALON-WIDE closure, closes booking
   on those dates, reroutes transfer to message-taking, and supplies the public
