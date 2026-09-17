@@ -476,7 +476,7 @@ Wave 4 (Jarvis)
 NOT in scope now: temporary transfer config stays until Aryan's transfer-fail test; tool compaction → backlog.
 
 # CONTEXT DIET (2026-09-16, approved by Aryan) — cut per-agent orientation tokens
-- [ ] W1 — state.md: CURRENT section (≤1 page) at top, entries before 2026-09-12 moved to docs/archive/, CLAUDE.md + AGENTS.md read order updated, lessons.md gets a ≤400-word digest header
-- [ ] W2 — scripts/gen-symbol-map.ts → docs/SYMBOLS.md (TS compiler API), `npm run symbols`, staleness test
-- [ ] W3 — docs/areas/*.md briefing files per feature area + index
-- [ ] Jarvis — measure orientation tokens before/after, verify, commit, push
+- [x] W1 — state.md: CURRENT section (≤1 page) at top, entries before 2026-09-12 moved to docs/archive/, CLAUDE.md + AGENTS.md read order updated, lessons.md gets a ≤400-word digest header
+- [x] W2 — scripts/gen-symbol-map.ts → docs/SYMBOLS.md (TS compiler API), `npm run symbols`, staleness test
+- [x] W3 — docs/areas/*.md briefing files per feature area + index
+- [x] Jarvis — measure orientation tokens before/after, verify, commit, push
