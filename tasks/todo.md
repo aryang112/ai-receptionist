@@ -451,3 +451,26 @@ this quarter over polishing.
       greeting, cache per-number in data/, score=1 → soft guard line in
       Erica's context (polite-brief-no-transfer). Soft signal ONLY — never
       auto-block (false positives). Deferred by Aryan 2026-08-26.
+
+# APPROVED FIXES from docs/AUDIT_REVIEW_2026-09-15.md (2026-09-16, orchestrated by Jarvis; Sonnet workers; Fable validates)
+
+Wave 1 (parallel, separate files)
+- [ ] A — Service resolver: strip joiner words, set-based coverage, "brow and lip" must not be wax; sim + unit tests (src/services/booking.ts)
+- [ ] B — Backend rules authored in src/voice/backendRules.ts; golden-equality test; hash-test failure message explains the Live trap; SERVE banner marked Realtime-only
+- [ ] C — cancel_visit gets a read-back phase (plan → confirm with matching id set) (twilioStream.ts, toolSchemas.ts, visit tests)
+- [ ] G — docs: Realtime retirement plan, tasks/backlog.md (living backlog), mirror QA check in .claude/commands/call-review.md
+
+Wave 2 (sequential, same file)
+- [ ] D — Staff matcher: length-scaled edit bound, skip when resolver returned candidates, stopwords shrunk to function words
+- [ ] E — Closing mechanics: server counts the "anything else" offer, notes stop asking after it; success notes reworded; cancel_visit sentence in backend rules updated
+
+Wave 3
+- [ ] F — Enable @typescript-eslint/no-non-null-assertion; remove all 30 `!` sites in twilioStream.ts
+
+Wave 4 (Jarvis)
+- [ ] Validate: full tests, tsc, lint, prompt golden diff, sim sweep diff, resolver probe diff, read every diff
+- [ ] Commit per stream, push branch, deploy from live worktree, verify /admin/voice-test engine:"live"
+- [ ] railway unlink in the main worktree
+- [ ] Update CODEMAP, state.md, lessons, memory; report token tally
+
+NOT in scope now: temporary transfer config stays until Aryan's transfer-fail test; tool compaction → backlog.
