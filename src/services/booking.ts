@@ -56,10 +56,31 @@ const SERVICE_ALIASES: Record<string, string> = {
   brow: 'brow threading',
 };
 
+// Joiner words a caller uses to glue two services into one phrase ("brow AND
+// lip", "brow threading N lip"). Dropped from BOTH catalog names and queries
+// so the catalog's OWN joiner word can't outscore a bundle whose separator
+// already normalizes away — "Brow Wax and Lip Wax" kept beating "Brow Thread
+// + Lip Thread" for the query "brow and lip" because "and" only survived on
+// the wax side ("+" was already stripped to nothing by the regex below).
+// Verified against the real catalog (`scripts/list-services.ts`, 63 active
+// services, 2026-09-16): only two names contain any of these words ("Brow
+// Wax and Lip Wax", "Bikini with Butt Cheeks Wax"), and in both cases the
+// remaining tokens are still unique to that service — nothing relies on the
+// joiner to be distinguished from another entry. Keep this list tiny.
+const JOINER_TOKENS = new Set(['and', 'plus', 'with', 'also', 'then', 'n']);
+
+// "upper"/"lower" are caller modifiers ("upper lip") with no catalog
+// counterpart — no active service name contains either word (verified via
+// the same list-services.ts run) — so they're safe to drop everywhere,
+// making "upper lip" normalize identically to "lip".
+const MODIFIER_TOKENS = new Set(['upper', 'lower']);
+
 // Normalize a service name or a caller query to a comparable form:
 // strip a leading menu prefix like "3)" / "3a)" / "12)", lowercase, turn any
-// run of non-alphanumerics into a single space, and trim. This makes
-// "3a) Eyebrow Threading" and "eyebrow threading" compare equal.
+// run of non-alphanumerics into a single space, drop joiner/modifier filler,
+// and trim. This makes "3a) Eyebrow Threading" and "eyebrow threading"
+// compare equal, and "brow and lip" / "upper lip" compare on their real
+// content instead of incidental filler words.
 function normalize(s: string): string {
   return s
     .toLowerCase()
@@ -67,6 +88,9 @@ function normalize(s: string): string {
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
     .split(' ')
+    .filter(
+      (word) => word && !JOINER_TOKENS.has(word) && !MODIFIER_TOKENS.has(word)
+    )
     .map((word) => TOKEN_SYNONYMS[word] ?? word)
     .join(' ');
 }
@@ -142,22 +166,30 @@ export async function resolveService(
     }
   }
 
-  // (3) whole-word token scoring. Every query token must appear as a whole word
-  // in the service name; score = matchedName-token-ratio isn't enough on its own
-  // (a 1-word query matches many names fully), so we require ALL query tokens
-  // present and rank by how much of the SERVICE name they cover, tie-broken by
-  // shortest name (the most specific service wins).
+  // (3) whole-word token scoring. Every DISTINCT query token must appear as a
+  // whole word in the service name; score = matchedName-token-ratio isn't
+  // enough on its own (a 1-word query matches many names fully), so we
+  // require ALL query tokens present and rank by how much of the SERVICE
+  // name they cover, tie-broken by shortest name (the most specific service
+  // wins).
   const queryTokens = tokens(aliased ?? q);
+  const querySet = new Set(queryTokens);
   const scored = services
     .map((s) => {
       const nameTokens = tokens(s.name);
       const nameSet = new Set(nameTokens);
-      const allPresent = queryTokens.every((t) => nameSet.has(t));
+      const allPresent = [...querySet].every((t) => nameSet.has(t));
       if (!allPresent) return null;
-      // Coverage of the service name by the query — a query that names the
-      // whole service (e.g. "lip threading" -> "Lip Threading") scores 1.0;
-      // a partial ("threading" -> "Full Face Threading") scores lower.
-      const coverage = queryTokens.length / nameTokens.length;
+      // SET-based coverage: distinct shared tokens over distinct name
+      // tokens. Raw token *counts* break on a name with a repeated word —
+      // "Brow Thread + Lip Thread" normalizes to "brow threading lip
+      // threading" (four tokens, "threading" twice), so a query that names
+      // the whole bundle ("brow threading lip" -> 3 tokens) scored a
+      // undercounted 3/4 and lost to a 4-token bundle it should have beaten
+      // outright. As sets, {brow,threading,lip} == {brow,threading,lip} ->
+      // coverage 1.0, decisive.
+      const shared = [...querySet].filter((t) => nameSet.has(t)).length;
+      const coverage = shared / nameSet.size;
       return { service: s, coverage, nameLen: s.name.length };
     })
     .filter((x): x is NonNullable<typeof x> => x !== null)
