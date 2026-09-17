@@ -5490,3 +5490,11 @@ other files touched — `git status` also shows `tasks/lessons.md` modified,
 but that's a concurrent workstream's edit, not this one's (verified via
 `git diff --stat tasks/lessons.md` before touching anything, confirming
 zero overlap with this change).
+
+## 2026-09-16 ~21:45 — ORCHESTRATED FIX SESSION COMPLETE (Jarvis/Fable orchestrating, 8 Sonnet worker runs); DEPLOY PENDING ARYAN
+- All approved fixes landed on `codex/gpt-live-taste-test`, pushed to origin, HEAD `6b9ccc7`. 832 tests, tsc clean, `npm run lint` 274 pre-existing findings / 0 non-null assertions, `npm run build` ok. Real-data checks green: render-live-prompts (only intended sentences changed), sim-scenarios 2026-09-17 (all rows correct incl. new "brow and lip" cases), sim-visit, sim-availability (no invented times).
+- Commits: 96e1624 + 9dbc13d resolver; 2812dd5 cancel_visit read-back; 2556524 authored backendRules + goldens; 39c0f95 staff matcher; e2dfb1c docs (retirement plan, backlog, QA mirror check); fa37bca closing offer counter + rule text; **ea8bdc3 visit tools registered on Live (production defect — they were Realtime-only)**; d5b8599 no-non-null-assertion sweep (106 sites); 6b9ccc7 flat eslint config.
+- **NOT deployed:** `railway up` was blocked by the session's permission gate. Production still runs 8e018ae6 (2026-09-15 build) — in which reschedule_visit/cancel_visit/book_visit have NO handler on Live.
+- Main worktree `railway unlink`ed (2026-09-16) — only the live worktree can deploy now.
+- Token tally (harness-reported subagent tokens): A 145k · B 192k · C 155k · D 154k · E 238k · F 354k · G 262k · H 145k ≈ 1.65M Sonnet; Fable orchestration/review on top.
+- PENDING — action items: (1) **Aryan: deploy** — `cd ~/Documents/Dev/ai-receptionist-live-2026-09-12 && railway up --service erica --detach`, then `railway deployment list` → SUCCESS and `/admin/voice-test` → engine live; (2) Aryan's transfer-fail test, then revert OWNER_TRANSFER_MODE / TRANSFER_WINDOW_END; (3) backlog P1: build sha on /admin/voice-test; Realtime retirement Stage 1.
