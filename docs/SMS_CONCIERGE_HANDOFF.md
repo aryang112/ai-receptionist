@@ -1,6 +1,15 @@
 # SMS concierge — deployment handoff
 
-## Status update 2026-09-16 (Jarvis/Fable, verified live)
+## Status update 2026-09-16 22:45 ET — LIVE for Aryan's handset
+
+- **Deployed:** commit `9796bd0` (includes the `12c26d5` Terra migration) → Railway
+  deployment `42e617d5` SUCCESS at 22:40 ET. Texts are now answered by `gpt-5.6-terra`.
+- **Webhook flipped:** `SmsUrl` → `https://erica-production-f2e2.up.railway.app/twilio/sms`
+  (POST) at 22:39 ET; `voice_url` verified unchanged. The 22:15 entry below saying the flip
+  and deploy were pending is superseded.
+- **Next:** the taste-test table further down, from +14432535169 only.
+
+## Status update 2026-09-16 ~22:15 (Jarvis/Fable, verified live) — superseded above
 
 **Supersedes the "It is NOT deployed" line below — true on 09-14, stale since 09-15.**
 
