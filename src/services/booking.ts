@@ -39,6 +39,8 @@ const TOKEN_SYNONYMS: Record<string, string> = {
   threaded: 'threading',
   tint: 'tinting',
   tinted: 'tinting',
+  waxing: 'wax',
+  waxed: 'wax',
 };
 
 // Common caller phrasings that don't share a keyword with the real service name.

@@ -91,13 +91,15 @@ describe('resolveService — "brow and lip" never silently becomes wax', () => {
   it('"brow threading and upper lip" matches the 2-service threading bundle', async () => {
     const r = await resolveService('brow threading and upper lip');
     expect(r.kind).toBe('match');
-    if (r.kind === 'match') expect(r.service.name).toBe('Brow Thread + Lip Thread');
+    if (r.kind === 'match')
+      expect(r.service.name).toBe('Brow Thread + Lip Thread');
   });
 
   it('"brow threading lip" matches the 2-service bundle, not the 3-service one (set coverage, not count)', async () => {
     const r = await resolveService('brow threading lip');
     expect(r.kind).toBe('match');
-    if (r.kind === 'match') expect(r.service.name).toBe('Brow Thread + Lip Thread');
+    if (r.kind === 'match')
+      expect(r.service.name).toBe('Brow Thread + Lip Thread');
   });
 
   it('"upper lip threading" matches "Lip Threading" ("upper" is a droppable modifier)', async () => {
@@ -118,9 +120,28 @@ describe('resolveService — "brow and lip" never silently becomes wax', () => {
   });
 
   it('the full 3-service bundle is still reachable when all three are named', async () => {
-    const r = await resolveService('brow threading lip threading chin threading');
+    const r = await resolveService(
+      'brow threading lip threading chin threading'
+    );
     expect(r.kind).toBe('match');
     if (r.kind === 'match')
       expect(r.service.name).toBe('Brow Thread + Lip Thread + Chin Thread');
+  });
+
+  // 2026-09-16 follow-up: TOKEN_SYNONYMS had no wax/waxing mapping, so the
+  // query token "wax" was never present in "Lip Waxing" ({lip, waxing}) and
+  // the fragment fell through to the wax bundle instead. Fixed by mapping
+  // `waxing`/`waxed` -> `wax` (toward the shorter form, matching how bare
+  // catalog names like "Bikini Wax"/"Arms Wax" already read).
+  it('"lip wax" matches "Lip Waxing", not the wax bundle', async () => {
+    const r = await resolveService('lip wax');
+    expect(r.kind).toBe('match');
+    if (r.kind === 'match') expect(r.service.name).toBe('Lip Waxing');
+  });
+
+  it('"lip waxing" matches "Lip Waxing"', async () => {
+    const r = await resolveService('lip waxing');
+    expect(r.kind).toBe('match');
+    if (r.kind === 'match') expect(r.service.name).toBe('Lip Waxing');
   });
 });
