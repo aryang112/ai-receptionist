@@ -807,14 +807,80 @@ async function getServiceCatalog() {
  * feeding filler words to the matcher, not to tighten the distance.
  */
 const STAFF_MATCH_STOPWORDS = new Set([
-  'and', 'the', 'for', 'with', 'you', 'can', 'our', 'are', 'was', 'has',
-  'have', 'that', 'this', 'they', 'them', 'then', 'than', 'what', 'when',
-  'want', 'would', 'could', 'should', 'just', 'like', 'need', 'get', 'got',
-  'put', 'see', 'say', 'ask', 'one', 'two', 'all', 'any', 'but', 'not',
-  'now', 'out', 'off', 'over', 'into', 'from', 'about', 'please', 'thanks',
-  'thank', 'yes', 'yeah', 'okay', 'sure', 'also', 'some', 'more', 'much',
-  'very', 'next', 'last', 'back', 'book', 'time', 'date', 'today', 'plus',
-  'upper', 'lower', 'full', 'half', 'new', 'old', 'her', 'his', 'him',
+  'and',
+  'the',
+  'for',
+  'with',
+  'you',
+  'can',
+  'our',
+  'are',
+  'was',
+  'has',
+  'have',
+  'that',
+  'this',
+  'they',
+  'them',
+  'then',
+  'than',
+  'what',
+  'when',
+  'want',
+  'would',
+  'could',
+  'should',
+  'just',
+  'like',
+  'need',
+  'get',
+  'got',
+  'put',
+  'see',
+  'say',
+  'ask',
+  'one',
+  'two',
+  'all',
+  'any',
+  'but',
+  'not',
+  'now',
+  'out',
+  'off',
+  'over',
+  'into',
+  'from',
+  'about',
+  'please',
+  'thanks',
+  'thank',
+  'yes',
+  'yeah',
+  'okay',
+  'sure',
+  'also',
+  'some',
+  'more',
+  'much',
+  'very',
+  'next',
+  'last',
+  'back',
+  'book',
+  'time',
+  'date',
+  'today',
+  'plus',
+  'upper',
+  'lower',
+  'full',
+  'half',
+  'new',
+  'old',
+  'her',
+  'his',
+  'him',
 ]);
 
 export function matchStaffName(
@@ -1088,7 +1154,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
         confirmed: {
           type: 'boolean',
-          description: 'True only after one explicit yes covering every service',
+          description:
+            'True only after one explicit yes covering every service',
         },
       },
       required: ['appointmentIds', 'date'],
@@ -1098,7 +1165,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     name: 'cancel_visit',
     description:
-      'Cancel TWO OR MORE appointments the caller is dropping together. Name every service, day and time first, get ONE yes covering all of them, then call this with confirmed true. Only pass appointmentIds the caller agreed to cancel — appointments hours apart on the same day are separate visits, so ask which they mean. Use cancel_appointment for a single one.',
+      'Cancel TWO OR MORE appointments the caller is dropping together. Call it twice: first without confirmed to get the exact list to read back, then again with the same appointmentIds and confirmed true after ONE yes covering all of them. Only pass appointmentIds the caller has agreed to cancel — appointments hours apart on the same day are separate visits, so ask which they mean. Use cancel_appointment for a single one.',
     parameters: {
       type: 'object',
       properties: {
@@ -1109,10 +1176,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
         confirmed: {
           type: 'boolean',
-          description: 'True only after one explicit yes covering every service',
+          description:
+            'True only after one explicit yes covering every service. Only with the same appointmentIds returned by an earlier unconfirmed call.',
         },
       },
-      required: ['appointmentIds', 'confirmed'],
+      required: ['appointmentIds'],
     },
   },
   {
@@ -1147,7 +1215,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
         confirmed: {
           type: 'boolean',
-          description: 'True only after one explicit yes covering every service',
+          description:
+            'True only after one explicit yes covering every service',
         },
         clientId: { type: 'string' },
         customer: {
@@ -1570,6 +1639,13 @@ export class TwilioRealtimeCall {
   // repeated request idempotent and keeps the B5 list guard from presenting a
   // just-cancelled appointment as though it were still upcoming.
   private cancelledAppointmentIds = new Set<string>();
+  // cancel_visit's server-authored read-back (2026-09-16): the exact id set
+  // returned by the most recent unconfirmed cancel_visit call. confirmed:true
+  // must match this set exactly, or nothing is cancelled — mirrors the
+  // plan-then-execute shape book_visit/reschedule_visit already use, so the
+  // read-back the caller says "yes" to comes from server records, not model
+  // memory. Any new plan replaces it; a fresh list_appointments clears it.
+  private pendingCancelVisitIds: Set<string> | undefined;
   // WRITE-PATH SECURITY: the exact 24h "value" times we offered for a given
   // service+date via suggest_availability, keyed `${service}|${date}`. Booking is
   // constrained to these when an entry exists, so the model can't book a time we
@@ -1809,13 +1885,15 @@ export class TwilioRealtimeCall {
       this.registerTrackedTool('reschedule_appointment', (args) =>
         this.handleReschedule(args)
       );
-    this.registerTrackedTool('reschedule_visit', (args) =>
-      this.handleRescheduleVisit(args)
-    );
-    this.registerTrackedTool('cancel_visit', (args) =>
-      this.handleCancelVisit(args)
-    );
-    this.registerTrackedTool('book_visit', (args) => this.handleBookVisit(args));
+      this.registerTrackedTool('reschedule_visit', (args) =>
+        this.handleRescheduleVisit(args)
+      );
+      this.registerTrackedTool('cancel_visit', (args) =>
+        this.handleCancelVisit(args)
+      );
+      this.registerTrackedTool('book_visit', (args) =>
+        this.handleBookVisit(args)
+      );
       this.registerTrackedTool('cancel_appointment', (args) =>
         this.handleCancel(args)
       );
@@ -3393,9 +3471,10 @@ export class TwilioRealtimeCall {
       const { onGrid, offGrid } = partitionByGrid(available, env.SLOT_GRID_MIN);
       picked = this.spreadAcross(onGrid, max);
       if (onGrid.length < MIN_OFFERED_SLOTS) {
-        picked = [...picked, ...this.spreadAcross(offGrid, max - picked.length)].sort(
-          (a, b) => a.toMillis() - b.toMillis()
-        );
+        picked = [
+          ...picked,
+          ...this.spreadAcross(offGrid, max - picked.length),
+        ].sort((a, b) => a.toMillis() - b.toMillis());
       }
     }
     return picked.map((dt) => ({
@@ -4178,7 +4257,8 @@ export class TwilioRealtimeCall {
         for (const [index, item] of items.entries()) {
           const key = this.slotKey(item.service.name, payload.date);
           const existing = this.offeredSlots.get(key) ?? new Set<string>();
-          for (const plan of plans) existing.add(plan[index]!.toFormat('HH:mm'));
+          for (const plan of plans)
+            existing.add(plan[index]!.toFormat('HH:mm'));
           this.offeredSlots.set(key, existing);
         }
         const options = plans.map((plan) => ({
@@ -4305,19 +4385,67 @@ export class TwilioRealtimeCall {
       }
       const payload = parsed.data as {
         appointmentIds: string[];
-        confirmed: true;
+        confirmed?: boolean;
       };
       logger.info(
         { tool: 'cancel_visit', args: payload },
         'Tool called: cancel_visit'
       );
       const unique = [...new Set(payload.appointmentIds)];
-      if (unique.some((id) => !this.servedAppointmentIds.has(id))) {
+
+      // ---- PLAN (server-authored read-back) ----------------------------
+      // Mirrors book_visit/reschedule_visit: the first call never writes. It
+      // hands the model text built from OUR records (servedAppointment*
+      // maps), not the model's memory, and remembers which ids it covers.
+      if (!payload.confirmed) {
+        if (unique.some((id) => !this.servedAppointmentIds.has(id))) {
+          return {
+            error:
+              'I need to pull up your appointments first — please call list_appointments.',
+          };
+        }
+        if (unique.some((id) => this.cancelledAppointmentIds.has(id))) {
+          return {
+            cancelled: true,
+            alreadyCancelled: true,
+            note: 'One or more of these were already cancelled successfully on this call. Do not call cancel_visit or list_appointments again for them; tell the caller they are already cancelled and continue naturally.',
+          };
+        }
+        const appointments = unique.map((appointmentId) => ({
+          appointmentId,
+          service:
+            this.servedAppointmentServices.get(appointmentId) ?? 'that service',
+          date: this.servedAppointmentDates.get(appointmentId) ?? '',
+          time: this.servedAppointmentTimes.get(appointmentId) ?? '',
+        }));
+        this.pendingCancelVisitIds = new Set(unique);
+        logger.info(
+          { tool: 'cancel_visit', appointments },
+          'Visit cancellation planned'
+        );
         return {
-          error:
-            'I need to pull up your appointments first — please call list_appointments.',
+          planned: true,
+          appointments,
+          note: 'Nothing is cancelled yet. Read every service, day and time back exactly as given, ask for ONE yes covering all of them, and wait. On yes, call cancel_visit again with the same appointmentIds and confirmed true.',
         };
       }
+
+      // ---- EXECUTE -------------------------------------------------------
+      // confirmed:true must match the exact set the read-back covered — an
+      // id swapped in here (or a confirmed call with no plan at all) would
+      // let the caller's "yes" authorize something they never actually heard.
+      const pending = this.pendingCancelVisitIds;
+      const matchesPending =
+        !!pending &&
+        pending.size === unique.length &&
+        unique.every((id) => pending.has(id));
+      if (!matchesPending) {
+        return {
+          error:
+            'These are not the appointments that were read back. Call cancel_visit without confirmed first, read the list back, and get one yes.',
+        };
+      }
+      this.pendingCancelVisitIds = undefined;
 
       const cancelled: string[] = [];
       const failed: { service: string; error: string }[] = [];
@@ -4396,8 +4524,7 @@ export class TwilioRealtimeCall {
       }
       if (!getOpenClose(payload.date)) {
         return {
-          error:
-            'The salon is closed on that date. Nothing was rescheduled.',
+          error: 'The salon is closed on that date. Nothing was rescheduled.',
         };
       }
 
@@ -5364,6 +5491,9 @@ export class TwilioRealtimeCall {
         this.servedAppointmentDates.set(a.appointmentId, a.date);
         this.servedAppointmentTimes.set(a.appointmentId, a.timeDisplay);
       }
+      // A fresh listing means the caller may be choosing a different set to
+      // cancel — any earlier cancel_visit read-back no longer applies.
+      this.pendingCancelVisitIds = undefined;
       // Hand the model ONLY clean, unambiguous fields — never the raw HH:mm:ss
       // (which it could mis-read as the spoken time). It must quote `date`/`time`
       // verbatim.
@@ -5525,7 +5655,8 @@ export class TwilioRealtimeCall {
       // late note on the brow threading and nothing on the lip threading
       // five minutes later. Best-effort: the primary note already succeeded.
       const alsoIds = [...new Set(payload.alsoAppointmentIds ?? [])].filter(
-        (id) => id !== payload.appointmentId && this.servedAppointmentIds.has(id)
+        (id) =>
+          id !== payload.appointmentId && this.servedAppointmentIds.has(id)
       );
       const alsoNoted: string[] = [];
       for (const id of alsoIds) {
@@ -5536,7 +5667,11 @@ export class TwilioRealtimeCall {
           );
         } catch (error) {
           logger.warn(
-            { tool: 'log_running_late', appointmentId: id, error: this.formatError(error) },
+            {
+              tool: 'log_running_late',
+              appointmentId: id,
+              error: this.formatError(error),
+            },
             'Could not note a follow-on appointment in the sitting'
           );
         }

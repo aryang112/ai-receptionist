@@ -40,12 +40,14 @@ export const TOOL_SCHEMAS = {
   cancel_appointment: z.object({
     appointmentId: z.string(),
   }),
-  // Cancel a whole sitting in one step. No planning phase — there are no times
-  // to work out — but the write still needs one explicit yes covering all of
-  // them, so `confirmed` is required rather than inferred.
+  // Two phases, same shape as reschedule_visit (2026-09-16): the first call
+  // (no confirmed) returns a server-authored read-back built from this call's
+  // own served-appointment records rather than the model's memory; the
+  // second (confirmed: true) must repeat the exact same appointmentIds or
+  // nothing is cancelled.
   cancel_visit: z.object({
     appointmentIds: z.array(z.string()).min(2),
-    confirmed: z.literal(true),
+    confirmed: z.boolean().optional(),
   }),
   // Book several services as one sitting. Same two phases as reschedule_visit:
   // plan (no startTime) → back-to-back options; execute (startTime +

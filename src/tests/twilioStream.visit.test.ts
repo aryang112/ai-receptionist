@@ -36,9 +36,19 @@ function buildCall() {
 const DATE = '2025-10-01'; // Wednesday, 12:00–19:00
 const CLIENT = 'client-1';
 const REAL = [
-  '17:00', '17:10', '17:15', '17:20', '17:25',
-  '17:40', '17:45', '17:50', '17:55',
-  '18:05', '18:10', '18:15', '18:20',
+  '17:00',
+  '17:10',
+  '17:15',
+  '17:20',
+  '17:25',
+  '17:40',
+  '17:45',
+  '17:50',
+  '17:55',
+  '18:05',
+  '18:10',
+  '18:15',
+  '18:20',
 ];
 
 function mockSlots() {
@@ -60,8 +70,16 @@ function result0Start(_call: any) {
 }
 
 const ONE_SITTING = [
-  { appointmentId: 'appt-lip', serviceName: 'Lip Threading', timeDisplay: '6:00 PM' },
-  { appointmentId: 'appt-brow', serviceName: 'Brow Threading', timeDisplay: '6:00 PM' },
+  {
+    appointmentId: 'appt-lip',
+    serviceName: 'Lip Threading',
+    timeDisplay: '6:00 PM',
+  },
+  {
+    appointmentId: 'appt-brow',
+    serviceName: 'Brow Threading',
+    timeDisplay: '6:00 PM',
+  },
 ];
 
 describe('list_appointments names the whole sitting', () => {
@@ -78,8 +96,16 @@ describe('list_appointments names the whole sitting', () => {
   it('does NOT group a noon and an evening appointment on the same day', async () => {
     // The owner's edge case — same date, five hours apart, two separate trips.
     mockAppointments([
-      { appointmentId: 'appt-noon', serviceName: 'Lip Threading', timeDisplay: '12:00 PM' },
-      { appointmentId: 'appt-eve', serviceName: 'Brow Threading', timeDisplay: '5:00 PM' },
+      {
+        appointmentId: 'appt-noon',
+        serviceName: 'Lip Threading',
+        timeDisplay: '12:00 PM',
+      },
+      {
+        appointmentId: 'appt-eve',
+        serviceName: 'Brow Threading',
+        timeDisplay: '5:00 PM',
+      },
     ]);
     const call = buildCall();
     const result = await call.handleListAppointments({ clientId: CLIENT });
@@ -142,7 +168,9 @@ describe('reschedule_visit', () => {
   });
 
   it('asks once if anything else is needed after the visit moves', async () => {
-    vi.spyOn(phorest, 'updateAppointment').mockResolvedValue({ ok: true } as any);
+    vi.spyOn(phorest, 'updateAppointment').mockResolvedValue({
+      ok: true,
+    } as any);
     const call = await servedCall();
     await call.handleRescheduleVisit({
       appointmentIds: ['appt-lip', 'appt-brow'],
@@ -162,9 +190,21 @@ describe('reschedule_visit', () => {
 
   it('handles THREE appointments, not just two', async () => {
     mockAppointments([
-      { appointmentId: 'a1', serviceName: 'Lip Threading', timeDisplay: '6:00 PM' },
-      { appointmentId: 'a2', serviceName: 'Brow Threading', timeDisplay: '6:10 PM' },
-      { appointmentId: 'a3', serviceName: 'Eyebrow Tinting', timeDisplay: '6:25 PM' },
+      {
+        appointmentId: 'a1',
+        serviceName: 'Lip Threading',
+        timeDisplay: '6:00 PM',
+      },
+      {
+        appointmentId: 'a2',
+        serviceName: 'Brow Threading',
+        timeDisplay: '6:10 PM',
+      },
+      {
+        appointmentId: 'a3',
+        serviceName: 'Eyebrow Tinting',
+        timeDisplay: '6:25 PM',
+      },
     ]);
     const call = buildCall();
     await call.handleListAppointments({ clientId: CLIENT });
@@ -179,7 +219,10 @@ describe('reschedule_visit', () => {
     // Each service starts exactly where the previous one ends, and every
     // placed start is a real Phorest start.
     for (const item of result.options[0].items) {
-      const [h, m] = item.time.replace(/ (AM|PM)/, '').split(':').map(Number);
+      const [h, m] = item.time
+        .replace(/ (AM|PM)/, '')
+        .split(':')
+        .map(Number);
       const v = `${String(h + 12).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
       expect(REAL).toContain(v);
     }
@@ -190,9 +233,21 @@ describe('reschedule_visit', () => {
       .spyOn(phorest, 'updateAppointment')
       .mockResolvedValue({ ok: true } as any);
     mockAppointments([
-      { appointmentId: 'a1', serviceName: 'Lip Threading', timeDisplay: '6:00 PM' },
-      { appointmentId: 'a2', serviceName: 'Brow Threading', timeDisplay: '6:10 PM' },
-      { appointmentId: 'a3', serviceName: 'Eyebrow Tinting', timeDisplay: '6:25 PM' },
+      {
+        appointmentId: 'a1',
+        serviceName: 'Lip Threading',
+        timeDisplay: '6:00 PM',
+      },
+      {
+        appointmentId: 'a2',
+        serviceName: 'Brow Threading',
+        timeDisplay: '6:10 PM',
+      },
+      {
+        appointmentId: 'a3',
+        serviceName: 'Eyebrow Tinting',
+        timeDisplay: '6:25 PM',
+      },
     ]);
     const call = buildCall();
     await call.handleListAppointments({ clientId: CLIENT });
@@ -248,7 +303,9 @@ describe('reschedule_visit', () => {
     mockAppointments(ONE_SITTING);
     const call = buildCall();
     await call.handleListAppointments({ clientId: CLIENT });
-    vi.spyOn(phorest, 'getAvailability').mockResolvedValue([`${DATE}T17:00:00`]);
+    vi.spyOn(phorest, 'getAvailability').mockResolvedValue([
+      `${DATE}T17:00:00`,
+    ]);
     const result = await call.handleRescheduleVisit({
       appointmentIds: ['appt-lip', 'appt-brow'],
       date: DATE,
@@ -259,13 +316,47 @@ describe('reschedule_visit', () => {
 });
 
 describe('cancel_visit', () => {
-  it('drops the whole sitting with one confirmation', async () => {
-    const drop = vi
-      .spyOn(phorest, 'cancelAppointment')
-      .mockResolvedValue({ cancelled: true } as any);
+  async function servedCall() {
     mockAppointments(ONE_SITTING);
     const call = buildCall();
     await call.handleListAppointments({ clientId: CLIENT });
+    return call;
+  }
+
+  it('phase 1 (no confirmed) returns the server-authored read-back and cancels nothing', async () => {
+    const drop = vi.spyOn(phorest, 'cancelAppointment');
+    const call = await servedCall();
+    const result = await call.handleCancelVisit({
+      appointmentIds: ['appt-lip', 'appt-brow'],
+    });
+    expect(result.planned).toBe(true);
+    expect(result.appointments).toEqual([
+      {
+        appointmentId: 'appt-lip',
+        service: 'Lip Threading',
+        date: DATE,
+        time: '6:00 PM',
+      },
+      {
+        appointmentId: 'appt-brow',
+        service: 'Brow Threading',
+        date: DATE,
+        time: '6:00 PM',
+      },
+    ]);
+    expect(result.note).toMatch(/Nothing is cancelled yet/i);
+    expect(result.note).toMatch(/ONE yes/i);
+    expect(drop).not.toHaveBeenCalled();
+  });
+
+  it('phase 2 (confirmed true) after a matching phase 1 cancels all and reports them', async () => {
+    const drop = vi
+      .spyOn(phorest, 'cancelAppointment')
+      .mockResolvedValue({ cancelled: true } as any);
+    const call = await servedCall();
+    await call.handleCancelVisit({
+      appointmentIds: ['appt-lip', 'appt-brow'],
+    });
     const result = await call.handleCancelVisit({
       appointmentIds: ['appt-lip', 'appt-brow'],
       confirmed: true,
@@ -279,13 +370,69 @@ describe('cancel_visit', () => {
     expect(result.note).toMatch(/ask once if they need anything else/i);
   });
 
+  it('phase 2 with no prior phase 1 is refused and nothing is cancelled', async () => {
+    const drop = vi.spyOn(phorest, 'cancelAppointment');
+    const call = await servedCall();
+    const result = await call.handleCancelVisit({
+      appointmentIds: ['appt-lip', 'appt-brow'],
+      confirmed: true,
+    });
+    expect(result.error).toMatch(/not the appointments that were read back/i);
+    expect(drop).not.toHaveBeenCalled();
+  });
+
+  it('phase 2 with a different id set is refused and nothing is cancelled', async () => {
+    const drop = vi.spyOn(phorest, 'cancelAppointment');
+    mockAppointments([
+      {
+        appointmentId: 'a1',
+        serviceName: 'Lip Threading',
+        timeDisplay: '6:00 PM',
+      },
+      {
+        appointmentId: 'a2',
+        serviceName: 'Brow Threading',
+        timeDisplay: '6:10 PM',
+      },
+      {
+        appointmentId: 'a3',
+        serviceName: 'Eyebrow Tinting',
+        timeDisplay: '6:25 PM',
+      },
+    ]);
+    const call = buildCall();
+    await call.handleListAppointments({ clientId: CLIENT });
+    await call.handleCancelVisit({ appointmentIds: ['a1', 'a2'] });
+    const result = await call.handleCancelVisit({
+      appointmentIds: ['a1', 'a3'],
+      confirmed: true,
+    });
+    expect(result.error).toMatch(/not the appointments that were read back/i);
+    expect(drop).not.toHaveBeenCalled();
+  });
+
   it('refuses ids this call never surfaced', async () => {
     const call = buildCall();
     const result = await call.handleCancelVisit({
       appointmentIds: ['nope-a', 'nope-b'],
-      confirmed: true,
     });
     expect(result.error).toMatch(/pull up your appointments/i);
+  });
+
+  it('a re-listing clears the pending set, so phase 2 right after it is refused', async () => {
+    const drop = vi.spyOn(phorest, 'cancelAppointment');
+    const call = await servedCall();
+    await call.handleCancelVisit({
+      appointmentIds: ['appt-lip', 'appt-brow'],
+    });
+    // The caller re-lists (choosing again) before ever saying yes.
+    await call.handleListAppointments({ clientId: CLIENT });
+    const result = await call.handleCancelVisit({
+      appointmentIds: ['appt-lip', 'appt-brow'],
+      confirmed: true,
+    });
+    expect(result.error).toMatch(/not the appointments that were read back/i);
+    expect(drop).not.toHaveBeenCalled();
   });
 });
 
@@ -295,7 +442,10 @@ describe('book_visit', () => {
     mockSlots();
     const call = buildCall();
     const result = await call.handleBookVisit({
-      services: [{ serviceName: 'Lip Threading' }, { serviceName: 'Brow Threading' }],
+      services: [
+        { serviceName: 'Lip Threading' },
+        { serviceName: 'Brow Threading' },
+      ],
       date: DATE,
       preferredTime: '17:45',
     });
@@ -312,7 +462,10 @@ describe('book_visit', () => {
     mockSlots();
     const call = buildCall();
     const result = await call.handleBookVisit({
-      services: [{ serviceName: 'Lip Threading' }, { serviceName: 'Brow Threading' }],
+      services: [
+        { serviceName: 'Lip Threading' },
+        { serviceName: 'Brow Threading' },
+      ],
       date: DATE,
       preferredTime: '17:30', // another client sits there
     });
@@ -324,7 +477,10 @@ describe('book_visit', () => {
     mockSlots();
     const call = buildCall();
     const result = await call.handleBookVisit({
-      services: [{ serviceName: 'Lip Threading' }, { serviceName: 'Brow Threading' }],
+      services: [
+        { serviceName: 'Lip Threading' },
+        { serviceName: 'Brow Threading' },
+      ],
       date: DATE,
       startTime: '17:45',
       confirmed: true,
