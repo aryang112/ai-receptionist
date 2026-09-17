@@ -177,6 +177,25 @@ export const CallStore = {
     });
   },
 
+  // M4: the live transfer's <Dial> action callback (Twilio POSTs
+  // DialCallStatus to /twilio/dial-status) lands OUT-OF-BAND, well AFTER the
+  // 'tool' row for transfer_to_owner is already written with ok:true — the
+  // tool correctly placed the dial; only the human on the other end failed
+  // to pick up. Structurally the same problem recordRecognized solves (a
+  // fact that resolves after the row it would naturally belong to is
+  // already persisted): a separate amendment row rather than trying to
+  // mutate the tool row after the fact. Recorded for any DialCallStatus
+  // OTHER than 'completed' — see src/routes/twilio.ts's /dial-status
+  // handler, which never calls this for a completed (successful) dial.
+  recordDialStatus(callSid: string, dialCallStatus: string): void {
+    append({
+      type: 'dial_status',
+      callSid,
+      ts: Date.now(),
+      dialCallStatus,
+    });
+  },
+
   recordToolCall(callSid: string, entry: ToolCallEntry): void {
     append({
       type: 'tool',

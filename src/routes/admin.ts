@@ -245,6 +245,17 @@ type RecognizedRow = {
   ts: number;
   clientId: string;
 };
+// M4: appended by twilio.ts's /dial-status handler for any DialCallStatus
+// OTHER than 'completed' — the live-transfer <Dial> action callback lands
+// out-of-band, well AFTER the 'tool' row for transfer_to_owner is already
+// written with ok:true (the tool correctly placed the dial; only the human
+// on the other end failed to answer). See callStore.ts's recordDialStatus.
+type DialStatusRow = {
+  type: 'dial_status';
+  callSid: string;
+  ts: number;
+  dialCallStatus: string;
+};
 type AnyRow =
   | StartRow
   | ToolRow
@@ -254,6 +265,7 @@ type AnyRow =
   | RecordingRow
   | BlockedRow
   | RecognizedRow
+  | DialStatusRow
   | { type: string; callSid?: string; ts?: number; [k: string]: unknown };
 
 /** Never expose a full phone number over HTTP — last 4 digits only. */
@@ -296,6 +308,12 @@ export type CallSummary = {
   estCostUsd?: number | undefined;
   hasRecording: boolean;
   hasTranscript: boolean;
+  // M4: the reason a live transfer's <Dial> never connected a human
+  // ('no-answer' | 'busy' | 'failed' | 'canceled', verbatim from Twilio's
+  // DialCallStatus) — absent when the transfer completed or was never
+  // attempted. Lets the QA sweep tell a no-answer from a busy line instead
+  // of just seeing the transfer-failed flag. See computeFlags below.
+  transferDialStatus?: string | undefined;
   blocked: boolean;
   /** Comparison calls are deliberately excluded from normal ROI views. */
   testMode: boolean;
@@ -321,6 +339,11 @@ function computeFlags(args: {
   outcome: string;
   endReason?: string | undefined;
   tools: Array<{ name: string; ok: boolean }>;
+  // M4: presence (any value) means the live transfer's <Dial> never landed a
+  // human — the transfer_to_owner tool call itself may still read ok:true,
+  // so this is a SEPARATE signal from the tools check below, not a
+  // replacement for it. See the DialStatusRow join in buildCallSummaries.
+  transferDialStatus?: string | undefined;
 }): string[] {
   const flags: string[] = [];
   const reason = (args.endReason ?? '').toLowerCase();
@@ -329,7 +352,16 @@ function computeFlags(args: {
   if (reason.includes('silence')) flags.push('silence-hangup');
   if (reason.includes('duration cap')) flags.push('duration-cap');
   if (args.outcome === 'spam' || reason.includes('spam')) flags.push('spam');
-  if (args.tools.some((t) => t.name === 'transfer_to_owner' && !t.ok))
+  // Two independent ways a transfer can be "failed": the tool call itself
+  // erroring (e.g. Twilio REST rejected the dial outright), OR the dial
+  // going out fine but ringing out/busy/failing/being canceled before a
+  // human picked up (M4 — proven on call CAb66df4eb8f3d3c4eced28f85c457a6c2,
+  // 2026-09-17: tool ok:true, dial never connected). Keep both conditions —
+  // they cover different real failures and either can fire alone.
+  if (
+    args.tools.some((t) => t.name === 'transfer_to_owner' && !t.ok) ||
+    args.transferDialStatus
+  )
     flags.push('transfer-failed');
   return flags;
 }
@@ -432,6 +464,17 @@ function buildCallSummaries(rows: AnyRow[]): CallSummary[] {
     const lastBooking = bookings[bookings.length - 1];
     const hasRecording = group.some((r) => r.type === 'recording');
     const hasTranscript = group.some((r) => r.type === 'transcript');
+    // M4: a rung-out/busy/failed/canceled live transfer. At most one
+    // DialCallStatus callback fires per <Dial> attempt, but take the LAST
+    // row (matching the endRows/booking join pattern above) so the join
+    // stays correct even if a call somehow accumulates more than one —
+    // including a multi-segment transfer-failback call, where this row and
+    // the SECOND 'end' row both belong to the same callSid.
+    const dialStatusRows = group.filter(
+      (r): r is DialStatusRow => r.type === 'dial_status'
+    );
+    const transferDialStatus =
+      dialStatusRows[dialStatusRows.length - 1]?.dialCallStatus;
     // ANALYTICS AUDIT FIX (2026-08-22, P2): a caller-ID match that resolved
     // AFTER this call's start row was persisted (late-prefetch upgrade)
     // never lands in start.recognizedClientId — check for a 'recognized'
@@ -460,6 +503,7 @@ function buildCallSummaries(rows: AnyRow[]): CallSummary[] {
       ...(estCostUsd !== undefined ? { estCostUsd } : {}),
       hasRecording,
       hasTranscript,
+      ...(transferDialStatus ? { transferDialStatus } : {}),
       blocked: false,
       testMode,
       simulated: testMode,
@@ -467,7 +511,7 @@ function buildCallSummaries(rows: AnyRow[]): CallSummary[] {
       ...(start.backendModel ? { backendModel: start.backendModel } : {}),
       ...(start.backendEffort ? { backendEffort: start.backendEffort } : {}),
       ...(liveTelemetry ? { liveTelemetry } : {}),
-      flags: computeFlags({ outcome, endReason, tools }),
+      flags: computeFlags({ outcome, endReason, tools, transferDialStatus }),
     });
   }
 

@@ -107,8 +107,8 @@ twilioVoice.post('/voice', twilioSignature(), (req, res) => {
 
   if (isVoiceTestMode() && !allowedTestCaller(from)) {
     const reject = new VoiceResponse();
-    reject.reject({ reason: "rejected" });
-    res.type("text/xml").send(reject.toString());
+    reject.reject({ reason: 'rejected' });
+    res.type('text/xml').send(reject.toString());
     return;
   }
 
@@ -168,6 +168,11 @@ twilioVoice.post('/dial-status', twilioSignature(), (req, res) => {
     { dialCallStatus: dialCallStatus || undefined, callSid },
     '☎️ live transfer did not connect — reconnecting the caller to Erica'
   );
+
+  // M4: the transfer_to_owner tool row already recorded ok:true (it
+  // correctly placed the dial) — this is the only record that the dial
+  // itself never connected. See callStore.ts's recordDialStatus comment.
+  CallStore.recordDialStatus(callSid, dialCallStatus);
 
   // Twilio re-sends the original From/StirVerstat on action callbacks; pass
   // them through so the failback segment keeps the caller-ID context.
