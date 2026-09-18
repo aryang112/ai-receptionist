@@ -235,6 +235,122 @@ function livePriceLines(services: readonly Service[]): string {
 }
 
 /**
+ * W5 (2026-09-17): a listed service's price becomes instant-quotable the
+ * moment the talking model decides "exactly one line ... is clearly that
+ * service" — a judgement call resting entirely on its own prose reading of
+ * SERVICE PRICES. The real catalog is full of collisions where one caller
+ * word maps to two-plus lines at DIFFERENT prices ("chin" -> Chin Threading
+ * $15 vs Chin Waxing $11), which a confident wrong quote is worse than the
+ * round trip Fix 2 removed. This turns that ambiguity into DATA, computed
+ * from the same catalog every render, instead of leaving it to judgement.
+ *
+ * Method (deliberately structural, not a hand-written word list — a list
+ * rots the moment Richa edits her menu):
+ *  1. Strip generic service-METHOD words (threading/waxing/tinting/bundle
+ *     and their bare forms) and stopwords from each display name.
+ *  2. Skip any name that visibly names MULTIPLE components joined by
+ *     "and"/"+"/"&" ("Brow Thread + Lip Thread") — that is already a bundle,
+ *     already routed to delegation by the existing price-policy rule, and a
+ *     bare caller word was never going to single it out as a clear match, so
+ *     it should not poison the key it happens to contain (e.g. "lip") for
+ *     the plain services that DO answer to that bare word alone.
+ *  3. Every remaining word (>= 3 chars, crudely singularized) and every
+ *     adjacent word-pair — both space-joined ("side face") and concatenated
+ *     ("microblading", to bridge the catalog's own "Micro Blading" vs
+ *     "Microblading" spacing inconsistency) — becomes a candidate key.
+ *  4. A key is ambiguous when 2+ services share it at DIFFERENT prices.
+ *     Equal-price collisions (Lip Threading / Lip Waxing, both $8) are left
+ *     alone: the answer is the same either way, so there is nothing to ask.
+ */
+const PRICE_LIST_TYPE_WORDS = new Set([
+  'threading',
+  'thread',
+  'waxing',
+  'wax',
+  'tinting',
+  'tint',
+  'bundle',
+]);
+
+const PRICE_LIST_STOPWORDS = new Set([
+  'of',
+  'the',
+  'and',
+  'to',
+  'for',
+  'with',
+  'any',
+  'on',
+  'add',
+  'ons',
+  'from',
+  'or',
+]);
+
+/** A visible multi-component join names a bundle, not a single concept. */
+function isComboServiceName(name: string): boolean {
+  return /[+&]/.test(name) || /\band\b/i.test(name);
+}
+
+/** Crude plural strip so "Underarms"/"Underarm" and "Eyebrows"/"Eyebrow" key the same. */
+function singularize(word: string): string {
+  return word.length > 3 && word.endsWith('s') && !word.endsWith('ss')
+    ? word.slice(0, -1)
+    : word;
+}
+
+/** The bare-word/bare-pair keys one service's display name contributes. */
+function bareServiceKeys(displayName: string): Set<string> {
+  if (isComboServiceName(displayName)) return new Set();
+
+  const words = displayName
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase())
+    .filter((word) => !/^\d+$/.test(word))
+    .filter((word) => !PRICE_LIST_TYPE_WORDS.has(word))
+    .filter((word) => !PRICE_LIST_STOPWORDS.has(word))
+    .map(singularize);
+
+  const keys = new Set<string>();
+  for (const word of words) {
+    if (word.length >= 3) keys.add(word);
+  }
+  for (let i = 0; i < words.length - 1; i++) {
+    const a = words[i];
+    const b = words[i + 1];
+    keys.add(`${a} ${b}`);
+    keys.add(`${a}${b}`);
+  }
+  return keys;
+}
+
+/**
+ * Pure and exported for unit testing in isolation (see `isFarewellText` in
+ * twilioStream.ts for the same pattern). Returns the sorted list of bare
+ * words/phrases that name two or more differently-priced listed services —
+ * i.e. the terms a caller could say that do NOT resolve to a single clear
+ * line, computed fresh from whatever catalog is passed in.
+ */
+export function ambiguousPriceKeys(services: readonly Service[]): string[] {
+  const priceByKey = new Map<string, Set<number>>();
+  for (const service of services) {
+    if (service.price <= 0) continue;
+    const displayName = stripServiceCode(service.name);
+    for (const key of bareServiceKeys(displayName)) {
+      const prices = priceByKey.get(key) ?? new Set<number>();
+      prices.add(service.price);
+      priceByKey.set(key, prices);
+    }
+  }
+  const ambiguous: string[] = [];
+  for (const [key, prices] of priceByKey) {
+    if (prices.size > 1) ambiguous.push(key);
+  }
+  return ambiguous.sort();
+}
+
+/**
  * Build the small speech-facing prompt. It has no controller/config imports
  * and only receives public facts plus the service NAME + PRICE list; service
  * IDs, durations, aliases and every account fact stay backend-side.
@@ -279,10 +395,14 @@ export function buildLivePrompt(
   const delegatedPricing = priceLines
     ? 'service selection, bundled and multi-service pricing'
     : 'service selection and prices';
+  const ambiguousKeys = priceLines ? ambiguousPriceKeys(services) : [];
   const pricePolicy = priceLines
-    ? `\nPrice policy: One listed service's price is yours to answer. When the caller names a service and exactly one line in SERVICE PRICES is clearly that service, give that price straight away, with no preamble and no delegation. Delegate the price to the backend instead — exactly as you would have before this list existed — whenever what they named is not on the list, more than one line could be what they mean, they asked for a total or for two or more services, they asked about a bundle, package or deal, or you are not certain which line matches. Never add prices together yourself, never answer with the nearest-sounding line, and never invent, round, or adjust a price. The list is prices only: it says nothing about what is bookable, how long anything takes, or who performs it. Say a service name the way a person would, ignoring stray punctuation, slashes, and capitalisation in how it is written.`
+    ? `\nPrice policy: One listed service's price is yours to answer. When the caller names a service and exactly one line in SERVICE PRICES is clearly that service, give that price straight away, with no preamble and no delegation. Delegate the price to the backend instead — exactly as you would have before this list existed — whenever what they named is not on the list, more than one line could be what they mean, they asked for a total or for two or more services, they asked about a bundle, package or deal, or you are not certain which line matches. Never add prices together yourself, never answer with the nearest-sounding line, and never invent, round, or adjust a price. The list is prices only: it says nothing about what is bookable, how long anything takes, or who performs it. Say a service name the way a person would, ignoring stray punctuation, slashes, and capitalisation in how it is written. Never recite this list in full; a broad "what do you offer" question still gets a few relevant names or a delegation.`
     : '';
   const priceSection = priceLines ? `\n\nSERVICE PRICES\n${priceLines}` : '';
+  const ambiguousSection = ambiguousKeys.length
+    ? `\n\nAMBIGUOUS PRICE TERMS\nEach word or phrase below alone names two or more lines above at different prices, so on its own it is not a single clear match: ask one short question naming the real alternatives, or delegate — never pick a line for the caller.\n${ambiguousKeys.join(', ')}`
+    : '';
 
   return `You are Erica, the warm, concise English-speaking receptionist for ${name}. Speak naturally and calmly in Marin's feminine voice.
 
@@ -300,7 +420,7 @@ Ask one question at a time, then stop for the caller. Keep replies to one or two
 Answer straightforward hours, date, open/closed, and address questions directly from the public facts below; do not delegate those questions or calculate today's status again. Never guess a backend result. Do not expose caller or account details before identity is confirmed.
 
 PUBLIC SALON FACTS
-${factLines.length ? factLines.map((line) => `- ${line}`).join('\n') : '- No current public facts were supplied. Do not guess hours, dates, address, closures, or availability.'}${priceSection}`;
+${factLines.length ? factLines.map((line) => `- ${line}`).join('\n') : '- No current public facts were supplied. Do not guess hours, dates, address, closures, or availability.'}${priceSection}${ambiguousSection}`;
 }
 
 function serviceCatalog(

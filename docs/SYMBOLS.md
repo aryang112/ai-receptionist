@@ -667,11 +667,15 @@ src/voice/livePrompts.ts:179  function  cleanValue
 src/voice/livePrompts.ts:189  function  stripServiceCode
 src/voice/livePrompts.ts:194  function  fmtLivePrice
 src/voice/livePrompts.ts:225  function  livePriceLines
-src/voice/livePrompts.ts:242  export function  buildLivePrompt
-src/voice/livePrompts.ts:306  function  serviceCatalog
-src/voice/livePrompts.ts:335  function  rewriteClosure
-src/voice/livePrompts.ts:357  function  backendSections
-src/voice/livePrompts.ts:419  export function  buildBackendPrompt
+src/voice/livePrompts.ts:291  function  isComboServiceName
+src/voice/livePrompts.ts:296  function  singularize
+src/voice/livePrompts.ts:303  function  bareServiceKeys
+src/voice/livePrompts.ts:335  export function  ambiguousPriceKeys
+src/voice/livePrompts.ts:358  export function  buildLivePrompt
+src/voice/livePrompts.ts:426  function  serviceCatalog
+src/voice/livePrompts.ts:455  function  rewriteClosure
+src/voice/livePrompts.ts:477  function  backendSections
+src/voice/livePrompts.ts:539  export function  buildBackendPrompt
 
 ## src/voice/liveProtocol.ts
 

@@ -6,7 +6,11 @@ import { DateTime } from 'luxon';
 import { describe, expect, it } from 'vitest';
 import { buildInstructions } from '../realtime/twilioStream.js';
 import type { Service } from '../services/phorest.types.js';
-import { buildBackendPrompt, buildLivePrompt } from '../voice/livePrompts.js';
+import {
+  ambiguousPriceKeys,
+  buildBackendPrompt,
+  buildLivePrompt,
+} from '../voice/livePrompts.js';
 
 const salonTime = (iso: string) =>
   DateTime.fromISO(iso, { zone: 'America/New_York' });
@@ -390,6 +394,173 @@ describe('Live speech prompt', () => {
     expect(backendPrompt).toContain(
       'not call end_call mid-task or for silence alone'
     );
+  });
+
+  // ---- W5 (2026-09-17): ambiguous-prefix price terms are DATA, not judgement
+  //
+  // 3b537c7 let the talking model quote a listed price the instant "exactly
+  // one line ... is clearly that service" — a call resting entirely on its
+  // own prose reading of SERVICE PRICES. The real catalog collides: "chin"
+  // alone matches Chin Threading $15 AND Chin Waxing $11 at different
+  // prices, and threading is this salon's core service, so this is exactly
+  // how callers ask. ambiguousPriceKeys() must derive those collisions from
+  // the catalog itself (no hardcoded word list) so a confident wrong price
+  // can't happen just because the model judged a bare word "clear enough".
+  describe('ambiguousPriceKeys', () => {
+    // Real awkward catalog shapes named in the brief, plus the collisions
+    // that matter most: chin/neck/sides-of-the-face/underarm/brow family
+    // (different prices -> must flag) and lip (same price -> must not).
+    const REAL_SHAPED_CATALOG: Service[] = [
+      { id: '1', name: 'Chin Threading', price: 15, durationMin: 10 },
+      { id: '2', name: 'Chin Waxing', price: 11, durationMin: 10 },
+      { id: '3', name: 'Neck Threading', price: 15, durationMin: 10 },
+      { id: '4', name: 'Neck Hair Waxing', price: 11, durationMin: 10 },
+      {
+        id: '5',
+        name: 'Full Neck Threading( From Ear To Ear)',
+        price: 20,
+        durationMin: 15,
+      },
+      { id: '6', name: 'Sides Of The Face', price: 11, durationMin: 10 },
+      {
+        id: '7',
+        name: 'Sides of the Face Threading',
+        price: 15,
+        durationMin: 10,
+      },
+      { id: '8', name: 'Underarms Wax', price: 25, durationMin: 15 },
+      {
+        id: '9',
+        name: 'Underarm Wax for Beginners / Girls',
+        price: 23,
+        durationMin: 15,
+      },
+      { id: '10', name: 'Brow Threading', price: 15, durationMin: 15 },
+      { id: '11', name: 'Eyebrow Waxing', price: 15, durationMin: 15 },
+      { id: '12', name: 'Eyebrow Tinting', price: 25, durationMin: 15 },
+      { id: '13', name: 'Brow Lamination', price: 70, durationMin: 45 },
+      { id: '14', name: 'Lip Threading', price: 8, durationMin: 5 },
+      { id: '15', name: 'Lip Waxing', price: 8, durationMin: 5 },
+      // Combo/bundle lines: must not poison "lip" or "chin" for the plain
+      // services above — the price policy already delegates a named combo.
+      {
+        id: '16',
+        name: 'Brow Thread + Lip Thread',
+        price: 23,
+        durationMin: 25,
+      },
+      {
+        id: '17',
+        name: 'Brow Thread + Lip Thread + Chin Thread',
+        price: 34,
+        durationMin: 35,
+      },
+      { id: '18', name: 'Brow Wax and Lip Wax', price: 23, durationMin: 20 },
+      // Unrelated rows that must never contribute noise.
+      { id: '19', name: 'ADD ONS/ High Frequency', price: 25, durationMin: 5 },
+      { id: '20', name: 'Summer Beauty Bundle', price: 61.5, durationMin: 30 },
+      { id: '21', name: 'Account Deposit', price: 0, durationMin: 5 },
+    ];
+
+    it('flags chin, neck, sides of the face, underarm, and the brow/eyebrow family', () => {
+      const keys = ambiguousPriceKeys(REAL_SHAPED_CATALOG);
+      expect(keys).toContain('chin');
+      expect(keys).toContain('neck');
+      expect(keys).toContain('side');
+      expect(keys).toContain('brow');
+      expect(keys).toContain('eyebrow');
+      expect(keys).toContain('underarm');
+    });
+
+    it('does NOT flag the equal-price lip collision', () => {
+      const keys = ambiguousPriceKeys(REAL_SHAPED_CATALOG);
+      expect(keys).not.toContain('lip');
+    });
+
+    it('never lets a combo/bundle line poison a plain service word', () => {
+      // "Brow Thread + Lip Thread" ($23) and "...+ Chin Thread" ($34) both
+      // literally contain the words "lip" and "chin"; if those rows leaked
+      // into key derivation, "lip" and "chin" would gain a third/extra price
+      // and the equal-price lip case above would break.
+      const keys = ambiguousPriceKeys(REAL_SHAPED_CATALOG);
+      expect(keys).not.toContain('lip');
+      // "chin" is still (correctly) ambiguous from Chin Threading/Waxing
+      // alone — the combo row must not be REQUIRED for that, just excluded.
+      const withoutCombos = ambiguousPriceKeys(
+        REAL_SHAPED_CATALOG.filter((s) => !s.name.includes('+'))
+      );
+      expect(withoutCombos).toContain('chin');
+    });
+
+    it('bridges the catalog\'s own "Micro Blading" vs "Microblading" spacing', () => {
+      const keys = ambiguousPriceKeys([
+        {
+          id: 'a',
+          name: 'Micro Blading Touch-Up (4 to 6 weeks)',
+          price: 100,
+          durationMin: 30,
+        },
+        {
+          id: 'b',
+          name: 'Microblading Touch-Up (6 Months)',
+          price: 250,
+          durationMin: 30,
+        },
+      ]);
+      expect(keys).toContain('microblading');
+    });
+
+    it('ignores a $0 admin row and drops nothing below 3 characters', () => {
+      const keys = ambiguousPriceKeys(REAL_SHAPED_CATALOG);
+      expect(keys.every((key) => key.split(' ').every((w) => w.length >= 3)));
+      expect(keys).not.toContain('account');
+      expect(keys).not.toContain('deposit');
+    });
+
+    it('is a pure function: same input, same output, no mutation', () => {
+      const before = JSON.stringify(REAL_SHAPED_CATALOG);
+      const first = ambiguousPriceKeys(REAL_SHAPED_CATALOG);
+      const second = ambiguousPriceKeys(REAL_SHAPED_CATALOG);
+      expect(JSON.stringify(REAL_SHAPED_CATALOG)).toBe(before);
+      expect(first).toEqual(second);
+    });
+
+    it('renders sorted, deterministic output', () => {
+      const keys = ambiguousPriceKeys(REAL_SHAPED_CATALOG);
+      expect(keys).toEqual([...keys].sort());
+    });
+  });
+
+  it('puts the ambiguous-price-terms block in the rendered prompt, labelled and after SERVICE PRICES', () => {
+    const prompt = buildLivePrompt('', [
+      { id: '1', name: 'Chin Threading', price: 15, durationMin: 10 },
+      { id: '2', name: 'Chin Waxing', price: 11, durationMin: 10 },
+    ]);
+    expect(prompt).toContain('SERVICE PRICES');
+    expect(prompt).toContain('AMBIGUOUS PRICE TERMS');
+    expect(prompt.indexOf('SERVICE PRICES')).toBeLessThan(
+      prompt.indexOf('AMBIGUOUS PRICE TERMS')
+    );
+    expect(prompt).toContain('chin');
+    // Data, not a scripted example line for the model to parrot.
+    expect(prompt).not.toMatch(/"[^"]*chin[^"]*\?"/i);
+    expect(prompt).toContain(
+      'ask one short question naming the real alternatives'
+    );
+    expect(prompt).toContain('never pick a line for the caller');
+  });
+
+  it('omits the ambiguous-price-terms block entirely when nothing collides', () => {
+    const prompt = buildLivePrompt('', [
+      { id: '1', name: 'Brow Threading', price: 15, durationMin: 15 },
+      { id: '2', name: 'Lash Lift', price: 65, durationMin: 45 },
+    ]);
+    expect(prompt).not.toContain('AMBIGUOUS PRICE TERMS');
+  });
+
+  it('caps recitation of the price list, even for a broad "what do you offer" question', () => {
+    const prompt = buildLivePrompt('', CATALOG);
+    expect(prompt).toContain('Never recite this list in full');
   });
 });
 
