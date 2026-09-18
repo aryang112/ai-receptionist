@@ -231,22 +231,42 @@ describe('Live speech prompt', () => {
     expect(Math.ceil(prompt.length / 4)).toBeLessThanOrEqual(1900);
   });
 
-  // ---- Fix 3 (2026-09-17) ------------------------------------------------
-  it('prepares the caller for the ringback before a transfer without promising one', () => {
+  // ---- W6 / review finding F1 (2026-09-17) -------------------------------
+  //
+  // 3b537c7 put the ringback preparation in the TALKING model's prompt,
+  // unconditionally. That model holds no reachability fact at all —
+  // `transferPossibleNow` -> the `RICHA'S LINE` fact exists only in the
+  // backend prompt — so at 8:30 PM the caller asking for Richa heard "it may
+  // take a moment and you might hear her phone ring", then heard the backend
+  // retract it with "outside owner calling hours". That is precisely the
+  // "Never promise and retract" rule (backendRules.ts ASKED FOR RICHA) being
+  // scripted into the one model that cannot honour it.
+  it('says nothing to the talking model about what happens on the line', () => {
     const prompt = buildLivePrompt('', CATALOG);
 
-    // Production call CAb66df4eb8f3d3c4eced28f85c457a6c2: "Sure. Let me check
-    // who's available" told the caller nothing about a transfer, so ~15s of
-    // ringback arrived unexplained.
-    expect(prompt).toContain('Reaching Richa:');
-    expect(prompt).toContain('possibly hearing her phone ring');
-    // The backend still owns the decision (her calling window, a closure), so
-    // the line must not commit to a connection it may have to retract.
-    expect(prompt).toContain('without promising that she is there');
-    // Named exception, because the blanket no-narration rule would otherwise
-    // silently forbid it (tasks/lessons.md).
+    expect(prompt).not.toContain('Reaching Richa');
+    expect(prompt).not.toMatch(/phone ring/i);
+    expect(prompt).not.toMatch(/ringing/i);
+    expect(prompt).not.toMatch(/hand(ing)? that over/i);
+    // No reachability fact reaches this prompt, so no rule here may depend on
+    // one. Mentions of Richa that remain must be schedule/delegation only.
+    expect(prompt).not.toMatch(/brief wait/i);
+  });
+
+  it('keeps the no-narration rule from suppressing a backend-authored line', () => {
+    const prompt = buildLivePrompt('', CATALOG);
+
+    // PROMPT_AUDIT_2026-09-15 conflict 6: a blanket live-side ban silently
+    // suppressed a line the BACKEND had authored ("suggest another task
+    // unless the caller asks" vs the delegated closing offer). The ringback
+    // preparation now lives in the backend's handoff, and the live blanket
+    // ban names "waiting" — so it must say what it does not suppress, or
+    // finding F1's fix is voided by the same conflict class.
     expect(prompt).toContain(
-      'the rule against narrating your process covers every other case'
+      'Do not narrate your reasoning, tools, checking, waiting, or other process'
+    );
+    expect(prompt).toContain(
+      "that governs the lines you write yourself and never licenses dropping or softening what the backend's own reply tells the caller"
     );
   });
 
@@ -460,6 +480,93 @@ describe('Live speech prompt', () => {
       { id: '19', name: 'ADD ONS/ High Frequency', price: 25, durationMin: 5 },
       { id: '20', name: 'Summer Beauty Bundle', price: 61.5, durationMin: 30 },
       { id: '21', name: 'Account Deposit', price: 0, durationMin: 5 },
+      // W8 (2026-09-17): the orchestrator's leading-word-only rule (W6)
+      // removed the noise but also missed real collisions whose sharers all
+      // lead with a modifier. These rows are the live-catalog examples named
+      // in the correction, each a caller word that spans different prices:
+      // "leg" — every row leads with "Full"/"Half" or is the massage, so the
+      // leading-word rule never keyed bare "leg" against anything.
+      { id: '22', name: 'Full Legs Wax', price: 60, durationMin: 20 },
+      { id: '23', name: 'Half Legs Wax', price: 40, durationMin: 15 },
+      // Space-after-paren real name, and doubles as the "leg" collision's
+      // third price. Also proves a parenthetical mention of "facial" here
+      // contributes nothing to the (separate) facial keys below.
+      {
+        id: '24',
+        name: 'Leg Massage ( Add On to Any Facial)',
+        price: 25,
+        durationMin: 15,
+      },
+      // "touch up" — spans three tiers plus an unrelated freckle service;
+      // the leading word of each row is "Micro"/"Microblading"/"Freckles",
+      // never "Touch", so the leading-pair rule never keyed it either.
+      {
+        id: '25',
+        name: 'Micro Blading Touch-Up (4-6 wks)',
+        price: 100,
+        durationMin: 30,
+      },
+      {
+        id: '26',
+        name: 'Micro Blading Touch-Up (Yearly)',
+        price: 350,
+        durationMin: 30,
+      },
+      {
+        id: '27',
+        name: 'Microblading Touch-Up (6 Months)',
+        price: 250,
+        durationMin: 30,
+      },
+      {
+        id: '28',
+        name: 'Freckles Tattoo Touch Up',
+        price: 100,
+        durationMin: 20,
+      },
+      // "tattoo" and "freckle tattoo" — Freckle Tattoo vs the touch-up above.
+      { id: '29', name: 'Freckle Tattoo', price: 250, durationMin: 30 },
+      // "color" — real name has "ear to ear" trapped inside a parenthetical,
+      // which the position filter (not the leading-word rule) is what
+      // correctly drops; "hair color" and "color" both survive it.
+      {
+        id: '30',
+        name: 'Hair Color (Ear to Ear)',
+        price: 35,
+        durationMin: 20,
+      },
+      {
+        id: '31',
+        name: 'Hair Color (Full Grey Roots Coverage)',
+        price: 55,
+        durationMin: 30,
+      },
+      // "butt cheek" — leading word is "Butt"/"Bikini", so this one WAS
+      // caught by the leading-word rule too; kept here as a direct pin.
+      { id: '32', name: 'Butt Cheeks Wax', price: 15, durationMin: 15 },
+      {
+        id: '33',
+        name: 'Bikini with Butt Cheeks Wax',
+        price: 48,
+        durationMin: 25,
+      },
+      // "facial" — appears outside parens only on these two, at the SAME
+      // price. Must stay absent, but for the equal-price reason (§requirement
+      // 6), not because the position filter removed it — its OTHER
+      // appearances (rows 24 above and "Back Massage (Add On To Any
+      // Facial)") are all parenthetical and contribute nothing either way.
+      {
+        id: '34',
+        name: 'Stress Solution Spa Facial',
+        price: 72,
+        durationMin: 45,
+      },
+      {
+        id: '35',
+        name: 'Vita-Mineral Power Facial',
+        price: 72,
+        durationMin: 45,
+      },
     ];
 
     it('flags chin, neck, sides of the face, underarm, and the brow/eyebrow family', () => {
@@ -515,6 +622,128 @@ describe('Live speech prompt', () => {
       expect(keys.every((key) => key.split(' ').every((w) => w.length >= 3)));
       expect(keys).not.toContain('account');
       expect(keys).not.toContain('deposit');
+    });
+
+    // ---- W6 (2026-09-17): the derived set was 39 terms, ~20 of them noise --
+    //
+    // W6 narrowed keys to the LEADING word / leading word-pair only, which
+    // killed the noise but ALSO silently dropped real collisions whose
+    // sharers all lead with a modifier ("leg" out of "Full Legs Wax" / "Half
+    // Legs Wax" / "Leg Massage" — no row leads with "leg"). A missed
+    // collision costs a wrong price quoted to a paying customer; an
+    // over-flagged one costs only a needless question. W8 (2026-09-17)
+    // corrects this: keys are drawn from EVERY word/pair outside a
+    // parenthetical (no leading-only restriction) — the position filter in
+    // step 1 of the method above is what does the real noise reduction, not
+    // sentence position.
+    it('drops tokens that appear only inside a parenthetical qualifier', () => {
+      const keys = ambiguousPriceKeys(REAL_SHAPED_CATALOG);
+      // "ear"/"ear ear" occur only inside "Full Neck Threading( From Ear To
+      // Ear)" and "Hair Color (Ear to Ear)" — both parenthetical.
+      expect(keys).not.toContain('ear');
+      expect(keys).not.toContain('ear ear');
+      expect(keys).not.toContain('earear');
+    });
+
+    it('drops a bare word when every appearance outside parens is the same price', () => {
+      const keys = ambiguousPriceKeys(REAL_SHAPED_CATALOG);
+      // "facial" appears outside parens only on "Stress Solution Spa
+      // Facial" and "Vita-Mineral Power Facial" — both $72. Its other
+      // appearances ("(Add On To Any Facial)", row 24 above) are
+      // parenthetical and contribute nothing. Absent for the equal-price
+      // reason, not because of position filtering.
+      expect(keys).not.toContain('facial');
+    });
+
+    it('flags leg, touch up, face, color, tattoo, and butt cheek — real caller words the leading-word rule missed', () => {
+      const keys = ambiguousPriceKeys(REAL_SHAPED_CATALOG);
+      expect(keys).toContain('leg'); // $60 / $40 / $25
+      expect(keys).toContain('touch up'); // $100 / $350 / $250 / $100
+      expect(keys).toContain('face'); // $40 / $40 / $11 / $15 (sides-of-face)
+      expect(keys).toContain('color'); // $35 / $55
+      expect(keys).toContain('tattoo'); // $250 / $100
+      expect(keys).toContain('butt cheek'); // $15 / $48
+    });
+
+    it('invents no concatenation the catalog does not really spell', () => {
+      const keys = ambiguousPriceKeys(REAL_SHAPED_CATALOG);
+      for (const invented of [
+        'earear',
+        'sideface',
+        'buttcheek',
+        'touchup',
+        'haircolor',
+        'freckletattoo',
+      ]) {
+        expect(keys).not.toContain(invented);
+      }
+    });
+
+    it('keeps a concatenation ONLY when some listed name spells it as one word', () => {
+      // Both rows say "Micro Blading": nothing in this catalog is spelled
+      // "microblading", so the bridge must not fire.
+      const spacedOnly = ambiguousPriceKeys([
+        {
+          id: 'a',
+          name: 'Micro Blading Touch-Up (4 to 6 weeks)',
+          price: 100,
+          durationMin: 30,
+        },
+        {
+          id: 'b',
+          name: 'Micro Blading/ Shading',
+          price: 500,
+          durationMin: 60,
+        },
+      ]);
+      expect(spacedOnly).toContain('micro blading');
+      expect(spacedOnly).not.toContain('microblading');
+
+      // Add the row the real menu spells as one word and the bridge fires.
+      const withRealVariant = ambiguousPriceKeys([
+        {
+          id: 'a',
+          name: 'Micro Blading Touch-Up (4 to 6 weeks)',
+          price: 100,
+          durationMin: 30,
+        },
+        {
+          id: 'b',
+          name: 'Micro Blading/ Shading',
+          price: 500,
+          durationMin: 60,
+        },
+        {
+          id: 'c',
+          name: 'Microblading Touch-Up (6 Months)',
+          price: 250,
+          durationMin: 30,
+        },
+      ]);
+      expect(withRealVariant).toContain('microblading');
+    });
+
+    it('exempts a key only when ALL of its sharers carry the same price', () => {
+      // Review §5: the exemption must be per-key across every sharer, not
+      // pairwise — two equal rows must not hide a third at another price.
+      const threeWaySplit = ambiguousPriceKeys([
+        { id: '1', name: 'Lip Threading', price: 8, durationMin: 5 },
+        { id: '2', name: 'Lip Waxing', price: 8, durationMin: 5 },
+        { id: '3', name: 'Lip Tinting', price: 12, durationMin: 5 },
+      ]);
+      expect(threeWaySplit).toContain('lip');
+
+      const allEqual = ambiguousPriceKeys([
+        { id: '1', name: 'Lip Threading', price: 8, durationMin: 5 },
+        { id: '2', name: 'Lip Waxing', price: 8, durationMin: 5 },
+        { id: '3', name: 'Lip Tinting', price: 8, durationMin: 5 },
+      ]);
+      expect(allEqual).not.toContain('lip');
+    });
+
+    it('keeps the word-pair that distinguishes the two sides-of-face rows', () => {
+      const keys = ambiguousPriceKeys(REAL_SHAPED_CATALOG);
+      expect(keys).toContain('side face');
     });
 
     it('is a pure function: same input, same output, no mutation', () => {
@@ -593,6 +822,51 @@ describe('backend prompt extraction', () => {
     expect(backend).not.toContain('response.create');
     expect(backend).not.toContain('server_vad');
     expect(backend).not.toContain('First reply, varied naturally');
+  });
+
+  // ---- W6 / review finding F1 (2026-09-17) -------------------------------
+  it('puts the ringback preparation in the one prompt that knows whether Richa is reachable', () => {
+    const instructions = buildInstructions(
+      salonTime('2026-10-01T12:00'),
+      CATALOG
+    );
+    const backend = buildBackendPrompt(instructions, CATALOG);
+
+    const handoff = backend
+      .split('\n')
+      .find((line) => line.startsWith('CONNECTING TO RICHA:'));
+    expect(handoff).toBeDefined();
+    const rule = handoff ?? '';
+
+    // The gate that finding F1 was missing: the whole rule, ring preparation
+    // included, is reachable only while RICHA'S LINE says AVAILABLE, and the
+    // rule states the not-AVAILABLE branch itself so nothing is left to
+    // infer from a distant section.
+    expect(rule).toContain("only if RICHA'S LINE says AVAILABLE");
+    expect(rule).toContain(
+      "When RICHA'S LINE does not say AVAILABLE, none of this is written"
+    );
+
+    // The original goal: ~15s (TRANSFER_DIAL_TIMEOUT_S) of ringback must not
+    // arrive unexplained.
+    expect(rule).toContain(
+      'a short wait in which they may hear her phone ringing'
+    );
+    expect(rule).toContain('never promising she will pick up');
+
+    // The "never mention routing mechanics" tension is resolved INSIDE the
+    // rule: the wait is named as the single permitted mechanic and the ban
+    // is restated as everything else, so there are no two sentences to
+    // reconcile (PROMPT_AUDIT_2026-09-15 found seven of those).
+    expect(rule).toContain('the one call mechanic you may ever name');
+    expect(rule).toContain(
+      'nothing else about how the call is carried may be said'
+    );
+    expect(rule).not.toContain('Never mention routing mechanics');
+
+    // Describe, never script (tasks/lessons.md): no quotable example line.
+    expect(rule).toContain('in your own words, never a stock sentence');
+    expect(rule).not.toMatch(/[“”"][^“”"]*ring[^“”"]*[“”"]/i);
   });
 
   it('resolves and offers public availability before collecting phone/name, then keeps approval separate', () => {

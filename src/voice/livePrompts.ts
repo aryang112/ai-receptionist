@@ -246,21 +246,51 @@ function livePriceLines(services: readonly Service[]): string {
  *
  * Method (deliberately structural, not a hand-written word list — a list
  * rots the moment Richa edits her menu):
- *  1. Strip generic service-METHOD words (threading/waxing/tinting/bundle
- *     and their bare forms) and stopwords from each display name.
- *  2. Skip any name that visibly names MULTIPLE components joined by
+ *  1. Drop any text inside parentheses before tokenizing. Parentheticals are
+ *     qualifiers and timing notes, not what a caller says — "ear" only
+ *     occurs inside "Full Neck Threading( From Ear To Ear)" and "Hair Color
+ *     (Ear to Ear)" (note the missing space before the first name's paren;
+ *     this is parsed on the paren character, not on whitespace), and
+ *     "facial" inside "(Add On To Any Facial)" is likewise never a term a
+ *     caller asks a price for. This is what keeps noise out, and it does so
+ *     for the right reason — a word that never appears outside a
+ *     parenthetical never becomes a key at all, rather than being pruned by
+ *     an ad hoc position guess.
+ *  2. Strip generic service-METHOD words (threading/waxing/tinting/bundle
+ *     and their bare forms) and stopwords from what remains of each display
+ *     name.
+ *  3. Skip any name that visibly names MULTIPLE components joined by
  *     "and"/"+"/"&" ("Brow Thread + Lip Thread") — that is already a bundle,
  *     already routed to delegation by the existing price-policy rule, and a
  *     bare caller word was never going to single it out as a clear match, so
  *     it should not poison the key it happens to contain (e.g. "lip") for
  *     the plain services that DO answer to that bare word alone.
- *  3. Every remaining word (>= 3 chars, crudely singularized) and every
- *     adjacent word-pair — both space-joined ("side face") and concatenated
- *     ("microblading", to bridge the catalog's own "Micro Blading" vs
- *     "Microblading" spacing inconsistency) — becomes a candidate key.
- *  4. A key is ambiguous when 2+ services share it at DIFFERENT prices.
- *     Equal-price collisions (Lip Threading / Lip Waxing, both $8) are left
- *     alone: the answer is the same either way, so there is nothing to ask.
+ *  4. Every remaining word (>= 3 chars) and every adjacent word-pair becomes
+ *     a candidate key — not just the leading word/pair. (W6, 2026-09-17,
+ *     tried narrowing to leading-word-only: that killed the noise but also
+ *     silently dropped real collisions whose sharers lead with a modifier —
+ *     "leg" out of "Full Legs Wax" $60 / "Half Legs Wax" $40 / "Leg Massage"
+ *     $25 was invisible to that rule because no row *leads* with "leg". A
+ *     missed collision costs a wrong price quoted to a paying customer; an
+ *     over-flagged one costs only a needless question, so this file now
+ *     accepts the cheap failure everywhere rather than the expensive one
+ *     anywhere. The position filter in step 1, not a leading-word
+ *     restriction, is what does the real noise reduction.)
+ *  5. Each pair also contributes its CONCATENATION, but only when the joined
+ *     form is a word the catalog itself really spells — the catalog writes
+ *     the same treatment as both "Micro Blading" and "Microblading", so
+ *     `microblading` is a real spacing variant and must bridge them, while
+ *     `earear`, `sideface`, `buttcheek`, `touchup` and `haircolor` are
+ *     invented strings no caller utters and no row spells as one word.
+ *     `catalogVocabulary` is that spelling dictionary (itself built from the
+ *     same paren-stripped words, so a word trapped inside parens can never
+ *     leak in through the vocabulary side either).
+ *  6. A key is ambiguous when the services sharing it do NOT all carry the
+ *     same price — a set of prices per key, so the exemption is per-key
+ *     across ALL sharers rather than pairwise (review §5). Equal-price
+ *     collisions (Lip Threading / Lip Waxing, both $8; Stress Solution Spa
+ *     Facial / Vita-Mineral Power Facial, both $72) are left alone: the
+ *     answer is the same either way, so there is nothing to ask.
  */
 const PRICE_LIST_TYPE_WORDS = new Set([
   'threading',
@@ -299,11 +329,22 @@ function singularize(word: string): string {
     : word;
 }
 
-/** The bare-word/bare-pair keys one service's display name contributes. */
-function bareServiceKeys(displayName: string): Set<string> {
-  if (isComboServiceName(displayName)) return new Set();
+/** Text inside parentheses is a qualifier or timing note, not what a caller
+ * says — drop it before tokenizing. Matched on the paren characters
+ * themselves so missing/extra surrounding whitespace ("Threading( From Ear
+ * To Ear)", "Massage ( Add On to Any Facial)") doesn't matter. */
+function stripParentheticals(text: string): string {
+  return text.replace(/\([^)]*\)/g, ' ');
+}
 
-  const words = displayName
+/**
+ * A display name reduced to the words that actually identify the service:
+ * parenthetical qualifiers dropped, lowercased, de-punctuated, numerals
+ * dropped, generic method words and stopwords removed, crudely
+ * singularized. Order is preserved so adjacent pairs can be formed from it.
+ */
+function serviceNameWords(displayName: string): string[] {
+  return stripParentheticals(displayName)
     .split(/[^A-Za-z0-9]+/)
     .filter(Boolean)
     .map((word) => word.toLowerCase())
@@ -311,16 +352,50 @@ function bareServiceKeys(displayName: string): Set<string> {
     .filter((word) => !PRICE_LIST_TYPE_WORDS.has(word))
     .filter((word) => !PRICE_LIST_STOPWORDS.has(word))
     .map(singularize);
+}
 
+/**
+ * Every single word the priced catalog really spells. This is the dictionary
+ * that tells a real spacing variant ("Micro Blading" -> `microblading`, which
+ * the menu also spells as one word in "Microblading Touch-Up (6 Months)")
+ * apart from an invented concatenation (`earear`, `sideface`, `buttcheek`).
+ * Combo rows contribute spellings even though they contribute no keys — this
+ * is a vocabulary, not a key source.
+ */
+function catalogVocabulary(services: readonly Service[]): Set<string> {
+  const vocabulary = new Set<string>();
+  for (const service of services) {
+    if (service.price <= 0) continue;
+    for (const word of serviceNameWords(stripServiceCode(service.name))) {
+      vocabulary.add(word);
+    }
+  }
+  return vocabulary;
+}
+
+/**
+ * The bare-word/bare-pair keys one service's display name contributes:
+ * every word (outside any parenthetical), every adjacent word-pair, and
+ * each pair's concatenation only when `vocabulary` shows the catalog really
+ * spells it as one word.
+ */
+function bareServiceKeys(
+  displayName: string,
+  vocabulary: ReadonlySet<string>
+): Set<string> {
   const keys = new Set<string>();
+  if (isComboServiceName(displayName)) return keys;
+
+  const words = serviceNameWords(displayName);
   for (const word of words) {
     if (word.length >= 3) keys.add(word);
   }
   for (let i = 0; i < words.length - 1; i++) {
-    const a = words[i];
-    const b = words[i + 1];
-    keys.add(`${a} ${b}`);
-    keys.add(`${a}${b}`);
+    const first = words[i];
+    const second = words[i + 1];
+    keys.add(`${first} ${second}`);
+    const joined = `${first}${second}`;
+    if (vocabulary.has(joined)) keys.add(joined);
   }
   return keys;
 }
@@ -333,11 +408,12 @@ function bareServiceKeys(displayName: string): Set<string> {
  * line, computed fresh from whatever catalog is passed in.
  */
 export function ambiguousPriceKeys(services: readonly Service[]): string[] {
+  const vocabulary = catalogVocabulary(services);
   const priceByKey = new Map<string, Set<number>>();
   for (const service of services) {
     if (service.price <= 0) continue;
     const displayName = stripServiceCode(service.name);
-    for (const key of bareServiceKeys(displayName)) {
+    for (const key of bareServiceKeys(displayName, vocabulary)) {
       const prices = priceByKey.get(key) ?? new Set<number>();
       prices.add(service.price);
       priceByKey.set(key, prices);
@@ -412,10 +488,9 @@ Interruption policy: Yield to a clearly addressed interruption, retain its detai
 Delegation policy: The backend handles account records, ${delegatedPricing}, availability, booking changes, running-late notes, owner messages, requests to reach Richa, and call closing. Delegate before any answer that depends on those tools or account facts. Delegate the done-close before replying whenever the caller signals they are finished — “that is all”, “goodbye”, asking to hang up, or a bare acknowledgement after something you completed; the backend decides if a farewell is needed. For clear spam, delegate the spam-close. Never leave the phone connection open after merely saying goodbye. If the backend returns ending:true, emit no further speech unless its note explicitly requests the single farewell. Do not delegate a greeting, a needed brief clarification, or a public fact supplied below.${pricePolicy}
 Account lookup: Delegate requests to find a profile or use caller ID before asking for contact details. The application can use the calling number; never claim you cannot see it. Pass along any supplied name. A lookup miss is not proof of a new client.
 Richa schedule: Treat public questions about when Richa works or is available as questions about the salon's public hours. Answer only from the public facts below; do not invent or confirm a personal schedule or personal availability. For a bare question like “Is Richa available?”, ask whether the caller means availability for an appointment or wants to speak with her. If the caller has already given a clear service and date, continue the appointment flow without asking this clarification.
-Reaching Richa: when the caller has asked to speak with her and you are handing that over, use your one short line to prepare them for a brief wait and for possibly hearing her phone ring, so that ringing is expected rather than unexplained — without promising that she is there, that she will pick up, or that they will be connected. That is the only thing you may say about what is about to happen on the line; the rule against narrating your process covers every other case.
 
 Carry-over: keep every detail the caller has already given anywhere in this call — service, day, time, or name — and never ask for it again. A day they named while asking about hours or about Richa is still the day they want.
-Ask one question at a time, then stop for the caller. Keep replies to one or two short sentences. Offer at most three appointment times per reply, then wait. Do not narrate your reasoning, tools, checking, waiting, or other process. Do not start a booking, ask for details, or propose a specific task unless the caller asks for it.
+Ask one question at a time, then stop for the caller. Keep replies to one or two short sentences. Offer at most three appointment times per reply, then wait. Do not narrate your reasoning, tools, checking, waiting, or other process — that governs the lines you write yourself and never licenses dropping or softening what the backend's own reply tells the caller. Do not start a booking, ask for details, or propose a specific task unless the caller asks for it.
 
 Answer straightforward hours, date, open/closed, and address questions directly from the public facts below; do not delegate those questions or calculate today's status again. Never guess a backend result. Do not expose caller or account details before identity is confirmed.
 
