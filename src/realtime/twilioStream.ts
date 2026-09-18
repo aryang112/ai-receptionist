@@ -1525,6 +1525,41 @@ export function isFarewellText(text: string): boolean {
   return FAREWELL_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+/**
+ * W7 / review finding F2 (2026-09-17): does this fresh post-tool text hand the
+ * turn BACK to the caller instead of closing?
+ *
+ * `waitForGoodbyeToStart` proves only that a new acoustic output segment
+ * STARTED — never what it contained (and on Live the response-id half of that
+ * check is inert: `OpenAILiveSession#getCurrentResponseId()` returns `null`,
+ * `liveSession.ts:424`). So `farewellAudioConfirmed` on its own allows this:
+ * the backend calls `end_call({reason:'done'})` on "okay, thanks", the talking
+ * model answers "Was there anything else I can help with?" instead of the
+ * requested farewell, and the server hangs up on a caller it has just asked a
+ * question.
+ *
+ * A deliberately NARROW negative gate, only ever consulted over the post-tool
+ * window (never the whole call buffer — the pre-tool text almost always
+ * contains the legitimate "anything else?" that PRODUCED the close, so reading
+ * it would abort every normal hangup):
+ * - an "anything else" offer anywhere in the window (`isMoreHelpOfferText`);
+ * - a question mark at the very END of the window.
+ *
+ * Trailing-only is the deliberate choice for the question mark. A mid-string
+ * "?" is routinely part of a real close — "Sound good? See you Saturday!" —
+ * and treating that as non-closing would re-create the silent-open-line defect
+ * `54ed3d2` was written to fix. The call site additionally exempts any window
+ * containing a recognised farewell, so "Bye! Anything else?" still closes.
+ */
+export function isOpenQuestionText(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (isMoreHelpOfferText(trimmed)) return true;
+  // Allow closing punctuation/quotes after the "?" — Live output transcripts
+  // occasionally carry them.
+  return /\?["'”’)\]]*$/.test(trimmed);
+}
+
 export class TwilioRealtimeCall {
   private readonly socket: WebSocket;
   // Built on the Twilio "start" event (once streamSid is known) so the session's
@@ -2096,6 +2131,26 @@ export class TwilioRealtimeCall {
     // supplements audio/mark evidence; a miss now costs one extra farewell
     // request (finishModelEndCall), never a silently open line.
     return isFarewellText(text);
+  }
+
+  /**
+   * W7 / F2: Erica's own output text recorded STRICTLY AFTER `since` — the
+   * post-tool window for the content gate in endCallNow. Intentionally NOT
+   * filtered by lastCallerSpeechStoppedAt (liveHasCurrentFarewell's filter):
+   * the question this answers is "what did she say AFTER the end_call tool
+   * asked for a farewell", and the caller has not spoken since.
+   *
+   * Strictly-after, not at-or-after, on purpose: a fragment sharing the
+   * request's millisecond is PRE-tool text, and pre-tool text is exactly what
+   * must never enter this window (it usually holds the legitimate
+   * "anything else?" that produced the close). Fresh farewell audio cannot
+   * start in the same millisecond as the tool call, so nothing real is lost.
+   */
+  private liveClosingTextSince(since: number): string {
+    return this.liveClosingText
+      .filter((part) => part.ts > since)
+      .map((part) => part.text)
+      .join('');
   }
 
   private async handleLiveMessage(args: unknown) {
@@ -6475,10 +6530,28 @@ export class TwilioRealtimeCall {
       // W1 (2026-09-17): the caller of this close has ALREADY asked for one
       // farewell and confirmed fresh post-tool audio started and drained
       // (finishModelEndCall). Audio evidence supersedes the text heuristic
-      // there, so the transcript-wording re-check below is skipped: otherwise
-      // an unrecognised-but-real goodbye ("see you soon") aborts the close and
-      // strands the caller on an open, silent line.
+      // there, so the POSITIVE transcript-wording requirement below is
+      // dropped: otherwise an unrecognised-but-real goodbye ("see you soon")
+      // aborts the close and strands the caller on an open, silent line.
+      // W7/F2 (2026-09-17): dropping it is not the same as trusting the
+      // content. Audio evidence proves only that a new segment started, so
+      // this option now swaps the positive check for a NARROW NEGATIVE one
+      // (isOpenQuestionText over `farewellTextSince`): still close on any
+      // wording that reads as a sign-off, refuse to close on wording that
+      // handed the turn back to the caller.
       farewellAudioConfirmed?: boolean;
+      // W7/F2: start of the post-tool transcript window the negative gate
+      // reads (the moment end_call asked for the farewell). Required for the
+      // gate to mean anything — the whole-call buffer would match the
+      // "anything else?" that produced the close in the first place.
+      farewellTextSince?: number;
+      // W7/F3 (2026-09-17): apply the "never cut live audio" drain-timeout
+      // abort below to a close that is NOT flagged modelRequestedClose. The
+      // no-audio close path in finishModelEndCall must not set
+      // modelRequestedClose (that would re-arm the farewell-wording gate on a
+      // path that by definition has no farewell text, i.e. the silent-line
+      // defect), but it must still refuse to hang up over live playback.
+      abortIfStillPlaying?: boolean;
     }
   ): Promise<{ status: 'ended' | 'aborted' | 'error'; message?: string }> {
     // AUDIT FIX (2026-08-22, P2): one-shot entry guard. `transferring` is set
@@ -6526,7 +6599,7 @@ export class TwilioRealtimeCall {
     await this.waitForPlaybackToDrain(6000);
     if (
       this.voiceEngine === 'live' &&
-      opts?.modelRequestedClose &&
+      (opts?.modelRequestedClose || opts?.abortIfStillPlaying) &&
       (this.liveOutputActive || this.markQueue.length > 0)
     ) {
       this.transferring = false;
@@ -6551,6 +6624,34 @@ export class TwilioRealtimeCall {
           'Live close aborted: no current farewell transcript evidence after playback',
       });
       return { status: 'aborted' };
+    }
+    // W7/F2: the fresh post-tool segment played, but was it a CLOSE? Audio
+    // evidence cannot tell. If what she actually said handed the turn back to
+    // the caller — another "anything else?", or anything ending in a question
+    // mark — hanging up now would cut the caller off right after being asked a
+    // question. Abort instead and let the conversation continue; a recognised
+    // farewell anywhere in the window overrides (she did say goodbye).
+    if (
+      this.voiceEngine === 'live' &&
+      opts?.farewellAudioConfirmed &&
+      opts.farewellTextSince !== undefined
+    ) {
+      const freshText = this.liveClosingTextSince(opts.farewellTextSince);
+      if (!isFarewellText(freshText) && isOpenQuestionText(freshText)) {
+        this.transferring = false;
+        logger.warn(
+          { tool: 'end_call', callSid: this.callSid, reason },
+          'Hangup aborted — the post-tool turn asked the caller a question instead of saying goodbye'
+        );
+        CallStore.recordToolCall(this.callSid, {
+          name: 'end_call',
+          ok: false,
+          error:
+            'Live close aborted: post-tool turn was a question/offer, not a farewell',
+          detail: { reason },
+        });
+        return { status: 'aborted' };
+      }
     }
     // Caller interrupted the goodbye ("oh wait—") → the barge-in cleared the
     // mark queue, which is why the drain resolved. Don't hang up on them.
@@ -6724,6 +6825,10 @@ export class TwilioRealtimeCall {
     const speechEpochAtRequest = this.callerSpeechEpoch;
     const audioEpochAtRequest = this.outboundAudioEpoch;
     const responseIdAtRequest = this.session.getCurrentResponseId?.() ?? null;
+    // W7/F2: the window boundary for the post-tool content gate. Everything
+    // Erica says from here on is her answer to the farewell request in this
+    // tool's own result note.
+    const requestedAt = Date.now();
     this.modelEndCallPending = true;
     // Return to OpenAI before beginning the hangup. handleToolCompleted must be
     // able to publish this tool result and its response.create; awaiting the
@@ -6737,6 +6842,7 @@ export class TwilioRealtimeCall {
         speechEpochAtRequest,
         audioEpochAtRequest,
         responseIdAtRequest,
+        requestedAt,
       }).catch((error: unknown) => {
         if (reason === 'spam' && this.outcome === 'spam') {
           this.outcome = outcomeBeforeSpam;
@@ -6759,6 +6865,7 @@ export class TwilioRealtimeCall {
     speechEpochAtRequest,
     audioEpochAtRequest,
     responseIdAtRequest,
+    requestedAt,
   }: {
     endReason: string;
     outcomeBeforeSpam: string;
@@ -6766,6 +6873,7 @@ export class TwilioRealtimeCall {
     speechEpochAtRequest: number;
     audioEpochAtRequest: number;
     responseIdAtRequest: string | null;
+    requestedAt: number;
   }): Promise<void> {
     const goodbyeStarted = await this.waitForGoodbyeToStart(
       END_CALL_GOODBYE_START_MS,
@@ -6781,6 +6889,32 @@ export class TwilioRealtimeCall {
       const callerInterrupted = this.callerSpeechEpoch !== speechEpochAtRequest;
       if (callerInterrupted) {
         this.session.injectContext(REALTIME_CONTEXT_NOTES.interruptedEndCall);
+      } else if (spam) {
+        // W7/F4 (2026-09-17): DO NOT close a spam-reason call that produced no
+        // spoken decline. `54ed3d2` closed this branch unconditionally, which
+        // on reason:'spam' means a wordless click ~5-6s after the tool call on
+        // a caller the backend may have mis-tagged (the 2026-08-22 P1 rollback
+        // exists because a mis-tagged call that recovers is real) — and the
+        // talking model declining to voice the decline is itself evidence it
+        // can hear a customer. A silent hangup on a real caller is strictly
+        // worse than a few more seconds of open line, so this keeps the
+        // pre-54ed3d2 fail-open. Nothing is tagged (rolled back above) and no
+        // endReason is written, so the admin sweep's `spam` flag does not fire
+        // on a call whose outcome was rolled back. The line does not stay open
+        // forever: the silence watchdog checks in at SILENCE_CHECKIN_MS and
+        // then closes, and the max-call-duration cap backstops a caller who
+        // keeps talking (a recorded pitch).
+        logger.warn(
+          { tool: 'end_call', callSid: this.callSid, reason: endReason },
+          'No post-tool spam-decline audio — leaving the line open rather than a wordless hangup on a possible mis-tag'
+        );
+        CallStore.recordToolCall(this.callSid, {
+          name: 'end_call',
+          ok: false,
+          error:
+            'no post-tool spam-decline audio — line left open (possible mis-tag)',
+          detail: { reason: endReason },
+        });
       } else {
         logger.warn(
           { tool: 'end_call', callSid: this.callSid, reason: endReason },
@@ -6800,9 +6934,19 @@ export class TwilioRealtimeCall {
         // (CA625dda083def1ba27a7148b8485bd771). So close instead. endCallNow
         // still drains late-arriving audio, so a slow farewell is never cut
         // off mid-sentence, and still stands down if the caller speaks during
-        // that drain. The spam tag stays rolled back above: nothing was
-        // spoken, so nothing is tagged.
-        await this.endCallNow(endReason, { speechEpochAtRequest });
+        // that drain.
+        // W7/F3 (2026-09-17): `abortIfStillPlaying` closes the one hole in
+        // that promise. Without it this path skipped endCallNow's
+        // drain-timeout abort (it is gated on modelRequestedClose, which this
+        // path must not set — see the opt's comment), so once the 6s drain
+        // timed out the REST hangup fired even with liveOutputActive still
+        // true: audio cut mid-sentence whenever Erica is inside one continuous
+        // output segment that spans the tool call and is still running ~11s
+        // later. Never cut live audio; leave it to the watchdog.
+        await this.endCallNow(endReason, {
+          speechEpochAtRequest,
+          abortIfStillPlaying: true,
+        });
       }
       return;
     }
@@ -6820,6 +6964,11 @@ export class TwilioRealtimeCall {
       // gates this close. Re-testing the transcript WORDING here would strand
       // the caller whenever a real goodbye is phrased outside FAREWELL_PATTERNS.
       farewellAudioConfirmed: true,
+      // W7/F2: ...but fresh audio is not proof of a farewell's CONTENT. This
+      // window lets endCallNow refuse the close when what she actually said
+      // handed the turn back to the caller (a question, another
+      // "anything else?") rather than closing.
+      farewellTextSince: requestedAt,
     });
     if (result.status === 'aborted') {
       if (spam && this.outcome === 'spam') {
