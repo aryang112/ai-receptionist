@@ -60,7 +60,11 @@ async function startLiveCall(transferFailed: boolean) {
     Object.assign(call.session, {
       connect: vi.fn(async () => {}),
       configureSession: vi.fn(async () => {}),
-      injectContext: vi.fn(),
+      injectContext: vi.fn(() => Promise.resolve()),
+      injectBackendContext: vi.fn(() => Promise.resolve()),
+      // B1: requestGreeting is the thing under test on the failback path, so
+      // it has to be a spy rather than the inherited prototype no-op.
+      requestGreeting: vi.fn(() => true),
       requestResponse: vi.fn(() => true),
       getCurrentResponseId: vi.fn(() => null),
       close: vi.fn(),
@@ -100,5 +104,44 @@ describe('Live failback greeting wiring', () => {
       greetingContext?: string;
     };
     expect(context.greetingContext).toBe('new_call');
+  });
+
+  // B1 (2026-09-17). Production call CAb66df4eb8f3d3c4eced28f85c457a6c2 opened
+  // its failback segment with the FULL greeting including the recording
+  // disclosure, 24s after Richa's phone was dialed, and the caller had to ask
+  // for her a second time. The prompt context asserted above was already
+  // correct on that call — the re-greeting came from our own code:
+  // OpenAILiveSession.requestGreeting() appends "Greet the caller immediately
+  // using the required greeting and recording disclosure in your
+  // instructions", which is a later and more specific instruction than the
+  // prompt's failback rule. So the server must not send that instruction at
+  // all on a failback segment.
+  it('never sends a greeting instruction on a failback segment, and drives the opening itself', async () => {
+    const call = await startLiveCall(true);
+
+    expect(call.session.requestGreeting).not.toHaveBeenCalled();
+    expect(call.session.injectContext).toHaveBeenCalledTimes(1);
+    const directive = call.session.injectContext.mock.calls[0][0] as string;
+    expect(directive).toContain('rang out without her answering');
+    expect(directive).toContain('no greeting and no recording notice to give');
+    expect(directive).toContain('Do not greet');
+    expect(directive).toContain('do not mention the recording');
+    expect(directive).toContain('never offer to try her again');
+    // The append is inert without something to trigger a turn — the same
+    // pairing requestGreeting uses (instructions.append + commentary.append).
+    expect(call.session.requestResponse).toHaveBeenCalled();
+    // No new OpenAI field is introduced: both events are the ones already sent
+    // on every production call. Pinned as a contract so a future "nicer" API
+    // change here has to be validated against the live API first
+    // (tasks/lessons.md — one unknown field hangs the call up instantly).
+    expect(typeof OpenAILiveSession.prototype.injectContext).toBe('function');
+    expect(typeof OpenAILiveSession.prototype.requestResponse).toBe('function');
+  });
+
+  it('still uses the ordinary greeting path on a first segment', async () => {
+    const call = await startLiveCall(false);
+
+    expect(call.session.requestGreeting).toHaveBeenCalledTimes(1);
+    expect(call.session.injectContext).not.toHaveBeenCalled();
   });
 });

@@ -130,6 +130,11 @@ const MIN_OFFERED_SLOTS = 3;
 // leg is dead even though no 'stop' event arrived.
 const MEDIA_INACTIVITY_MS = 10_000;
 
+// B1: how long the server-driven transfer-failback opening gets to produce
+// audio before one repeat nudge. Matches OpenAILiveSession's own greeting
+// retry window (`greetingRetryMs`, 2.5s), which this path replaces.
+const FAILBACK_OPENING_RETRY_MS = 2_500;
+
 // The `host` stream parameter ends up inside a TwiML attribute we build by
 // templating (the <Dial action="…"> URL), and a Host header is ultimately
 // caller-influenced — so accept only what a real host can look like
@@ -1631,6 +1636,8 @@ export class TwilioRealtimeCall {
   // continuation one-shot even if the model emits end_call twice.
   private modelEndCallPending = false;
   private modelEndCallTimer: NodeJS.Timeout | undefined = undefined;
+  // B1: one-shot repeat nudge for the server-driven failback opening.
+  private failbackOpeningRetryTimer: NodeJS.Timeout | undefined = undefined;
   // --- G2: silence watchdog ---------------------------------------------
   // ms timestamp of the last real activity (caller speech, or Erica actively
   // speaking — markQueue non-empty). Ticks refresh this while Erica is
@@ -2329,6 +2336,66 @@ export class TwilioRealtimeCall {
   }
 
   /**
+   * B1 (2026-09-17) — a failed transfer must not restart the call.
+   *
+   * Production call CAb66df4eb8f3d3c4eced28f85c457a6c2: Richa's phone rang
+   * out, the caller was reconnected, and Erica opened the second segment with
+   * the FULL greeting — salon name, recording disclosure, "how can I help" —
+   * then gave the correct apology only after the caller had repeated himself.
+   *
+   * The two prompt-level failback rules (`livePrompts.ts` greetingRule and
+   * `greetingSection` in buildInstructions) were not ignored by the model:
+   * they were OVERRIDDEN BY US. On the Live engine
+   * `OpenAILiveSession.requestGreeting()` appends a server instruction reading
+   * "Greet the caller immediately using the required greeting and recording
+   * disclosure in your instructions", then nudges her to speak "the required
+   * greeting". An appended instruction is the freshest and most specific thing
+   * the talking model holds, so on a failback segment the server was ordering
+   * the re-greeting itself. She obeyed the last instruction she was given.
+   *
+   * So the server drives this opening instead of asking the prompt nicely: the
+   * ONLY instruction appended on a failback segment is the failback opening,
+   * and no "greet / disclose recording" instruction is ever sent.
+   *
+   * Field safety (tasks/lessons.md — one unknown OpenAI field fails the whole
+   * session and hangs the call up instantly): this introduces NO new field.
+   * `injectContext` sends `session.instructions.append` and `requestResponse`
+   * sends `session.commentary.append` — the exact two event types
+   * `requestGreeting`/`sendGreetingCommentary` already send on every
+   * production call, with the same keys. Only the content string differs.
+   *
+   * Described, never scripted: a quotable example sentence in a prompt WILL be
+   * parroted in the wrong context (tasks/lessons.md).
+   */
+  private driveLiveFailbackOpening(session: OpenAILiveSession) {
+    logger.info(
+      { streamSid: this.streamSid, callSid: this.callSid },
+      '↩️ failback opening driven by the server (no greeting instruction sent)'
+    );
+    void session.injectContext(
+      'This call is already in progress. The caller asked for Richa, her phone was dialed on this same call, and it rang out without her answering — they have just been brought back to you. There is no greeting and no recording notice to give here; both happened before her phone rang. Open now with one short, warm, apologetic sentence that she did not pick up and offer either to help yourself or to take a message for her, then stop and listen. Do not greet, do not name the salon, do not introduce yourself, do not mention the recording, do not ask who is calling, and never offer to try her again.'
+    );
+    session.requestResponse();
+    // `requestGreeting()` also arms a one-shot retry nudge and a fatal
+    // no-speech deadline; not calling it gives those up for this segment, so
+    // the retry is re-armed here. The fatal deadline is deliberately NOT
+    // re-armed: it closes the session, which on THIS segment would failover by
+    // dialing the owner — the very phone that just rang out. Continued silence
+    // is left to the silence watchdog armed moments later, which is the right
+    // instrument for it.
+    this.failbackOpeningRetryTimer = setTimeout(() => {
+      this.failbackOpeningRetryTimer = undefined;
+      if (this.closed || this.firstAudioChunkAt !== null) return;
+      logger.warn(
+        { streamSid: this.streamSid, callSid: this.callSid },
+        '↩️ failback opening produced no speech — nudging once'
+      );
+      session.requestResponse();
+    }, FAILBACK_OPENING_RETRY_MS);
+    this.failbackOpeningRetryTimer.unref?.();
+  }
+
+  /**
    * S2: record a spam outcome toward the repeat-offender blocklist — but
    * ABSOLUTELY never for a number that resolves to a real Phorest client
    * (a real client must never be blocklisted, even if a call was mis-tagged
@@ -2592,7 +2659,17 @@ export class TwilioRealtimeCall {
           // No response can exist yet at this point in the handshake, so this
           // bare response.create is safe as-is (requestGreeting is intentionally
           // unguarded — see openaiSession.ts).
-          this.session.requestGreeting();
+          //
+          // B1 (2026-09-17): EXCEPT on a transfer-failback segment, where
+          // requestGreeting() is itself the defect — see driveLiveFailbackOpening.
+          if (
+            this.transferFailback &&
+            this.session instanceof OpenAILiveSession
+          ) {
+            this.driveLiveFailbackOpening(this.session);
+          } else {
+            this.session.requestGreeting();
+          }
           // A2 (2026-08-22 audit): flush buffered pre-greeting media AFTER
           // requestGreeting(), not before. server_vad defaults create_response:
           // true, so flushing first let buffered caller audio ("hello?") race
@@ -7133,6 +7210,11 @@ export class TwilioRealtimeCall {
     if (this.modelEndCallTimer) {
       clearTimeout(this.modelEndCallTimer);
       this.modelEndCallTimer = undefined;
+    }
+    // B1: drop the failback opening's repeat nudge.
+    if (this.failbackOpeningRetryTimer) {
+      clearTimeout(this.failbackOpeningRetryTimer);
+      this.failbackOpeningRetryTimer = undefined;
     }
     // G2: stop the silence watchdog — nothing left to check in / hang up on.
     if (this.silenceWatchdogTimer) {

@@ -82,7 +82,16 @@ describe('Live speech prompt', () => {
     );
     const prompt = buildLivePrompt(instructions, CATALOG);
 
-    expect(Math.ceil(prompt.length / 4)).toBeLessThanOrEqual(900);
+    // Fix 2 (2026-09-17) raised this deliberately: the prompt now carries the
+    // name+price list so a single-service price question costs no backend
+    // round trip. The conversation rules themselves must still stay small —
+    // the price list is the ONLY part allowed to grow with the catalog, and
+    // `stays small even on the full production catalog` below bounds the whole
+    // thing at realistic (63-service) scale.
+    const [conversationRules] = prompt.split('\nSERVICE PRICES\n');
+    expect(
+      Math.ceil((conversationRules ?? prompt).length / 4)
+    ).toBeLessThanOrEqual(1300);
     expect(prompt).toContain('8902 Harford Road, Parkville, MD 21234');
     expect(prompt).toContain('Weekly hours:');
     expect(prompt).toContain('Today and right now:');
@@ -96,6 +105,160 @@ describe('Live speech prompt', () => {
     expect(prompt).toContain('recorded');
     expect(prompt).not.toContain('svc_brow');
     expect(prompt).not.toContain('CURRENT STATUS (precomputed server-side');
+  });
+
+  // ---- Fix 2 (2026-09-17): prices answered instantly, accurately -------
+  //
+  // Production call CA2e23da275cdde534bc4f3d6b93f65426 spent THREE consecutive
+  // backend round trips on three one-service price questions ("what's brow
+  // threading" -> "Checking." -> "It's 15 dollars"), because the talking
+  // model's prompt told it to delegate every price while hours and the address
+  // were answered instantly from its own PUBLIC SALON FACTS.
+  //
+  // The accuracy guarantee is the part that must not regress, so these tests
+  // pin BOTH halves: the instant quote, and every case that must still
+  // delegate. Register item 05 (bundle resolution differs between the price
+  // and availability paths) is open and out of scope — hence the hard line
+  // that a two-service total is a delegation, never an instant quote.
+  it('puts a name+price list in the talking prompt and authorises an instant single-service quote', () => {
+    const instructions = buildInstructions(
+      salonTime('2026-10-01T12:00'),
+      CATALOG
+    );
+    const prompt = buildLivePrompt(instructions, CATALOG);
+
+    expect(prompt).toContain('SERVICE PRICES');
+    expect(prompt).toContain('- Brow Threading $15');
+    expect(prompt).toContain('- Lash Lift $65');
+    expect(prompt).toContain('Price policy:');
+    expect(prompt).toContain('give that price straight away');
+    expect(prompt).toContain('with no preamble and no delegation');
+    // The delegation policy must no longer claim the backend owns prices
+    // outright — a flat contradiction is what produced the narration.
+    expect(prompt).toContain('bundled and multi-service pricing');
+    expect(prompt).not.toContain('service selection and prices');
+  });
+
+  it('never exposes service IDs or durations to the talking model', () => {
+    const prompt = buildLivePrompt('', CATALOG);
+
+    for (const service of CATALOG) expect(prompt).not.toContain(service.id);
+    expect(prompt).not.toContain('durationMin');
+    expect(prompt).not.toContain('min)');
+    expect(prompt).not.toContain('15 min');
+    expect(prompt).not.toMatch(/\d+\s?min\b/);
+    // Duration is backend-only, and the list must say so rather than let the
+    // model infer bookability from a price row.
+    expect(prompt).toContain('how long anything takes');
+  });
+
+  it('keeps every not-certain price on the delegation path', () => {
+    const prompt = buildLivePrompt('', CATALOG);
+
+    expect(prompt).toContain('exactly one line in SERVICE PRICES');
+    expect(prompt).toContain('is not on the list');
+    expect(prompt).toContain('more than one line could be what they mean');
+    expect(prompt).toContain('a total or for two or more services');
+    expect(prompt).toContain('a bundle, package or deal');
+    expect(prompt).toContain('you are not certain which line matches');
+    expect(prompt).toContain('Never add prices together yourself');
+    expect(prompt).toContain('never answer with the nearest-sounding line');
+    expect(prompt).toContain('never invent, round, or adjust a price');
+  });
+
+  it('strips Phorest ordinals, formats fractional prices, and drops $0 admin rows', () => {
+    const prompt = buildLivePrompt('', [
+      { id: 'a', name: '3) Chin Threading ', price: 15, durationMin: 10 },
+      { id: 'b', name: 'Summer Beauty Bundle', price: 61.5, durationMin: 15 },
+      // Real production rows. "Account Deposit is free" is a WRONG answer, not
+      // a cheap one, so a $0 row must never be quotable; it falls through to
+      // get_prices like any unlisted service.
+      { id: 'c', name: 'Account Deposit', price: 0, durationMin: 5 },
+      { id: 'd', name: 'Complimentary', price: 0, durationMin: 30 },
+    ]);
+
+    expect(prompt).toContain('- Chin Threading $15');
+    expect(prompt).not.toContain('3) Chin');
+    expect(prompt).toContain('- Summer Beauty Bundle $61.50');
+    expect(prompt).not.toContain('Account Deposit');
+    expect(prompt).not.toContain('Complimentary');
+    expect(prompt).not.toContain('$0');
+  });
+
+  it('degrades to today exact tool-first behaviour when no catalog arrived', () => {
+    const instructions = buildInstructions(
+      salonTime('2026-10-01T12:00'),
+      CATALOG
+    );
+    // The 250ms catalog race in twilioStream.ts resolves to null on a cold
+    // cache or a failed fetch, and the call site then passes [].
+    const cold = buildLivePrompt(instructions, []);
+    // Same outcome when the catalog arrives but holds nothing quotable.
+    const zeroPriced = buildLivePrompt(instructions, [
+      { id: 'c', name: 'Account Deposit', price: 0, durationMin: 5 },
+    ]);
+
+    for (const prompt of [cold, zeroPriced]) {
+      expect(prompt).not.toContain('SERVICE PRICES');
+      expect(prompt).not.toContain('Price policy:');
+      expect(prompt).toContain('service selection and prices');
+      expect(prompt).not.toContain('straight away');
+    }
+  });
+
+  it('stays small even on the full production catalog', () => {
+    // 63 services is the real count `scripts/render-live-prompts.ts` reports
+    // against live Phorest (the brief's "35" was stale). Names here are sized
+    // like the real ones so the bound means something.
+    const big: Service[] = Array.from({ length: 63 }, (_, i) => ({
+      id: `svc_${i}`,
+      // ~22 chars after the ordinal strip, the real catalog's average.
+      name: `${i}) Bikini Butt Wax ${i}`,
+      price: 10 + i,
+      durationMin: 15,
+    }));
+    const instructions = buildInstructions(salonTime('2026-10-01T12:00'), big);
+    const prompt = buildLivePrompt(instructions, big);
+
+    expect(prompt).not.toContain('svc_0');
+    // ~1640 tokens against the 908-token pre-Fix-2 baseline. The headroom is
+    // for catalog growth, not for prose: if this trips, the catalog grew and
+    // that is worth a look, not a bump.
+    expect(Math.ceil(prompt.length / 4)).toBeLessThanOrEqual(1900);
+  });
+
+  // ---- Fix 3 (2026-09-17) ------------------------------------------------
+  it('prepares the caller for the ringback before a transfer without promising one', () => {
+    const prompt = buildLivePrompt('', CATALOG);
+
+    // Production call CAb66df4eb8f3d3c4eced28f85c457a6c2: "Sure. Let me check
+    // who's available" told the caller nothing about a transfer, so ~15s of
+    // ringback arrived unexplained.
+    expect(prompt).toContain('Reaching Richa:');
+    expect(prompt).toContain('possibly hearing her phone ring');
+    // The backend still owns the decision (her calling window, a closure), so
+    // the line must not commit to a connection it may have to retract.
+    expect(prompt).toContain('without promising that she is there');
+    // Named exception, because the blanket no-narration rule would otherwise
+    // silently forbid it (tasks/lessons.md).
+    expect(prompt).toContain(
+      'the rule against narrating your process covers every other case'
+    );
+  });
+
+  it('tells the failback segment that a greet instruction has already been satisfied', () => {
+    const failback = buildLivePrompt('', CATALOG, {
+      greetingContext: 'transfer_failback',
+    });
+
+    // Belt for the server-side mechanism in twilioStream.ts: the Live session
+    // appends "Greet the caller immediately using the required greeting and
+    // recording disclosure" on an ordinary call, and any future caller of
+    // requestGreeting() on this path must not be able to restart the call.
+    expect(failback).toContain(
+      'an instruction to greet the caller or to disclose the recording is satisfied by that apologetic opening'
+    );
+    expect(failback).toContain('This segment has no greeting');
   });
 
   it('supports continuation and transfer-failback greetings without repeating the recording notice', () => {

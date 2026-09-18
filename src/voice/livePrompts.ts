@@ -182,16 +182,68 @@ function cleanValue(value: string | undefined): string | undefined {
 }
 
 /**
- * Build the small speech-facing prompt. It has no controller/config imports and
- * only receives public facts; the service list is accepted for a shared call
- * signature but deliberately belongs in the backend prompt.
+ * Raw Phorest names carry menu ordinals ("3) Chin Threading "). Strip them
+ * before any model reads them; `livePriceLines` and `serviceCatalog` share
+ * this single copy.
+ */
+function stripServiceCode(name: string): string {
+  return name.replace(/^\s*\d+[a-z]?\)\s*/i, '').trim();
+}
+
+/** Whole dollars render bare ($15), fractional with exactly two places ($61.50). */
+function fmtLivePrice(price: number): string {
+  return Number.isInteger(price) ? `$${price}` : `$${price.toFixed(2)}`;
+}
+
+/**
+ * Fix 2 (2026-09-17): the TALKING model's own price list, so a plain
+ * "how much is brow threading" is answered instantly instead of costing a
+ * backend round trip the caller hears as dead air. Production call
+ * CA2e23da275cdde534bc4f3d6b93f65426 spent three consecutive round trips on
+ * three one-service price questions, each papered over with narration.
+ *
+ * Name and price ONLY, and deliberately neither of the two existing
+ * formatters:
+ *  - `serviceCatalog()` below is backend-shaped — service IDs and aliases. An
+ *    ID must never reach the model that speaks aloud.
+ *  - `buildPriceLines()` (twilioStream.ts:507) is the right SHAPE but emits
+ *    durations, which are backend-only for this model, and importing it would
+ *    pull the controller into this module — the exact import cycle this file's
+ *    doc comments exist to prevent (twilioStream.ts already imports this
+ *    file). Its two one-line helpers are reproduced above instead; the
+ *    ordinal strip was ALREADY duplicated inside `serviceCatalog()`, so
+ *    sharing `stripServiceCode` nets one FEWER copy in this file, not one more.
+ *
+ * $0 rows are dropped. The live catalog carries admin entries — "Account
+ * Deposit", "Complimentary", and the two "Consultation - Required Before
+ * Booking" rows — and "Account Deposit is free" is a wrong answer, not a cheap
+ * one. A dropped row is simply not on the list, so the prompt rule routes it
+ * to `get_prices` like any other unlisted service. (`get_prices`' own filter
+ * is `price > 0 || durationMin > 0`, which keeps $0 rows; that is fine for a
+ * tool result the backend reads, not for a list the voice quotes from.)
+ */
+function livePriceLines(services: readonly Service[]): string {
+  return services
+    .filter((service) => service.price > 0)
+    .map((service) => ({
+      name: stripServiceCode(service.name),
+      price: service.price,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((service) => `- ${service.name} ${fmtLivePrice(service.price)}`)
+    .join('\n');
+}
+
+/**
+ * Build the small speech-facing prompt. It has no controller/config imports
+ * and only receives public facts plus the service NAME + PRICE list; service
+ * IDs, durations, aliases and every account fact stay backend-side.
  */
 export function buildLivePrompt(
   productionInstructions: string,
   services: readonly Service[],
   context: LivePromptContext = {}
 ): string {
-  void services;
   const facts = {
     ...productionFacts(productionInstructions),
     ...context.publicFacts,
@@ -216,17 +268,31 @@ export function buildLivePrompt(
     greeting === 'new_call'
       ? 'For a new call, greet promptly and warmly, identify Erica and the salon, clearly disclose that the line is recorded, and ask how you can help. Say this naturally; do not recite a sample line.'
       : greeting === 'transfer_failback'
-        ? 'This is a continuation after Richa did not answer. Apologize briefly, offer to help or take a message, and do not repeat the greeting or recording disclosure. Her phone already rang out on this call, so never offer or promise to connect them again; a request to reach her can only become a message.'
+        ? 'This is a continuation after Richa did not answer. Apologize briefly, offer to help or take a message, and do not repeat the greeting or recording disclosure. Her phone already rang out on this call, so never offer or promise to connect them again; a request to reach her can only become a message. This segment has no greeting and no recording notice to give — both were already given before her phone rang — so an instruction to greet the caller or to disclose the recording is satisfied by that apologetic opening and nothing else.'
         : 'This is an ongoing call. Do not greet again or restart the conversation.';
+
+  // Fix 2: the price rule and the price list are rendered ONLY when a priced
+  // catalog actually arrived. On the cold-cache/fetch-failure path (the 250ms
+  // race cap in twilioStream.ts) the prompt keeps today's tool-first
+  // behaviour verbatim — no list, and nothing that invites a guess.
+  const priceLines = livePriceLines(services);
+  const delegatedPricing = priceLines
+    ? 'service selection, bundled and multi-service pricing'
+    : 'service selection and prices';
+  const pricePolicy = priceLines
+    ? `\nPrice policy: One listed service's price is yours to answer. When the caller names a service and exactly one line in SERVICE PRICES is clearly that service, give that price straight away, with no preamble and no delegation. Delegate the price to the backend instead — exactly as you would have before this list existed — whenever what they named is not on the list, more than one line could be what they mean, they asked for a total or for two or more services, they asked about a bundle, package or deal, or you are not certain which line matches. Never add prices together yourself, never answer with the nearest-sounding line, and never invent, round, or adjust a price. The list is prices only: it says nothing about what is bookable, how long anything takes, or who performs it. Say a service name the way a person would, ignoring stray punctuation, slashes, and capitalisation in how it is written.`
+    : '';
+  const priceSection = priceLines ? `\n\nSERVICE PRICES\n${priceLines}` : '';
 
   return `You are Erica, the warm, concise English-speaking receptionist for ${name}. Speak naturally and calmly in Marin's feminine voice.
 
 ${greetingRule}
 Backchannel policy: Use sparse listening acknowledgments only when they help; avoid habitual fillers, repeated names, praise, or echoing the request.
 Interruption policy: Yield to a clearly addressed interruption, retain its details and corrections, and keep listening through short pauses. Do not treat coughs, music, or nearby conversation as a request.
-Delegation policy: The backend handles account records, service selection and prices, availability, booking changes, running-late notes, owner messages, requests to reach Richa, and call closing. Delegate before any answer that depends on those tools or account facts. Delegate the done-close before replying whenever the caller signals they are finished — “that is all”, “goodbye”, asking to hang up, or a bare acknowledgement after something you completed; the backend decides if a farewell is needed. For clear spam, delegate the spam-close. Never leave the phone connection open after merely saying goodbye. If the backend returns ending:true, emit no further speech unless its note explicitly requests the single farewell. Do not delegate a greeting, a needed brief clarification, or a public fact supplied below.
+Delegation policy: The backend handles account records, ${delegatedPricing}, availability, booking changes, running-late notes, owner messages, requests to reach Richa, and call closing. Delegate before any answer that depends on those tools or account facts. Delegate the done-close before replying whenever the caller signals they are finished — “that is all”, “goodbye”, asking to hang up, or a bare acknowledgement after something you completed; the backend decides if a farewell is needed. For clear spam, delegate the spam-close. Never leave the phone connection open after merely saying goodbye. If the backend returns ending:true, emit no further speech unless its note explicitly requests the single farewell. Do not delegate a greeting, a needed brief clarification, or a public fact supplied below.${pricePolicy}
 Account lookup: Delegate requests to find a profile or use caller ID before asking for contact details. The application can use the calling number; never claim you cannot see it. Pass along any supplied name. A lookup miss is not proof of a new client.
 Richa schedule: Treat public questions about when Richa works or is available as questions about the salon's public hours. Answer only from the public facts below; do not invent or confirm a personal schedule or personal availability. For a bare question like “Is Richa available?”, ask whether the caller means availability for an appointment or wants to speak with her. If the caller has already given a clear service and date, continue the appointment flow without asking this clarification.
+Reaching Richa: when the caller has asked to speak with her and you are handing that over, use your one short line to prepare them for a brief wait and for possibly hearing her phone ring, so that ringing is expected rather than unexplained — without promising that she is there, that she will pick up, or that they will be connected. That is the only thing you may say about what is about to happen on the line; the rule against narrating your process covers every other case.
 
 Carry-over: keep every detail the caller has already given anywhere in this call — service, day, time, or name — and never ask for it again. A day they named while asking about hours or about Richa is still the day they want.
 Ask one question at a time, then stop for the caller. Keep replies to one or two short sentences. Offer at most three appointment times per reply, then wait. Do not narrate your reasoning, tools, checking, waiting, or other process. Do not start a booking, ask for details, or propose a specific task unless the caller asks for it.
@@ -234,7 +300,7 @@ Ask one question at a time, then stop for the caller. Keep replies to one or two
 Answer straightforward hours, date, open/closed, and address questions directly from the public facts below; do not delegate those questions or calculate today's status again. Never guess a backend result. Do not expose caller or account details before identity is confirmed.
 
 PUBLIC SALON FACTS
-${factLines.length ? factLines.map((line) => `- ${line}`).join('\n') : '- No current public facts were supplied. Do not guess hours, dates, address, closures, or availability.'}`;
+${factLines.length ? factLines.map((line) => `- ${line}`).join('\n') : '- No current public facts were supplied. Do not guess hours, dates, address, closures, or availability.'}${priceSection}`;
 }
 
 function serviceCatalog(
@@ -246,7 +312,7 @@ function serviceCatalog(
   );
   const lines = services.map((raw) => {
     const service = raw as ServiceWithAliases;
-    const displayName = service.name.replace(/^\s*\d+[a-z]?\)\s*/i, '').trim();
+    const displayName = stripServiceCode(service.name);
     const aliasList = service.aliases ?? byId.get(service.id) ?? [];
     const aliasText = aliasList.length
       ? `; aliases: ${aliasList.join(', ')}`
