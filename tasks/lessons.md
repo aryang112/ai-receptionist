@@ -707,3 +707,62 @@ A plain `const xMock = vi.fn()` beside `vi.mock(...)` was hoist-order-flaky ("Ca
 ## 2026-09-16 — a handoff doc must name the commit it describes
 The SMS handoff's "NOT deployed" prose went stale within a day of being written.
 **Rule:** a handoff names the commit (or a `git branch --contains` target) it describes, so a reader verifies state instead of trusting prose.
+
+## 2026-09-17 — The Live engine has TWO session classes; `openaiSession.ts` is the dead one
+`OpenAILiveSession` lives in **`src/voice/liveSession.ts`**. `src/realtime/openaiSession.ts` is the
+RETIRED Realtime session and is inert when `VOICE_ENGINE=live`. Reading the wrong one produced a
+confidently wrong diagnosis in this session's call review ("the model ignored the failback prompt"),
+which was only caught because a worker checked the file instead of trusting the brief.
+**Rule:** before reasoning about any session/response event on Live, confirm which class is
+actually constructed at `twilioStream.ts`'s `this.session instanceof OpenAILiveSession` branch.
+
+## 2026-09-17 — "The model ignored the prompt" is usually us telling it otherwise at runtime
+`OpenAILiveSession.requestGreeting()` appends `session.instructions.append` with
+*"Greet the caller immediately using the required greeting and recording disclosure in your
+instructions"*, then nudges with `session.commentary.append`. **An appended instruction is the
+freshest and most specific thing the talking model holds, so it outranks every rule in the base
+prompt.** On a transfer-failback segment we were still sending it, so Erica re-greeted a caller
+mid-call — including the recording disclosure, verbatim, because we named it — while TWO correct
+"do not re-greet" rules sat in her prompt being overridden (call
+`CAb66df4eb8f3d3c4eced28f85c457a6c2`, fixed in `3b537c7`).
+**Rule:** before adding prompt wording to correct a behaviour, grep for a runtime
+`instructions.append` / `commentary.append` that contradicts it. More prose cannot outrank an
+appended instruction. Prefer a server-driven mechanism where the server already knows the truth.
+
+## 2026-09-17 — A guard that proves speech happened must be tested against what we actually SAY
+`liveHasCurrentFarewell`'s pattern contained a bare `take care`, so **"I'll take care of that"**
+counted as a goodbye. The server concluded the farewell had been spoken, told the model to emit no
+further speech, and hung up on a caller who never heard one — the guard that exists to PREVENT a
+farewell-less hangup is what caused one (call `CA2e23da275cdde534bc4f3d6b93f65426`, fixed in
+`54ed3d2`). "I'll take care of that" is a phrase Erica reaches for constantly.
+**Rule:** for any predicate over Erica's own output, write the test cases from her real transcripts
+first — the phrases she actually emits — not from the phrases you are trying to catch. Two more
+stranding holes sat on the same path and were only found by tracing it end to end.
+
+## 2026-09-17 — When deriving a safety list from data, optimise the EXPENSIVE direction
+`ambiguousPriceKeys()` flags caller words that name several services at different prices so Erica
+asks instead of guessing. The orchestrator narrowed it to a service name's **leading word**, which
+removed the noise but silently dropped `leg` (Full Legs $60 / Half Legs $40 / Leg Massage $25),
+`touch up` ($100/$250/$350), `face`, `color`, `tattoo`, `butt cheek` — because those names lead with
+a MODIFIER, not the body part. An over-flag costs one needless question; a miss costs a **wrong
+price quoted to a paying customer**. The rule optimised the cheap direction (fixed in `3192e65` by
+ignoring parentheticals and gating concatenations on real catalog vocabulary).
+**Rule:** name the cost of each failure direction before choosing the filter, and make the
+asymmetry explicit in the code comment.
+
+## 2026-09-17 — A live-prompt blanket ban can silently void a backend-authored reply
+The backend authors caller-ready text and the talking model re-speaks it. The live prompt's
+"do not narrate your reasoning, tools, checking, **waiting**, or other process" therefore had the
+power to suppress the backend's new transfer handoff line and void the fix, with nothing failing.
+Narrowed to govern only the lines Erica writes herself.
+**Rule:** when moving wording into the backend prompt, check every live-prompt prohibition that
+names the same concept — this is PROMPT_AUDIT conflict class 6 and it fails silently.
+
+## 2026-09-17 — Back up the EDITED file, not the HEAD file, before a checkout-based RED proof
+A worker proving its test went red on old code ran `git checkout -- <file>`, having snapshotted the
+HEAD copy rather than its own edited copy, and lost the work — then re-applied it from its own
+transcript. It disclosed this and asked for the diff to be read rather than trusted, which was the
+right call and the reason it was caught. **Never `git stash`** in this repo either: other streams
+have uncommitted work in the same tree.
+**Rule:** `cp` the EDITED file aside, `git checkout --` it, run, restore from the copy, then
+`git diff --stat` to prove every other stream's work survived.

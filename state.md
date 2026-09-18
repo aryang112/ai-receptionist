@@ -2,13 +2,27 @@
 
 ## CURRENT (read this; ≤ 1 page)
 
-**Deployed:** commit `9796bd0` → Railway deployment `42e617d5-b631-4ff3-ad39-2c4533b0c756`
-(SUCCESS, 2026-09-16 22:40 ET, clean `git archive` snapshot). `GET /admin/voice-test`
-shows: engine `live`, backend `gpt-5.6-terra`, writes `real`, ownerTransfers `real`
-(temporary), notifications `simulate`, activeCalls 0. Forwarding is OFF — no real
-customer calls reach this line yet. `PHOREST_WRITE_MODE=real` — test bookings hit
-the real calendar. This build includes `12c26d5` (SMS text agent → gpt-5.6-terra
-over the Responses API) and the symbol-map tool.
+**Deployed:** commit `994ce3d` → Railway deployment `fad266a2-09a3-4bda-90d2-743956dd518f`
+(SUCCESS, 2026-09-17 20:51 ET). `GET /admin/voice-test` shows: engine `live`, backend
+`gpt-5.6-terra`, writes `real`, ownerTransfers `real` (temporary), notifications
+`simulate`, activeCalls 0. Boot verified on the NEW container (hostname
+`26a8f766496f`): "Server up", "Service catalog warmed serviceCount=63", client phone
+index 4192 clients, **zero WARN/ERROR**. Forwarding is OFF — no real customer calls
+reach this line yet. `PHOREST_WRITE_MODE=real` — test bookings hit the real calendar.
+Carries everything from `9796bd0` (SMS text agent on gpt-5.6-terra, symbol-map tool).
+
+**⏳ AWAITING ARYAN'S RETEST — this build fixes the three defects from his
+2026-09-17 ~19:05 ET test calls. What to listen for:**
+1. **End of call.** Say "okay, thank you" after something is done. She must give a
+   real farewell and hang up — not "I'll take care of that" followed by a dead line.
+2. **Prices.** "How much is brow threading?" should be INSTANT, no "checking".
+   "How much for chin?" should get a short clarifying question (Chin Threading $15 vs
+   Chin Waxing $11), NOT a guess. "Total for brow plus chin" still delegates by
+   design — she must never add prices up herself.
+3. **Failed transfer.** Ask for Richa, let it ring out. She must come back with an
+   apology ("sorry, she didn't pick up — can I help or take a message?") and must NOT
+   re-greet you or read the recording notice again. Expect ~9s of silence before she
+   speaks — known, deferred, needs your product call (backlog P2).
 **SMS concierge is LIVE for Aryan's handset only:** the number's Twilio `SmsUrl`
 now points at `/twilio/sms` (flipped 22:39 ET, `voice_url` verified unchanged).
 `SMS_ALLOWED_NUMBERS=+14432535169`, `SMS_SEND_MODE=real`, `SMS_OPEN_TO_ALL` unset
@@ -49,11 +63,21 @@ texts logged, not delivered). Rollback: `SMS_ENABLED=false` or blank `SmsUrl`.
    "STOP" suppresses the number, START undoes). Then decide `OWNER_SMS_MODE=real`
    (also un-silences voice owner notifications), then `SMS_OPEN_TO_ALL=true` +
    `SMS_OWNER_PHONE` → Richa.
-2. Aryan: run the transfer-fail test, then revert `OWNER_TRANSFER_MODE` and
-   `TRANSFER_WINDOW_END` (backlog P0).
-3. Backlog P1: expose build sha on `/admin/voice-test`; Realtime retirement
+2. **Aryan: RETEST the three fixes above** (voice calls from +14432535169).
+   `OWNER_TRANSFER_MODE=real` and `TRANSFER_WINDOW_END=23:00` are deliberately
+   STILL SET so the transfer-fail retest works — revert both once you are done
+   (backlog P0). Jarvis will not change those flags without asking.
+3. Backlog P1 (both raised by the 2026-09-17 review gate): gate
+   `failoverToOwner` on `transferFailback` — a fatal error on a failback segment
+   currently re-dials the phone that just rang out; and refresh `RICHA'S LINE`
+   mid-call — it is frozen at session config but re-checked at tool time, so a
+   call crossing 20:00 can still promise a transfer then retract.
+4. Backlog P1: expose build sha on `/admin/voice-test`; Realtime retirement
    Stage 1 (narrow `VOICE_ENGINE` to `live`, delete the 26 `voiceEngine`
    branches in `twilioStream.ts`).
+5. Backlog P2 — **needs Aryan's product call:** the ~9s silence after a failed
+   transfer. A Polly `<Say>` is banned (jarring voice switch); the only
+   non-jarring cover is a pre-recorded marin-voice clip via `<Play>`.
 
 **Verification commands:**
 - `npx vitest run`
@@ -63,6 +87,54 @@ texts logged, not delivered). Rollback: `SMS_ENABLED=false` or blank `SmsUrl`.
 - `npx tsx scripts/sim-scenarios.ts <date>`
 
 ## RECENT LOG (newest first, since the 2026-09-12 GPT-Live split)
+
+## 2026-09-17 20:51 ET — DEPLOYED `994ce3d` → Railway `fad266a2` (SUCCESS). Call-QA fix run: 7 commits, 8 agents, suite 839 → 892
+Orchestrated from Aryan's review of his two 19:05 ET test calls
+(`CA2e23da275cdde534bc4f3d6b93f65426` booked/2m06s, `CAb66df4eb8f3d3c4eced28f85c457a6c2`
+transfer rang out/29s). Orchestrator + validator: Opus. Workers: Opus (safety-critical
+and prompt-judgement), Sonnet (mechanical, from hardened specs). Review gate: Fable.
+Worker tokens ~1.41M. Board and every worker report: `outputs/orchestration-2026-09-17/`
+(gitignored by `.railwayignore`, kept locally).
+
+**`525233d`** — a rung-out transfer now raises `transfer-failed`. The flag only fired on a
+failed TOOL; the real failure is out-of-band at `/twilio/dial-status`, so a transfer that
+rang out recorded as `ok:true` and was invisible to the QA sweep. New `dial_status` row +
+`transferDialStatus` on the call record.
+
+**`54ed3d2`** — **"I'll take care of that" was matching `take care` and counting as a
+farewell**, so the server concluded the goodbye was spoken and hung up on a caller who
+never heard one. The guard meant to PREVENT a farewell-less hangup caused one. Two further
+stranding holes on the same path fixed: a farewell request that produced no audio left the
+line open for ~39s, and a REAL goodbye phrased outside the pattern ("see you soon") was
+rejected after playing, stranding the caller again.
+
+**`3b537c7`** — prices instant, and **the failback re-greeting was OUR instruction, not
+model disobedience**: `OpenAILiveSession.requestGreeting()` appends "greet + disclose the
+recording", which outranks the prompt, and we sent it on the failback segment too.
+`buildLivePrompt` also already received the catalog and discarded it (`void services`).
+
+**`5a7d173` + `3192e65`** — colliding price terms derived from the live catalog so ambiguity
+is DATA, not the model's judgement. The orchestrator's first narrowing rule (leading word
+only) was WRONG — it optimised the cheap direction and dropped `leg` ($60/$40/$25),
+`touch up` ($100/$250/$350), `face`, `color`, `tattoo`, `butt cheek`. Replaced with
+ignore-parentheticals + vocabulary-gated concatenation. 30 terms, nothing hardcoded.
+
+**`3192e65`** also fixed review finding F1, an orchestrator-introduced defect: a
+"prepare them for ringing" line was added to the LIVE prompt, which cannot know whether
+Richa is reachable — promise-then-retract every evening, contradicting `backendRules.ts:105`
+("Never promise and retract") by name. Moved to the backend handoff, which only fires while
+`RICHA'S LINE` says AVAILABLE.
+
+**`b995cee`** — review findings F2/F3/F4: never hang up on a caller Erica has just asked a
+question (fresh audio is not proof of a farewell's CONTENT); never cut live audio on the
+no-audio close; and no more wordless click on a possibly mis-tagged spam caller.
+
+**Independently validated by the orchestrator** (not the workers' own reports): own probes
+of `isFarewellText` (13 cases) and the close content gate (10 cases); read every hunk of the
+diff that one worker re-applied from its transcript after losing its edits; verified the
+`requestGreeting` claim in `liveSession.ts` directly; confirmed the 595-char failback
+instruction sits under the 1200-char truncation cap; checked the rendered ambiguity list
+term by term.
 
 ## 2026-09-16 22:40 ET — DEPLOYED `9796bd0` → Railway `42e617d5` (SUCCESS); Twilio SmsUrl FLIPPED — SMS concierge live for Aryan's handset
 

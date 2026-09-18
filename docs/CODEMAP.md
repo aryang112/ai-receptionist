@@ -1,9 +1,14 @@
 # CODEMAP — AI Receptionist (Erica)
 
-Current production: `0b70df6`, branch `codex/reopening-cleanup-2026-09-09`,
-Railway `24184059-17cf-4ba1-a80d-92aab7684013`, September 9 ~11:44 PM ET.
-See [reopening release](reviews/REOPENING_RELEASE_2026-09-10.md). Older production
-references below are historical; main application code remains unreleased.
+**Current production: `994ce3d`, branch `codex/gpt-live-taste-test`, Railway
+deployment `fad266a2-09a3-4bda-90d2-743956dd518f`, 2026-09-17 8:51 PM ET.**
+Engine `live`, backend `gpt-5.6-terra`, writes `real`. Deploys come from the
+`ai-receptionist-live-2026-09-12` worktree only — main is unlinked from Railway.
+**Every "current production" line further down this file is historical and stale;
+`state.md`'s CURRENT section is the authority.**
+
+Orientation map so agents don't have to scan every file. See `state.md` for status
+and `tasks/lessons.md` for the gotchas.
 
 Orientation map so agents don't have to scan every file. See `state.md` for status
 and `tasks/lessons.md` for the gotchas.
@@ -22,6 +27,57 @@ Forwarding is live. The categorized reliability backlog,
 prompt-versus-code decisions, acceptance tests, and after-hours-only release
 gate are in
 [`FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md`](FUNCTIONAL_RELIABILITY_BACKLOG_2026-09-02.md).
+
+## 2026-09-17 — call-QA fix run (`525233d` … `994ce3d`)
+
+**`src/realtime/twilioStream.ts`**
+- `isFarewellText(text)` — **exported**, module-level. The farewell-wording predicate behind
+  `liveHasCurrentFarewell`. Precision over recall by design: `take care` counts, `take care of
+  <anything>` does not (except `of yourself`). A miss costs one extra farewell request; a false
+  positive ships a silent hangup. Unit-tested in `twilioStream.farewellText.test.ts`.
+- `isOpenQuestionText(text)` — **exported**, module-level. Did this fresh post-tool text hand the
+  turn BACK to the caller? True on an `isMoreHelpOfferText` match anywhere, or a question mark at
+  the very END (trailing-only, so "Sound good? See you Saturday!" still closes).
+- `liveClosingTextSince(since)` — private. Erica's own output text recorded STRICTLY after `since`;
+  the post-tool window the close content gate reads. Never the whole-call buffer — that holds the
+  "anything else?" which produced the close in the first place.
+- `driveLiveFailbackOpening(session)` — private. On a transfer-failback segment, replaces
+  `requestGreeting()`, which appends a "greet + disclose the recording" instruction that OUTRANKS
+  the prompt. Sends only the apologetic opening; re-arms the retry nudge but deliberately NOT the
+  fatal no-speech deadline, whose failover dials the owner's just-unanswered phone.
+- `endCallNow` opts gained `farewellAudioConfirmed`, `farewellTextSince`, `abortIfStillPlaying`.
+- `FAILBACK_OPENING_RETRY_MS`, `failbackOpeningRetryTimer` (cleared in `cleanup()`).
+
+**`src/voice/livePrompts.ts`**
+- `buildLivePrompt` now USES its `services` argument (it previously discarded it with
+  `void services`): renders `SERVICE PRICES` (name + price only — never IDs or durations), a price
+  policy authorising an instant quote for one clearly-matched listed service while delegating
+  everything else, and `AMBIGUOUS PRICE TERMS`.
+- `ambiguousPriceKeys(services)` — **exported**, pure. Derives from the live catalog every bare
+  word/word-pair naming two or more listed services at DIFFERENT prices. Ignores text inside
+  parentheses; keeps a pair's concatenated form only when the catalog really spells that joined
+  word; exempts equal-price collisions per key across all sharers; excludes combo names (`+`, `&`,
+  `and`). Nothing hardcoded — edit the Phorest menu and it recomputes.
+- Helpers: `stripParentheticals`, `stripServiceCode`, `fmtLivePrice`, `livePriceLines`,
+  `bareServiceKeys`, `catalogVocabulary`, `isComboServiceName`, `singularize`.
+- The `Reaching Richa` line was REMOVED — the talking model cannot know if she is reachable.
+
+**`src/voice/backendRules.ts`** — `CONNECTING TO RICHA` rewritten as one arc: the handoff covers
+connecting plus the short wait in which they may hear ringing; that wait is the single call mechanic
+that may ever be named, and only while `RICHA'S LINE` says AVAILABLE; then the deny-list; then the
+not-AVAILABLE branch inline.
+
+**`src/services/callStore.ts`** — `recordDialStatus(callSid, dialCallStatus)` appends a
+`dial_status` amendment row for any non-`completed` `DialCallStatus` (same pattern and reason as
+`recordRecognized`: a fact that resolves after its natural row is already persisted).
+
+**`src/routes/admin.ts`** — `DialStatusRow`; `CallSummary.transferDialStatus`; `computeFlags` raises
+`transfer-failed` on EITHER a failed `transfer_to_owner` tool OR a recorded dial status.
+
+**`src/routes/twilio.ts`** — `/dial-status` records the dial outcome. TwiML unchanged.
+
+**New tests:** `adminFlags.transferDial.test.ts`, `twilioStream.farewellText.test.ts`,
+`twilioStream.closeContentGate.test.ts`. Suite 839 → 892.
 
 ## Data flow (a call)
 ```
