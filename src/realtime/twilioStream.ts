@@ -400,6 +400,19 @@ function isNonCorrectiveOwnerMessageTurn(text: string): boolean {
 // Never trade a silent hangup for an unbounded wait if Realtime fails to speak.
 const END_CALL_GOODBYE_START_MS = 5000;
 
+// W11 (2026-09-19): the same two-phase shape for a model-requested transfer.
+// transfer_to_owner returns its handoff-line note WITHOUT dialing; the server
+// then waits for that line's audio to actually START before draining it and
+// redirecting. Deliberately LONGER than END_CALL_GOODBYE_START_MS above, and
+// the asymmetry is the whole point: overrunning this cap only costs a few
+// seconds of dead air before a dial that still happens, while undershooting it
+// cuts the caller off mid-sentence into ringing. Production calls on
+// 2026-09-17 turned the backend note → spoken farewell round trip in well
+// under 5s, three times out of three, so 8s is roughly a 60% margin over
+// observed. Nothing after this cap dials over LIVE audio either: the existing
+// waitForPlaybackToDrain(12000) below still runs and still waits her out.
+const TRANSFER_HANDOFF_START_MS = 8000;
+
 // M1: gpt-realtime-2.1 audio-token rate ESTIMATE (2026-08, OpenAI's realtime
 // pricing page) — dollars per 1,000,000 tokens. Cached input is priced far
 // below fresh input, which is exactly why the truncation.retention_ratio
@@ -582,6 +595,19 @@ export const REALTIME_CONTEXT_NOTES = {
     'The server will close after your next spoken line. Say exactly one short, warm, natural farewell addressed to the caller now. Say only the farewell; keep call-control actions silent and internal. Do not call end_call again.',
   endCallSpamGoodbye:
     'The server will close after your next spoken line. Say exactly one short, polite closing now: decline on behalf of the salon and end with an ordinary farewell. Say only that line, do not mention Richa, and keep call-control actions silent and internal. Do not call end_call again.',
+  // W11 (2026-09-19): the handoff line the caller hears before the line
+  // changes hands. It lives HERE, as the tool result on the dial path, rather
+  // than in the backend prompt, because only the dial path produces it — the
+  // calling-window, closure, failback and ambiguity gates return their own
+  // notes and never reach this one. That gating is now structural rather than
+  // a wording instruction the model has to remember to obey.
+  transferHandoffLine:
+    'The connection to Richa is being made now, and the server is holding it until this line has played. Say exactly one brief line to the caller, in your own words rather than a stock sentence, covering only two things: that you are connecting them to Richa now, and that this takes a short wait in which they may hear her phone ringing. Never promise she will pick up. That short wait is the one call mechanic you may name; say nothing else about how the call is carried — no tool or system names, no dial, route, queue or transfer wording, no numbers, and nothing about what happens if she does not answer. Say only that line, then stop and emit no further speech or text. Do not call transfer_to_owner again.',
+  // W11: the redirect itself failed AFTER she had already said she was
+  // connecting them. The tool result is long gone by then, so this is injected
+  // instead — the caller is still on the line and is owed an explanation.
+  transferDialFailed:
+    'BACKGROUND (do not read aloud as-is): the connection to Richa could not be placed, so the caller is still on the line with you. Apologize briefly with no internal detail, offer to take a message, then stop and wait.',
 } as const;
 
 export function buildInstructions(
@@ -1033,7 +1059,7 @@ export function liveToolDefinitions(): ToolDefinition[] {
       return {
         ...tool,
         description:
-          'Check a caller-requested connection to Richa against her working-day calling window. Follow the result: if simulated, explain that no real call was placed; do not describe that as her being unavailable or not answering. Outside the permitted window, offer a message.',
+          'Check a caller-requested connection to Richa against her working-day calling window. Call this alone, with no text of your own. Follow its note: it owns whatever is said next, and the application waits for that speech to play before the line changes hands. If simulated, explain that no real call was placed; do not describe that as her being unavailable or not answering. Outside the permitted window, offer a message.',
       };
     if (tool.name === 'end_call')
       return {
@@ -2230,7 +2256,12 @@ export class TwilioRealtimeCall {
     if (!this.moreHelpOffered || typeof result !== 'object' || result === null)
       return result;
     const record = result as Record<string, unknown>;
-    if (record.ending === true) return result;
+    // W11 (2026-09-19): `connecting: true` joins `ending: true` here. Both are
+    // results whose note owns the ONE line she is about to speak before the
+    // call leaves her — appending "you already asked about anything else" to a
+    // handoff line only risks extra words in the one utterance that must stay
+    // short, and the offer counter is moot on a call being handed to Richa.
+    if (record.ending === true || record.connecting === true) return result;
     const addition =
       'You have already asked whether the caller needs anything else on this call. Do not ask again; when they are done, close.';
     const note =
@@ -6421,13 +6452,14 @@ export class TwilioRealtimeCall {
         };
       }
 
-      logger.info(
-        { tool: 'transfer_to_owner', callSid: this.callSid },
-        'Transferring call to owner'
-      );
-
+      // LAST GATE, and it stays SYNCHRONOUS on purpose: without a REST client
+      // and a callSid there is no dial to bind a handoff line to. Checking it
+      // here means a call that cannot be redirected never gets a "connecting
+      // you" line — the model keeps the turn and its own error result, exactly
+      // as before this split.
       const client = getTwilioClient();
-      if (!client || !this.callSid) {
+      const callSid = this.callSid;
+      if (!client || !callSid) {
         logger.error(
           { tool: 'transfer_to_owner' },
           'Cannot transfer — missing Twilio client or callSid'
@@ -6440,14 +6472,142 @@ export class TwilioRealtimeCall {
         return { error: 'Transfer unavailable' };
       }
 
+      // ─────────────────────────────────────────────────────────────────────
+      // W11 (2026-09-19): SAY-THEN-DIAL IS A SERVER BINDING, NOT A PROMPT RULE
+      //
+      // Owner call CA7e755b5cafe1135986b4b14bf8c5a139: Erica said "I'm
+      // connecting you with Richa now" at +18s and the dial did not go out
+      // until +60.7s — the backend's response carried the handoff SENTENCE and
+      // no tool call at all, so nothing downstream was waiting on anything.
+      // The mirror failure on the previous call said message language and
+      // dialled anyway. "Write a line AND call a tool in one response" is not
+      // reliable on this model in either direction, and no wording fixes it.
+      //
+      // So the tool is now called ALONE, its RESULT carries the one line she
+      // speaks, and the SERVER owns the ordering: return the note, wait for
+      // that line's audio to start, drain it, then dial. Identical two-phase
+      // shape to handleEndCall/finishModelEndCall, which succeeded 3 of 3 on
+      // the very calls where the transfer failed 2 of 3.
+      //
+      // `transferring` is set HERE, at tool time, not at dial time. That is
+      // what stands the silence watchdog down (tickSilenceWatchdog bails on
+      // it) for the seconds between the tool call and the redirect — the
+      // "are you still with me?" the caller heard at +45s.
+      // ─────────────────────────────────────────────────────────────────────
+      logger.info(
+        { tool: 'transfer_to_owner', callSid },
+        'Transfer approved — holding the dial until the handoff line plays'
+      );
       this.transferring = true;
-      // RT-6: Erica just spoke the "let me get Richa for you" line in her own
-      // voice, but that audio is still sitting in Twilio's outbound buffer. If we
-      // fire the REST redirect immediately the <Dial> cuts the sentence off
-      // mid-word. Wait for the mark queue to drain (i.e. Twilio finished playing
-      // the handoff line) before redirecting — capped so a stuck queue can't hang
-      // the transfer. The cap must exceed the longest plausible handoff sentence:
-      // a live call shipped a ~9s line and the old 3s cap chopped it mid-word.
+      const audioEpochAtRequest = this.outboundAudioEpoch;
+      // Return to OpenAI before the wait begins: the tool result IS the
+      // request for the handoff line, so awaiting the line here would deadlock
+      // on a response that cannot be published until this handler returns
+      // (same reasoning as handleEndCall's scheduled finish).
+      setTimeout(() => {
+        void this.finishModelTransfer({
+          client,
+          callSid,
+          audioEpochAtRequest,
+        }).catch((error: unknown) => {
+          logger.error(
+            { tool: 'transfer_to_owner', error: this.formatError(error) },
+            'Scheduled transfer finish failed — call remains live'
+          );
+          this.transferring = false;
+        });
+      }, 0);
+      return {
+        connecting: true,
+        note: REALTIME_CONTEXT_NOTES.transferHandoffLine,
+      };
+    } catch (error) {
+      logger.error(
+        { tool: 'transfer_to_owner', error: this.formatError(error) },
+        'Transfer failed'
+      );
+      // F10c: nothing is being handed off. Clear the flag so a later fatal
+      // error can still failover to the owner instead of the guard treating a
+      // handoff as in-progress (a dead click).
+      this.transferring = false;
+      CallStore.recordToolCall(this.callSid, {
+        name: 'transfer_to_owner',
+        ok: false,
+        error: this.formatError(error),
+      });
+      return { error: this.formatError(error) };
+    }
+  }
+
+  /**
+   * W11 (2026-09-19): phase two of a model-requested transfer — everything
+   * that must happen AFTER the caller has heard the handoff line. Mirrors
+   * finishModelEndCall, with one deliberate difference spelled out below.
+   *
+   * DELIBERATE DIVERGENCE FROM end_call: caller speech during this wait does
+   * NOT abort the dial. finishModelEndCall passes `speechEpochAtRequest` to
+   * waitForGoodbyeToStart so a barge-in cancels the hangup — correct there,
+   * because a caller who speaks up plainly does not want the call to end. It
+   * is wrong here: "okay", "sure", "thanks" over a one-moment line is the
+   * NORMAL sound of a handoff, and a transfer is the thing the caller asked
+   * for. Aborting on it would recreate the exact defect this change fixes —
+   * she says she is connecting them, and nothing dials. So the speech-epoch
+   * argument is intentionally omitted.
+   *
+   * FAIL-FORWARD: if no fresh audio arrives inside the cap we dial ANYWAY and
+   * log it. That degrades to unexplained ringing — which is today's behaviour
+   * on this path and is strictly better than the silent non-dial being fixed.
+   */
+  private async finishModelTransfer({
+    client,
+    callSid,
+    audioEpochAtRequest,
+  }: {
+    client: NonNullable<ReturnType<typeof getTwilioClient>>;
+    callSid: string;
+    audioEpochAtRequest: number;
+  }): Promise<void> {
+    // No speechEpochAtRequest and no responseId — see the divergence note.
+    // On Live, getCurrentResponseId() returns null anyway (liveSession.ts).
+    const handoffLineStarted = await this.waitForGoodbyeToStart(
+      TRANSFER_HANDOFF_START_MS,
+      audioEpochAtRequest,
+      null
+    );
+    if (!handoffLineStarted) {
+      logger.warn(
+        {
+          tool: 'transfer_to_owner',
+          callSid,
+          capMs: TRANSFER_HANDOFF_START_MS,
+        },
+        'No handoff-line audio before the cap — dialing anyway rather than leaving the caller unconnected'
+      );
+    }
+    // The caller hung up (or the stream died) while we were waiting. Redirect
+    // nothing: a <Dial> against a dead call would ring Richa for no one.
+    if (this.closed) {
+      logger.warn(
+        { tool: 'transfer_to_owner', callSid },
+        'Call ended before the handoff line finished — no dial placed'
+      );
+      this.transferring = false;
+      CallStore.recordToolCall(callSid, {
+        name: 'transfer_to_owner',
+        ok: false,
+        error: 'Call ended before the transfer could be placed',
+      });
+      return;
+    }
+    try {
+      // RT-6: the handoff line is still sitting in Twilio's outbound buffer
+      // even once it has started. Firing the REST redirect now would cut the
+      // sentence off mid-word, so wait for the mark queue to drain — capped so
+      // a stuck queue can't hang the transfer. The cap must exceed the longest
+      // plausible handoff sentence: a live call shipped a ~9s line and the old
+      // 3s cap chopped it mid-word. This is ALSO what keeps the fail-forward
+      // branch above safe: if she is mid-sentence when the cap expires, this
+      // still waits her out before dialing.
       // (The Polly <Say> was already removed — do NOT re-add it.)
       await this.waitForPlaybackToDrain(12000);
       // Erica has already spoken the handoff line in her own voice, so go
@@ -6463,14 +6623,14 @@ export class TwilioRealtimeCall {
       // /twilio/dial-status, which reconnects them to Erica (transferFailed=1).
       // No host (an old session, or a malformed Host header) ⇒ today's exact
       // bare <Dial>: a half-configured action URL would be worse than none.
-      await client.calls(this.callSid).update({
+      await client.calls(callSid).update({
         twiml: this.publicHost
           ? `<Response><Dial timeout="${env.TRANSFER_DIAL_TIMEOUT_S}" action="https://${this.publicHost}/twilio/dial-status" method="POST">${env.OWNER_PHONE}</Dial></Response>`
           : `<Response><Dial>${env.OWNER_PHONE}</Dial></Response>`,
       });
 
       logger.info(
-        { tool: 'transfer_to_owner', callSid: this.callSid },
+        { tool: 'transfer_to_owner', callSid },
         'Call transferred successfully'
       );
       // FYI text (2026-08-26, the telemarketer-to-voicemail call): a <Dial>
@@ -6487,12 +6647,11 @@ export class TwilioRealtimeCall {
       this.outcome = 'transferred';
       // M1: set BEFORE cleanup() — same ordering reason as this.outcome above.
       this.setEndReasonOnce('transferred to owner');
-      CallStore.recordToolCall(this.callSid, {
+      CallStore.recordToolCall(callSid, {
         name: 'transfer_to_owner',
         ok: true,
       });
       this.cleanup();
-      return { transferred: true };
     } catch (error) {
       logger.error(
         { tool: 'transfer_to_owner', error: this.formatError(error) },
@@ -6502,12 +6661,17 @@ export class TwilioRealtimeCall {
       // the flag so a later fatal error can still failover to the owner instead
       // of the guard treating a handoff as in-progress (a dead click).
       this.transferring = false;
-      CallStore.recordToolCall(this.callSid, {
+      CallStore.recordToolCall(callSid, {
         name: 'transfer_to_owner',
         ok: false,
         error: this.formatError(error),
       });
-      return { error: this.formatError(error) };
+      // The tool result was published seconds ago and she has already told the
+      // caller she was connecting them, so there is no result left to carry
+      // the bad news. Inject it instead — the caller is still on the line.
+      void this.session.injectContext(
+        REALTIME_CONTEXT_NOTES.transferDialFailed
+      );
     }
   }
 

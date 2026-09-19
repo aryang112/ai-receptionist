@@ -4,7 +4,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DateTime } from 'luxon';
 import { describe, expect, it } from 'vitest';
-import { buildInstructions } from '../realtime/twilioStream.js';
+import {
+  buildInstructions,
+  REALTIME_CONTEXT_NOTES,
+} from '../realtime/twilioStream.js';
 import type { Service } from '../services/phorest.types.js';
 import {
   ambiguousPriceKeys,
@@ -979,8 +982,19 @@ describe('backend prompt extraction', () => {
     expect(backend).not.toContain('First reply, varied naturally');
   });
 
-  // ---- W6 / review finding F1 (2026-09-17) -------------------------------
-  it('puts the ringback preparation in the one prompt that knows whether Richa is reachable', () => {
+  // ---- W6 / review finding F1 (2026-09-17), moved by W11 (2026-09-19) ----
+  //
+  // F1's requirement is UNCHANGED: the ringback preparation must exist only
+  // where Richa's reachability is known, so a caller is never promised a
+  // connection that gets retracted. What changed is WHERE that is. W11 moved
+  // the content out of the backend rule and into transfer_to_owner's own
+  // RESULT NOTE, which the server produces only on the dial path — after the
+  // ambiguity, failback, closure and calling-window gates have all passed and
+  // a real <Dial> is already committed. The gating is now structural instead
+  // of a wording instruction the model has to remember, which is a STRONGER
+  // form of F1's fix, not a weaker one. Both halves are asserted here so the
+  // pair cannot drift apart.
+  it('keeps the ringback preparation on the dial path only — collapsed rule, note owns the line', () => {
     const instructions = buildInstructions(
       salonTime('2026-10-01T12:00'),
       CATALOG
@@ -993,35 +1007,47 @@ describe('backend prompt extraction', () => {
     expect(handoff).toBeDefined();
     const rule = handoff ?? '';
 
-    // The gate that finding F1 was missing: the whole rule, ring preparation
-    // included, is reachable only while RICHA'S LINE says AVAILABLE, and the
-    // rule states the not-AVAILABLE branch itself so nothing is left to
-    // infer from a distant section.
+    // The rule keeps its reachability gate and its explicit not-AVAILABLE
+    // branch, so nothing is left to infer from a distant section.
     expect(rule).toContain("only if RICHA'S LINE says AVAILABLE");
     expect(rule).toContain(
-      "When RICHA'S LINE does not say AVAILABLE, none of this is written"
+      "When RICHA'S LINE does not say AVAILABLE, do not call it"
     );
+
+    // W11's core instruction to the backend: tool ALONE, no text of its own.
+    // Text-and-tool in one response is what desynced say from do.
+    expect(rule).toContain('Call transfer_to_owner alone');
+    expect(rule).toContain('no other text of your own in that response');
+    expect(rule).toContain('result note owns everything said next');
+
+    // …and the rule no longer carries the line itself. If any of this creeps
+    // back into the prompt, the backend is being asked to write the handoff
+    // line again and the desync is back.
+    expect(rule).not.toMatch(/phone ringing/i);
+    expect(rule).not.toMatch(/pick up/i);
+    expect(rule).not.toMatch(/stock sentence/i);
+    expect(rule).not.toContain('Never mention routing mechanics');
+
+    // The content itself, now on the dial path only.
+    const note = REALTIME_CONTEXT_NOTES.transferHandoffLine;
 
     // The original goal: ~15s (TRANSFER_DIAL_TIMEOUT_S) of ringback must not
     // arrive unexplained.
-    expect(rule).toContain(
+    expect(note).toContain(
       'a short wait in which they may hear her phone ringing'
     );
-    expect(rule).toContain('never promising she will pick up');
+    expect(note).toContain('Never promise she will pick up');
 
-    // The "never mention routing mechanics" tension is resolved INSIDE the
-    // rule: the wait is named as the single permitted mechanic and the ban
-    // is restated as everything else, so there are no two sentences to
-    // reconcile (PROMPT_AUDIT_2026-09-15 found seven of those).
-    expect(rule).toContain('the one call mechanic you may ever name');
-    expect(rule).toContain(
-      'nothing else about how the call is carried may be said'
-    );
-    expect(rule).not.toContain('Never mention routing mechanics');
+    // The "never mention routing mechanics" tension stays resolved INSIDE the
+    // text that carries it: the wait is named as the single permitted
+    // mechanic and the ban is restated as everything else, so there are no
+    // two sentences to reconcile (PROMPT_AUDIT_2026-09-15 found seven).
+    expect(note).toContain('the one call mechanic you may name');
+    expect(note).toContain('say nothing else about how the call is carried');
 
     // Describe, never script (tasks/lessons.md): no quotable example line.
-    expect(rule).toContain('in your own words, never a stock sentence');
-    expect(rule).not.toMatch(/[“”"][^“”"]*ring[^“”"]*[“”"]/i);
+    expect(note).toContain('in your own words rather than a stock sentence');
+    expect(note).not.toMatch(/[“”"][^“”"]*ring[^“”"]*[“”"]/i);
   });
 
   it('resolves and offers public availability before collecting phone/name, then keeps approval separate', () => {

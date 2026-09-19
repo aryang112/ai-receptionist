@@ -76,6 +76,29 @@ const MAX_CONTEXT_APPEND_CHARS = 1_200; // Conservative guard below 500 tokens.
 const MAX_BACKEND_CONTEXT_CHARS = 16_000;
 
 /**
+ * W11 (2026-09-19): did this completed backend response contain any spoken/
+ * written text, as opposed to being tool calls only? Returns a BOOLEAN — the
+ * text itself is never read out of here and never logged. Fully defensive:
+ * any shape it does not recognise reports false rather than throwing inside
+ * an event handler.
+ */
+function responseCarriedText(response: unknown): boolean {
+  const output = (response as { output?: unknown } | null | undefined)?.output;
+  if (!Array.isArray(output)) return false;
+  return output.some((item) => {
+    if (!item || typeof item !== 'object') return false;
+    const record = item as { type?: unknown; content?: unknown };
+    if (record.type !== 'message') return false;
+    if (!Array.isArray(record.content)) return false;
+    return record.content.some((part) => {
+      if (!part || typeof part !== 'object') return false;
+      const text = (part as { text?: unknown }).text;
+      return typeof text === 'string' && text.trim().length > 0;
+    });
+  });
+}
+
+/**
  * GPT-Live adapter for the existing Twilio controller. Live emits a continuous
  * audio stream and has no spoken-response completion event. Speech callbacks
  * therefore report activity only; Twilio marks remain the playback authority.
@@ -652,6 +675,15 @@ export class OpenAILiveSession {
           this.responseByDelegation.set(delegationId, responseId);
           this.ensureToolBatch(responseId, delegationId);
           this.armDelegationStallLog(delegationId, responseId);
+          // W11 (2026-09-19): observability. Until this line, a delegation to
+          // the backend model left no info-level trace at all, so the
+          // 2026-09-17 transfer root cause ("the backend answered with text
+          // and no tool call") had to be INFERRED from silence-watchdog
+          // behaviour. Ids only — no prompt, no caller text, no payloads.
+          this.log.info(
+            { delegationId, responseId },
+            'GPT-Live delegation created'
+          );
         }
         return;
       }
@@ -750,6 +782,22 @@ export class OpenAILiveSession {
     }
 
     const batch = this.ensureToolBatch(responseId, delegationId);
+    // W11 (2026-09-19): the other half of the observability gap — whether a
+    // completed backend response carried TOOL CALLS, TEXT, or BOTH. That
+    // distinction was the entire 2026-09-17 transfer diagnosis and it was not
+    // readable from any log. Tool NAMES are fixed identifiers, not content;
+    // text is reported as a boolean only, so no caller or model wording, and
+    // no arguments, reach the logs.
+    this.log.info(
+      {
+        responseId,
+        delegationId: delegationId ?? null,
+        toolCalls: batch.calls.length,
+        toolNames: batch.calls.map((call) => call.name),
+        hasText: responseCarriedText(inner.response),
+      },
+      'GPT-Live backend response completed'
+    );
     if (batch.calls.length === 0 || batch.dispatched) return;
     batch.dispatched = true;
     const task = this.dispatchToolBatch(batch);
