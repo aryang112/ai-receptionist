@@ -668,19 +668,19 @@ src/voice/livePrompts.ts:93  function  productionFacts
 src/voice/livePrompts.ts:179  function  cleanValue
 src/voice/livePrompts.ts:189  function  stripServiceCode
 src/voice/livePrompts.ts:194  function  fmtLivePrice
-src/voice/livePrompts.ts:225  function  livePriceLines
-src/voice/livePrompts.ts:321  function  isComboServiceName
-src/voice/livePrompts.ts:326  function  singularize
-src/voice/livePrompts.ts:336  function  stripParentheticals
-src/voice/livePrompts.ts:346  function  serviceNameWords
-src/voice/livePrompts.ts:365  function  catalogVocabulary
-src/voice/livePrompts.ts:382  function  bareServiceKeys
-src/voice/livePrompts.ts:410  export function  ambiguousPriceKeys
-src/voice/livePrompts.ts:434  export function  buildLivePrompt
-src/voice/livePrompts.ts:501  function  serviceCatalog
-src/voice/livePrompts.ts:530  function  rewriteClosure
-src/voice/livePrompts.ts:552  function  backendSections
-src/voice/livePrompts.ts:614  export function  buildBackendPrompt
+src/voice/livePrompts.ts:235  function  livePriceLines
+src/voice/livePrompts.ts:343  function  isComboServiceName
+src/voice/livePrompts.ts:348  function  singularize
+src/voice/livePrompts.ts:358  function  stripParentheticals
+src/voice/livePrompts.ts:368  function  serviceNameWords
+src/voice/livePrompts.ts:387  function  catalogVocabulary
+src/voice/livePrompts.ts:404  function  bareServiceKeys
+src/voice/livePrompts.ts:432  export function  ambiguousPriceKeys
+src/voice/livePrompts.ts:456  export function  buildLivePrompt
+src/voice/livePrompts.ts:524  function  serviceCatalog
+src/voice/livePrompts.ts:553  function  rewriteClosure
+src/voice/livePrompts.ts:575  function  backendSections
+src/voice/livePrompts.ts:637  export function  buildBackendPrompt
 
 ## src/voice/liveProtocol.ts
 

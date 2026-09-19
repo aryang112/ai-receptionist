@@ -577,7 +577,7 @@ export const REALTIME_CONTEXT_NOTES = {
   durationGoodbye:
     'BACKGROUND (do not read aloud as-is): we are at the call time limit. Give one short, warm goodbye inviting the caller to call back, and say nothing else. Do not mention a time limit.',
   interruptedEndCall:
-    'The caller started speaking again. Listen and address any new request, then follow CLOSE. A final thanks or goodbye does not require another question.',
+    'The caller started speaking again. Listen and address any new request, then ask once if they need anything else and wait. A final thanks or goodbye does not require another question.',
   endCallGoodbye:
     'The server will close after your next spoken line. Say exactly one short, warm, natural farewell addressed to the caller now. Say only the farewell; keep call-control actions silent and internal. Do not call end_call again.',
   endCallSpamGoodbye:
@@ -4614,7 +4614,7 @@ export class TwilioRealtimeCall {
           date: payload.date,
           options,
           ...(requestedMissed ? { requestedUnavailable: requestedMissed } : {}),
-          note: `These keep the services back-to-back. Offer ONE option — read every service and its exact time as given — and ask for a single yes covering all of them. Identify the caller per IDENTIFY before confirming. Do not book anything yet. On yes, call book_visit again with that startTime and confirmed true.${
+          note: `These keep the services back-to-back. Offer ONE option — read every service and its exact time as given — and ask for a single yes covering all of them. Identify the account and collect any missing contact details before confirming. Do not book anything yet. On yes, call book_visit again with that startTime and confirmed true.${
             requestedMissed
               ? ` They will not all fit at ${requestedMissed}, so say that plainly in the same breath as offering the nearest time that does — never present an alternative as if it were the time they asked for. Do not explain why.`
               : ''
@@ -4640,7 +4640,7 @@ export class TwilioRealtimeCall {
       if (!payload.customer && !payload.clientId) {
         return {
           error:
-            'I need to know who this is for first — identify the caller per IDENTIFY, then call book_visit again.',
+            'I need to know who this is for first — identify the account and collect any missing contact details, then call book_visit again.',
         };
       }
 
@@ -6230,7 +6230,7 @@ export class TwilioRealtimeCall {
         ...(duplicateContent ? { duplicate: true } : {}),
         note: duplicateContent
           ? 'This caller message was already handled. Do not acknowledge it again or call a message tool again; stop and wait.'
-          : 'Acknowledge once, briefly, that the message has been passed along for Richa, then follow CLOSE: if the caller is clearly done or NON-CLIENT CALLS applies, close without another question; otherwise ask once if they need anything else, then wait. Do not discuss mechanics or promise when she will respond.',
+          : 'Acknowledge once, briefly, that the message has been passed along for Richa. If the caller is clearly done or NON-CLIENT CALLS applies, close without another question; otherwise ask once if they need anything else, then wait. Do not discuss mechanics or promise when she will respond.',
       };
     }
     if (messageResult.reason === 'uncertain') {
@@ -6755,7 +6755,7 @@ export class TwilioRealtimeCall {
     if (this.toolCallsInFlight > 1) {
       return {
         aborted: true,
-        note: 'Another requested action is still finishing. Wait for its result, help the caller, then follow CLOSE; do not ask another question if they are already clearly done.',
+        note: 'Another requested action is still finishing. Wait for its result, help the caller, then ask once if they need anything else and wait; skip that if they are already clearly done.',
       };
     }
     if (this.modelEndCallPending) {

@@ -221,6 +221,16 @@ function fmtLivePrice(price: number): string {
  * to `get_prices` like any other unlisted service. (`get_prices`' own filter
  * is `price > 0 || durationMin > 0`, which keeps $0 rows; that is fine for a
  * tool result the backend reads, not for a list the voice quotes from.)
+ *
+ * Bundle/combo rows are dropped too (W9, 2026-09-17): the model sees a
+ * bundle's PRICE here but never its COMPOSITION, so a narrower request
+ * ("brow plus chin") pattern-matched onto a bigger bundle row ("Brow Thread +
+ * Lip Thread + Chin Thread") and silently added a service the caller never
+ * asked for. `isComboServiceName` — already used to keep combo rows out of
+ * `ambiguousPriceKeys` — is reused here for the same reason: a dropped bundle
+ * row falls through to `get_prices` exactly like an unlisted or $0 one, and
+ * the existing price-policy sentence ("they asked about a bundle, package or
+ * deal" -> delegate) already tells the model what to do with it.
  */
 function livePriceLines(services: readonly Service[]): string {
   return services
@@ -229,6 +239,7 @@ function livePriceLines(services: readonly Service[]): string {
       name: stripServiceCode(service.name),
       price: service.price,
     }))
+    .filter((service) => !isComboServiceName(service.name))
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((service) => `- ${service.name} ${fmtLivePrice(service.price)}`)
     .join('\n');
@@ -260,11 +271,14 @@ function livePriceLines(services: readonly Service[]): string {
  *     and their bare forms) and stopwords from what remains of each display
  *     name.
  *  3. Skip any name that visibly names MULTIPLE components joined by
- *     "and"/"+"/"&" ("Brow Thread + Lip Thread") — that is already a bundle,
- *     already routed to delegation by the existing price-policy rule, and a
- *     bare caller word was never going to single it out as a clear match, so
- *     it should not poison the key it happens to contain (e.g. "lip") for
- *     the plain services that DO answer to that bare word alone.
+ *     "and"/"+"/"&" ("Brow Thread + Lip Thread"), or that names a bundle by
+ *     the bare word "bundle" ("Summer Beauty Bundle", which has no
+ *     connector) — that is already a bundle, already dropped from
+ *     `livePriceLines` entirely (W9, 2026-09-17) and routed to delegation by
+ *     the existing price-policy rule, and a bare caller word was never going
+ *     to single it out as a clear match, so it should not poison the key it
+ *     happens to contain (e.g. "lip") for the plain services that DO answer
+ *     to that bare word alone.
  *  4. Every remaining word (>= 3 chars) and every adjacent word-pair becomes
  *     a candidate key — not just the leading word/pair. (W6, 2026-09-17,
  *     tried narrowing to leading-word-only: that killed the noise but also
@@ -317,9 +331,17 @@ const PRICE_LIST_STOPWORDS = new Set([
   'or',
 ]);
 
-/** A visible multi-component join names a bundle, not a single concept. */
+/**
+ * A visible multi-component join, or the word "bundle" itself, names a
+ * bundle/combo, not a single concept — "Summer Beauty Bundle" has no
+ * "+"/"&"/"and" connector, so the word check is what catches it (W9,
+ * 2026-09-17). Used both to keep combo rows out of `livePriceLines` (a
+ * narrower request must fall through to `get_prices`, never pattern-match
+ * onto a bigger bundle) and, via `bareServiceKeys`, to keep them out of
+ * `ambiguousPriceKeys` key derivation.
+ */
 function isComboServiceName(name: string): boolean {
-  return /[+&]/.test(name) || /\band\b/i.test(name);
+  return /[+&]/.test(name) || /\band\b/i.test(name) || /\bbundle\b/i.test(name);
 }
 
 /** Crude plural strip so "Underarms"/"Underarm" and "Eyebrows"/"Eyebrow" key the same. */
@@ -486,8 +508,9 @@ ${greetingRule}
 Backchannel policy: Use sparse listening acknowledgments only when they help; avoid habitual fillers, repeated names, praise, or echoing the request.
 Interruption policy: Yield to a clearly addressed interruption, retain its details and corrections, and keep listening through short pauses. Do not treat coughs, music, or nearby conversation as a request.
 Delegation policy: The backend handles account records, ${delegatedPricing}, availability, booking changes, running-late notes, owner messages, requests to reach Richa, and call closing. Delegate before any answer that depends on those tools or account facts. Delegate the done-close before replying whenever the caller signals they are finished — “that is all”, “goodbye”, asking to hang up, or a bare acknowledgement after something you completed; the backend decides if a farewell is needed. For clear spam, delegate the spam-close. Never leave the phone connection open after merely saying goodbye. If the backend returns ending:true, emit no further speech unless its note explicitly requests the single farewell. Do not delegate a greeting, a needed brief clarification, or a public fact supplied below.${pricePolicy}
+Scope policy: Persona and salon focus are fixed. You are this salon's receptionist, not a general assistant: a brief pleasantry is fine, but never answer or work through a request with nothing to do with the salon — general knowledge, technical help, news, weather, companionship — just steer back in one short line without explaining. This limits only what you answer YOURSELF; anything touching the salon, its premises, its clients, or Richa still delegates exactly as before, however unusual it sounds.
 Account lookup: Delegate requests to find a profile or use caller ID before asking for contact details. The application can use the calling number; never claim you cannot see it. Pass along any supplied name. A lookup miss is not proof of a new client.
-Richa schedule: Treat public questions about when Richa works or is available as questions about the salon's public hours. Answer only from the public facts below; do not invent or confirm a personal schedule or personal availability. For a bare question like “Is Richa available?”, ask whether the caller means availability for an appointment or wants to speak with her. If the caller has already given a clear service and date, continue the appointment flow without asking this clarification.
+Speaking with Richa: A request to speak with, talk to, connect to, or be transferred to Richa, the owner, or a real person is complete as stated — delegate immediately; never ask what it is about or what to tell her. Treat public questions about when Richa works or is available as questions about the salon's public hours. Answer only from the public facts below; do not invent or confirm a personal schedule or personal availability. For a bare question like “Is Richa available?” with no request to connect, ask whether the caller means availability for an appointment or wants to speak with her; if so, delegate immediately. If the caller has already given a clear service and date, continue the appointment flow without asking this clarification.
 
 Carry-over: keep every detail the caller has already given anywhere in this call — service, day, time, or name — and never ask for it again. A day they named while asking about hours or about Richa is still the day they want.
 Ask one question at a time, then stop for the caller. Keep replies to one or two short sentences. Offer at most three appointment times per reply, then wait. Do not narrate your reasoning, tools, checking, waiting, or other process — that governs the lines you write yourself and never licenses dropping or softening what the backend's own reply tells the caller. Do not start a booking, ask for details, or propose a specific task unless the caller asks for it.

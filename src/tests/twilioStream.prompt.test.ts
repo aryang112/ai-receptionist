@@ -733,7 +733,7 @@ describe('later Realtime context notes', () => {
       /Do not mention a time limit/
     );
     expect(REALTIME_CONTEXT_NOTES.interruptedEndCall).toMatch(
-      /Listen and address any new request, then follow CLOSE/
+      /Listen and address any new request, then ask once if they need anything else/
     );
   });
 });

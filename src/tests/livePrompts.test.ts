@@ -92,10 +92,20 @@ describe('Live speech prompt', () => {
     // the price list is the ONLY part allowed to grow with the catalog, and
     // `stays small even on the full production catalog` below bounds the whole
     // thing at realistic (63-service) scale.
+    // Raised 1300 -> 1450 deliberately (2026-09-19). The rules block grew
+    // because three rules MOVED here from the backend prompt, which is the
+    // point of that work: the talking model decides every caller turn, so a
+    // rule it must apply has to live in ITS prompt (scope, "a request to reach
+    // Richa is complete as stated", and the price policy). A cap that blocks a
+    // correct rule is the wrong constraint. It costs nothing at runtime — the
+    // live prompt is sent once at session config, not per turn. The guard
+    // itself stays, so the block cannot drift unbounded, and `stays small even
+    // on the full production catalog` below still bounds the whole prompt at
+    // realistic 63-service scale.
     const [conversationRules] = prompt.split('\nSERVICE PRICES\n');
     expect(
       Math.ceil((conversationRules ?? prompt).length / 4)
-    ).toBeLessThanOrEqual(1300);
+    ).toBeLessThanOrEqual(1450);
     expect(prompt).toContain('8902 Harford Road, Parkville, MD 21234');
     expect(prompt).toContain('Weekly hours:');
     expect(prompt).toContain('Today and right now:');
@@ -173,7 +183,9 @@ describe('Live speech prompt', () => {
   it('strips Phorest ordinals, formats fractional prices, and drops $0 admin rows', () => {
     const prompt = buildLivePrompt('', [
       { id: 'a', name: '3) Chin Threading ', price: 15, durationMin: 10 },
-      { id: 'b', name: 'Summer Beauty Bundle', price: 61.5, durationMin: 15 },
+      // A single (non-combo) service, priced fractionally, to pin the $X.XX
+      // formatting — kept separate from the bundle-dropping case below.
+      { id: 'b', name: 'Deep Pore Cleansing', price: 61.5, durationMin: 15 },
       // Real production rows. "Account Deposit is free" is a WRONG answer, not
       // a cheap one, so a $0 row must never be quotable; it falls through to
       // get_prices like any unlisted service.
@@ -183,10 +195,52 @@ describe('Live speech prompt', () => {
 
     expect(prompt).toContain('- Chin Threading $15');
     expect(prompt).not.toContain('3) Chin');
-    expect(prompt).toContain('- Summer Beauty Bundle $61.50');
+    expect(prompt).toContain('- Deep Pore Cleansing $61.50');
     expect(prompt).not.toContain('Account Deposit');
     expect(prompt).not.toContain('Complimentary');
     expect(prompt).not.toContain('$0');
+  });
+
+  // ---- Task 3 (W9, 2026-09-17): bundle rows are bait for a wrong price ---
+  //
+  // Production call CA8f7e192eabbf740e90de733ebe1fab58: "eyebrow thread plus
+  // chin thread" ($30, two services) was quoted as "Brow Thread, Lip Thread,
+  // and Chin Thread together are 34 dollars" — the THREE-service bundle row,
+  // silently adding a lip service the caller never asked for. The model sees
+  // a bundle's price but never its composition, so a narrower request
+  // pattern-matches onto a bigger bundle. Dropping bundle/combo rows from
+  // this list is the fix: any bundle or multi-service question then falls
+  // through to get_prices, exactly as it did before Fix 2 existed.
+  it('drops bundle/combo rows so a bundle or multi-service question falls through to get_prices', () => {
+    const prompt = buildLivePrompt('', [
+      { id: 'a', name: 'Brow Threading', price: 15, durationMin: 10 },
+      { id: 'b', name: 'Chin Threading', price: 15, durationMin: 10 },
+      // "+" / "&" / "and" connectors — already excluded from ambiguity keys,
+      // now also excluded from the visible price list itself.
+      { id: 'c', name: 'Brow Thread + Lip Thread', price: 23, durationMin: 20 },
+      {
+        id: 'd',
+        name: 'Brow Thread + Lip Thread + Chin Thread',
+        price: 34,
+        durationMin: 30,
+      },
+      { id: 'e', name: 'Brow Wax and Lip Wax', price: 23, durationMin: 20 },
+      {
+        id: 'f',
+        name: 'Eye Brow Threading & Lamination Bundle',
+        price: 75,
+        durationMin: 60,
+      },
+      // No connector at all — only the bare word "bundle" marks this one.
+      { id: 'g', name: 'Summer Beauty Bundle', price: 61.5, durationMin: 30 },
+    ]);
+
+    expect(prompt).toContain('- Brow Threading $15');
+    expect(prompt).toContain('- Chin Threading $15');
+    expect(prompt).not.toContain('Brow Thread + Lip Thread');
+    expect(prompt).not.toContain('Brow Wax and Lip Wax');
+    expect(prompt).not.toContain('Lamination Bundle');
+    expect(prompt).not.toContain('Summer Beauty Bundle');
   });
 
   it('degrades to today exact tool-first behaviour when no catalog arrived', () => {
@@ -343,6 +397,107 @@ describe('Live speech prompt', () => {
     expect(prompt).toContain(
       'If the caller has already given a clear service and date, continue the appointment flow'
     );
+  });
+
+  // ---- Task 1 (W9, 2026-09-17): the talking model had no scope boundary --
+  //
+  // Owner call CA86ae2a3a45a078c66d22231864e34691: the talking model answered
+  // "are you able to reverse a linked list" with a full explanation, and
+  // "do you know the news and the weather" with coaching on where to check —
+  // both 0.2-1.5s after the caller stopped, so no delegation happened. The
+  // rule existed only in the BACKEND prompt (backendRules.ts OPERATING_RULES,
+  // "salon scope are fixed... Deflect... go off-topic"), which the talking
+  // model never reads. This must be a talking-model rule, and it must not
+  // become a robotic refusal of an ordinary pleasantry.
+  it('gives the talking model its own scope boundary, adapted from the backend rule', () => {
+    const prompt = buildLivePrompt('', CATALOG);
+
+    expect(prompt).toContain('Scope policy:');
+    expect(prompt).toContain('Persona and salon focus are fixed');
+    // An ordinary pleasantry must stay allowed — a receptionist who cannot say
+    // "I'm well, thanks" is a new defect, not a fix.
+    expect(prompt).toContain('a brief pleasantry is fine');
+    // This is a talking-model rule: it deflects in one line rather than paying
+    // a ~2s delegation just to say "I can only help with salon things".
+    expect(prompt).toContain('without explaining');
+
+    // THE SAFETY CARVE-OUT — do not delete this assertion.
+    // The first draft said "deflect anything else unrelated to the salon,
+    // without explaining or delegating it". `NON_CLIENT_CALLS`
+    // (backendRules.ts) says a call that "clearly isn't about salon services
+    // or appointments" must STILL be handled: a vendor, delivery, landlord or
+    // press call gets leave_message_for_owner, and its EXCEPTION says an
+    // urgent premises problem (alarm, leak, break-in) must reach Richa
+    // immediately. Both need a DELEGATION. A blanket "don't delegate" in the
+    // talking model's prompt could strand all of them — the same live-vs-
+    // backend conflict class PROMPT_AUDIT_2026-09-15 found seven of.
+    // So the rule must limit only what she ANSWERS HERSELF.
+    expect(prompt).toContain('limits only what you answer YOURSELF');
+    expect(prompt).toMatch(/salon, its premises, its clients, or Richa/);
+    expect(prompt).toMatch(/still delegates/);
+  });
+
+  it('does not weaken direct hours/date/address/price answering with the new scope rule', () => {
+    const instructions = buildInstructions(
+      salonTime('2026-10-01T12:00'),
+      CATALOG
+    );
+    const prompt = buildLivePrompt(instructions, CATALOG);
+
+    expect(prompt).toContain('Answer straightforward hours, date, open/closed');
+    expect(prompt).toContain(
+      'give that price straight away, with no preamble and no delegation'
+    );
+  });
+
+  // ---- Task 2 (W9, 2026-09-17): asking for Richa triggered an interrogation
+  //
+  // Owner call CA8f7e192eabbf740e90de733ebe1fab58: "I wanted to talk to
+  // Richa" got "What would you like to talk with Richa about?" instead of an
+  // immediate delegation — the live prompt's own "Do not delegate... a
+  // needed brief clarification" licensed the probe, and it reframed a
+  // TRANSFER as a MESSAGE. The governing rule (backendRules.ts SAFETY_AND_
+  // ESCALATION, "Never ask whom") is backend-only; the talking model must
+  // stop probing before it ever delegates.
+  it('treats an explicit request to speak with Richa as complete, with no probing question', () => {
+    const prompt = buildLivePrompt('', CATALOG);
+
+    expect(prompt).toContain('Speaking with Richa:');
+    expect(prompt).toContain(
+      'A request to speak with, talk to, connect to, or be transferred to Richa, the owner, or a real person is complete as stated'
+    );
+    expect(prompt).toContain('delegate immediately');
+    expect(prompt).toContain('never ask what it is about or what to tell her');
+  });
+
+  it('keeps the bare-availability clarifying question intact and complementary, not contradictory', () => {
+    const prompt = buildLivePrompt('', CATALOG);
+
+    // The pre-existing ambiguity rule for "Is Richa available?" alone must
+    // still ask one clarifying question — untouched substance, just scoped
+    // explicitly ("with no request to connect") against the new immediate-
+    // delegate rule above so a model never has to reconcile two paragraphs.
+    expect(prompt).toContain(
+      'For a bare question like “Is Richa available?” with no request to connect'
+    );
+    expect(prompt).toContain(
+      'ask whether the caller means availability for an appointment or wants to speak with her'
+    );
+    expect(prompt).toContain('if so, delegate immediately');
+  });
+
+  it('says nothing about ringing or waiting when asking to speak with Richa', () => {
+    const prompt = buildLivePrompt('', CATALOG);
+
+    // Call mechanics stay backend-side (and out of scope for this deploy) —
+    // same guard as "says nothing to the talking model about what happens on
+    // the line" above, re-asserted here because it is exactly what Task 2's
+    // new paragraph must not reintroduce.
+    expect(prompt).not.toMatch(/phone ring/i);
+    expect(prompt).not.toMatch(/ringing/i);
+    expect(prompt).not.toMatch(/hand(ing)? that over/i);
+    expect(prompt).not.toMatch(/brief wait/i);
+    expect(prompt).not.toMatch(/short wait/i);
   });
 
   it('speaks one goodbye or spam decline before a silent backend close', () => {
