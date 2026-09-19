@@ -17,8 +17,33 @@ worktree was `railway unlink`ed on 2026-09-16.
 | | Status |
 |---|---|
 | **Round 1** (7 commits, `525233d`…`912a6a9`) | **DEPLOYED and owner-verified** |
-| **Deploy 1** (scope / no-probing / bundles / dangling notes) | **WRITTEN, UNCOMMITTED, UNREVIEWED** — in the working tree right now |
-| **Deploy 2** (transfer say/do desync) | **NOT STARTED.** Design agreed, in §4 |
+| **Deploy 1** (scope / no-probing / bundles / dangling notes) | **DONE — `12c3ac5`, deployed `0d5e1a0d` 2026-09-19 12:10 ET, clean boot** |
+| **Deploy 2** (transfer say/do desync) | **DONE — `b7faa0b` + goldens `84a89ce` + review fixes `74038f9`.** Fable-reviewed (SHIP WITH FIXES; F2/F4 fixed, **F1 open — see below**) |
+
+### ⚠️ OPEN RESIDUAL on Deploy 2 — review finding F1 (medium)
+The "handoff line has started" signal is `outboundAudioEpoch`, which bumps on **any** Live output
+frame (`twilioStream.ts:2032`, from `liveSession.ts:970`), **not specifically the handoff line**.
+The note travels tool result → `function_call_output` → `response.create` → a full backend turn →
+Live voices it. During that round trip Live is still an audio model with a "sparse listening
+acknowledgments" policy. If the caller says "hello?" in that gap and Live answers "mm-hm, one
+moment", **that** satisfies the wait; the drain waits out the acknowledgement and the redirect can
+fire before the handoff line exists — caller hears ringing with no line.
+A dial still happens, so this is strictly better than the 42s silent non-dial it replaces.
+**Fix:** gate the wait on the delegation that carried the tool result having COMPLETED (the new
+`response completed` log hook and `responseByDelegation` provide the signal) **and** a subsequent
+output-speech start; keep the 8s fail-forward cap as the backstop.
+**Log signature:** `Call transferred successfully` appearing BEFORE the backend
+`response completed` line for that delegation.
+
+Also open, from the same review (both low, described in `outputs/orchestration-2026-09-17/REVIEW-TRANSFER.md`):
+- A barge-in **over** the handoff line empties `markQueue`, so the drain resolves instantly and the
+  caller is dialled into ringing mid-retraction ("wait, actually—"). Suggested: abort only on caller
+  speech that begins after the line started AND is more than a short acknowledgement.
+- The Twilio REST client (`twilioStream.ts:95`) has **no request timeout** (`ownerSms.ts:25` sets
+  one). A never-resolving `calls().update` leaves `transferring` true with every watchdog standing
+  down. Pre-existing, but the window is now longer.
+- The F2 re-entry guard has no dedicated test — it is an early return on a boolean, verified by
+  inspection. Worth pinning if you touch that handler.
 
 `git status` should show modifications to `src/voice/livePrompts.ts`,
 `src/realtime/twilioStream.ts`, `src/tests/livePrompts.test.ts`,
