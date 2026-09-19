@@ -6494,6 +6494,26 @@ export class TwilioRealtimeCall {
       // it) for the seconds between the tool call and the redirect — the
       // "are you still with me?" the caller heard at +45s.
       // ─────────────────────────────────────────────────────────────────────
+      // RE-ENTRY GUARD (review finding F2, 2026-09-19). A transfer is already
+      // in flight: the handoff line is playing and finishModelTransfer is
+      // waiting to dial. The backend can still call this tool a second time —
+      // the caller says "yes please" mid-wait, it re-delegates, and the note's
+      // "do not call this again" is exactly the kind of wording rule this
+      // whole commit exists because we cannot rely on. Without this guard the
+      // second call clears every gate, schedules a SECOND finish, and issues a
+      // second calls().update — re-executing the TwiML, so Richa's phone
+      // rings, drops, and rings again, and the handoff line may be spoken
+      // twice. handleEndCall has modelEndCallPending for the same reason.
+      if (this.transferring) {
+        logger.info(
+          { tool: 'transfer_to_owner', callSid },
+          'Transfer already in flight — ignoring the duplicate request'
+        );
+        return {
+          connecting: true,
+          note: 'The transfer is already being made and the caller has heard the handoff line. Say nothing further and do not call this tool again.',
+        };
+      }
       logger.info(
         { tool: 'transfer_to_owner', callSid },
         'Transfer approved — holding the dial until the handoff line plays'
@@ -6669,9 +6689,17 @@ export class TwilioRealtimeCall {
       // The tool result was published seconds ago and she has already told the
       // caller she was connecting them, so there is no result left to carry
       // the bad news. Inject it instead — the caller is still on the line.
+      //
+      // Review finding F4 (2026-09-19): the inject alone is not enough. On
+      // Live, injectContext only appends to the session instructions; it does
+      // not ask for a turn, so she can sit silent after "connecting you now"
+      // until the caller speaks or the silence watchdog fires ~20s later —
+      // precisely the dead air this commit exists to remove. The watchdog
+      // itself pairs inject with requestResponse for this reason; do the same.
       void this.session.injectContext(
         REALTIME_CONTEXT_NOTES.transferDialFailed
       );
+      this.session.requestResponse();
     }
   }
 
